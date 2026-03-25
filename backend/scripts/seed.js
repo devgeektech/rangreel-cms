@@ -29,6 +29,16 @@ const rolesToSeed = [
     isActive: true,
   },
   {
+    name: "Campaign Manager",
+    slug: "campaign-manager",
+    dashboardRoute: "/campaign-manager",
+    isSystem: false,
+    color: "#BE185D",
+    icon: "Briefcase",
+    permissions: [],
+    isActive: true,
+  },
+  {
     name: "Strategist",
     slug: "strategist",
     dashboardRoute: "/strategist",
@@ -78,6 +88,16 @@ const rolesToSeed = [
     permissions: [],
     isActive: true,
   },
+  {
+    name: "Customer",
+    slug: "customer",
+    dashboardRoute: "/customer",
+    isSystem: false,
+    color: "#2563EB",
+    icon: "UserRound",
+    permissions: [],
+    isActive: true,
+  },
 ];
 
 const seed = async () => {
@@ -89,11 +109,28 @@ const seed = async () => {
 
     console.log("Upserting roles...");
     for (const roleData of rolesToSeed) {
-      const role = await Role.findOneAndUpdate(
-        { slug: roleData.slug },
-        { $set: roleData },
-        { new: true, upsert: true, setDefaultsOnInsert: true }
-      );
+      let roleBySlug = await Role.findOne({ slug: roleData.slug });
+      let roleByName = await Role.findOne({ name: roleData.name });
+      let primaryRole = roleBySlug || roleByName;
+
+      if (roleBySlug && roleByName && roleBySlug._id.toString() !== roleByName._id.toString()) {
+        await User.updateMany({ role: roleByName._id }, { $set: { role: roleBySlug._id } });
+        await Role.deleteOne({ _id: roleByName._id });
+        console.log(
+          `Merged duplicate role ${roleByName.name} (${roleByName.slug}) into ${roleBySlug.name} (${roleBySlug.slug})`
+        );
+        roleByName = roleBySlug;
+        primaryRole = roleBySlug;
+      }
+
+      if (!primaryRole) {
+        primaryRole = await Role.create(roleData);
+      } else {
+        Object.assign(primaryRole, roleData);
+        await primaryRole.save();
+      }
+
+      const role = primaryRole;
       console.log(`Role upserted: ${role.name} (${role.slug})`);
     }
 

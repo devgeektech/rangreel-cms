@@ -4,6 +4,13 @@ const User = require("../models/User");
 const PASSWORD_REGEX =
   /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=[\]{};':"\\|,.<>/?]).{8,}$/;
 
+const resolveDashboardRoute = (user) => {
+  if (user.roleType === "admin") return "/admin";
+  if (user.roleType === "manager") return "/manager";
+  if (user.role && user.role.dashboardRoute) return user.role.dashboardRoute;
+  return "";
+};
+
 const getJwtPayload = (user, dashboardRoute) => ({
   id: user._id,
   roleType: user.roleType,
@@ -44,7 +51,7 @@ const login = async (req, res) => {
         .json({ success: false, error: "Invalid credentials" });
     }
 
-    const dashboardRoute = user.role && user.role.dashboardRoute ? user.role.dashboardRoute : "";
+    const dashboardRoute = resolveDashboardRoute(user);
     const payload = getJwtPayload(user, dashboardRoute);
     const token = signToken(payload);
 
@@ -111,7 +118,7 @@ const changePassword = async (req, res) => {
     user.mustChangePass = false;
     await user.save();
 
-    const dashboardRoute = user.role && user.role.dashboardRoute ? user.role.dashboardRoute : "";
+    const dashboardRoute = resolveDashboardRoute(user);
     const payload = getJwtPayload(user, dashboardRoute);
     const token = signToken(payload);
 
