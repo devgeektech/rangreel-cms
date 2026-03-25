@@ -229,8 +229,13 @@ const resetManagerPassword = async (req, res) => {
 
 const getUsers = async (req, res) => {
   try {
-    const { role: roleSlug, search } = req.query;
-    const query = { roleType: "user" };
+    const { role: roleSlug, search, includeAdmins } = req.query;
+    const shouldIncludeAdmins =
+      includeAdmins === true || includeAdmins === "true" || includeAdmins === "1";
+
+    const query = shouldIncludeAdmins
+      ? { roleType: { $in: ["user", "admin"] } }
+      : { roleType: "user" };
 
     if (search) {
       query.name = { $regex: search, $options: "i" };
