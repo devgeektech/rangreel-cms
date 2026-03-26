@@ -7,6 +7,7 @@ const {
   createUserValidation,
 } = require("../middleware/validation");
 const adminController = require("../controllers/admin.controller");
+const capacityController = require("../controllers/capacity.controller");
 
 const router = express.Router();
 
@@ -40,5 +41,12 @@ router.put(
   "/users/:id/reset-password",
   asyncHandler(adminController.resetUserPassword)
 );
+
+router.get("/users/:id/capacity", asyncHandler(capacityController.getCapacity));
+router.patch("/users/:id/capacity", asyncHandler(capacityController.setCapacity));
+router.get("/capacity-overview", asyncHandler(capacityController.capacityOverview));
+
+router.get("/clients", asyncHandler(adminController.getAdminClients));
+router.get("/calendar", asyncHandler(adminController.getAdminCalendar));
 
 module.exports = router;
