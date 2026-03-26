@@ -7,6 +7,10 @@ const authRoutes = require("./routes/auth.routes");
 const userRoutes = require("./routes/user.routes");
 const adminRoutes = require("./routes/admin.routes");
 const packageRoutes = require("./routes/package.routes");
+const holidayRoutes = require("./routes/holiday.routes");
+const clientRoutes = require("./routes/client.routes");
+const contentRoutes = require("./routes/content.routes");
+const managerReadRoutes = require("./routes/managerRead.routes");
 
 const app = express();
 
@@ -29,6 +33,10 @@ app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin/packages", packageRoutes);
+app.use("/api/admin/holidays", holidayRoutes);
+app.use("/api/manager/clients", clientRoutes);
+app.use("/api/manager/content", contentRoutes);
+app.use("/api/manager", managerReadRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, error: "Route not found" });

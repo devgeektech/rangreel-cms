@@ -1,5 +1,7 @@
 const Role = require("../models/Role");
 const User = require("../models/User");
+const Client = require("../models/Client");
+const ContentItem = require("../models/ContentItem");
 
 const toSlug = (value) =>
   String(value || "")
@@ -363,6 +365,62 @@ const resetUserPassword = async (req, res) => {
   }
 };
 
+const getAdminClients = async (req, res) => {
+  try {
+    const clients = await Client.find()
+      .populate("manager", "name avatar")
+      .populate("package", "name")
+      .sort({ createdAt: -1 });
+
+    return success(res, clients);
+  } catch (err) {
+    return failure(res, "Failed to fetch clients", 500);
+  }
+};
+
+const getAdminCalendar = async (req, res) => {
+  try {
+    const { month } = req.query;
+
+    const normalized = month && String(month).match(/^(\d{4})-(\d{2})$/);
+    if (!normalized) {
+      return failure(res, "month must be in format YYYY-MM", 400);
+    }
+
+    const items = await ContentItem.find({ month })
+      .populate("client", "clientName brandName")
+      .sort({ clientPostingDate: 1 })
+      .lean();
+
+    const ymdUTC = (d) => {
+      const year = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const day = String(d.getUTCDate()).padStart(2, "0");
+      return `${year}-${m}-${day}`;
+    };
+
+    const groupsMap = new Map();
+    for (const item of items) {
+      const key = item.clientPostingDate ? ymdUTC(new Date(item.clientPostingDate)) : "unknown";
+      if (!groupsMap.has(key)) {
+        groupsMap.set(key, {
+          clientPostingDate: key,
+          items: [],
+        });
+      }
+      groupsMap.get(key).items.push(item);
+    }
+
+    const groups = [...groupsMap.values()].sort(
+      (a, b) => new Date(a.clientPostingDate) - new Date(b.clientPostingDate)
+    );
+
+    return success(res, { month, groups });
+  } catch (err) {
+    return failure(res, err.message || "Failed to fetch admin calendar", 500);
+  }
+};
+
 module.exports = {
   getRoles,
   createRole,
@@ -376,4 +434,6 @@ module.exports = {
   createUser,
   updateUser,
   resetUserPassword,
+  getAdminClients,
+  getAdminCalendar,
 };
