@@ -1,6 +1,6 @@
 const Client = require("../models/Client");
 const Package = require("../models/Package");
-const calendarService = require("../services/calendarService");
+const { generateClientReels } = require("../services/simpleCalendar.service");
 const ContentItem = require("../models/ContentItem");
 
 const normalizeMonthTarget = (targetMonth) => {
@@ -30,6 +30,42 @@ const success = (res, data, statusCode = 200) =>
 
 const failure = (res, error, statusCode = 400) =>
   res.status(statusCode).json({ success: false, error });
+
+const toYMD = (value) => {
+  if (!value) return "";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString().split("T")[0];
+};
+
+const dedupeById = (docs) => {
+  const out = [];
+  const seen = new Set();
+  for (const d of docs || []) {
+    const id = d?._id ? String(d._id) : "";
+    if (!id) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(d);
+  }
+  return out;
+};
+
+const dedupeByStageId = (stages) => {
+  const out = [];
+  const seen = new Set();
+  for (const s of stages || []) {
+    const id = s?._id ? String(s._id) : s?.stageId ? String(s.stageId) : "";
+    if (!id) {
+      out.push(s);
+      continue;
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(s);
+  }
+  return out;
+};
 
 const populateClientQuery = (query) => {
   return query
@@ -78,7 +114,7 @@ const createClient = async (req, res) => {
       businessType,
       socialHandles,
       startDate,
-      // endDate is written by generateClientPackageOnce after ContentItems exist.
+      // endDate is computed by calendar generation.
       status,
       googleReviewsTarget,
       googleReviewsAchieved,
@@ -88,7 +124,8 @@ const createClient = async (req, res) => {
       createdBy: req.user.id,
     });
 
-    await calendarService.generateClientPackageOnce(client);
+    // Prompt 16: only run the new simple calendar service.
+    await generateClientReels(client);
 
     const populated = await populateClientQuery(Client.findById(client._id));
     return success(res, populated, 201);
@@ -220,11 +257,19 @@ module.exports = {
         return failure(res, "Client not found", 404);
       }
 
-      const items = await ContentItem.find({ client: id, month }).select(
-        "_id title contentType plan clientPostingDate overallStatus"
+      const itemsRaw = await ContentItem.find({ client: id, month }).select(
+        "title clientPostingDate"
       );
+      const items = dedupeById(itemsRaw);
 
-      return success(res, items.sort((a, b) => new Date(a.clientPostingDate) - new Date(b.clientPostingDate)));
+      const payload = items
+        .sort((a, b) => new Date(a.clientPostingDate) - new Date(b.clientPostingDate))
+        .map((item) => ({
+          title: item.title,
+          postingDate: toYMD(item.clientPostingDate),
+        }));
+
+      return success(res, payload);
     } catch (err) {
       return failure(res, err.message || "Failed to fetch client calendar", 500);
     }
@@ -234,7 +279,8 @@ module.exports = {
       const { id } = req.params;
       const month = req.query.month;
 
-      if (!normalizeMonthTarget(month)) {
+      const target = normalizeMonthTarget(month);
+      if (!target) {
         return failure(res, "month must be in format YYYY-MM", 400);
       }
 
@@ -243,11 +289,47 @@ module.exports = {
         return failure(res, "Client not found", 404);
       }
 
-      const items = await ContentItem.find({ client: id, month })
+      // IMPORTANT:
+      // Team calendar must be filtered by STAGE dueDate month, not by contentItem.month (posting month),
+      // otherwise approval/edit stages can disappear when they fall in a different month.
+      const startDate = new Date(
+        `${target.year}-${String(target.month).padStart(2, "0")}-01T00:00:00.000Z`
+      );
+      const endDate = new Date(
+        `${target.year}-${String(target.month).padStart(2, "0")}-31T23:59:59.999Z`
+      );
+
+      const itemsRaw = await ContentItem.find({
+        client: id,
+        "workflowStages.dueDate": { $gte: startDate, $lte: endDate },
+      })
+        .select("title workflowStages clientPostingDate")
         .populate("workflowStages.assignedUser", "name avatar")
         .sort({ clientPostingDate: 1 });
+      const items = dedupeById(itemsRaw);
 
-      return success(res, items);
+      const payload = items.map((item) => {
+        const stagesInMonth = (item.workflowStages || []).filter((s) => {
+          const d = s?.dueDate ? new Date(s.dueDate) : null;
+          if (!d || Number.isNaN(d.getTime())) return false;
+          return d >= startDate && d <= endDate;
+        });
+
+        return {
+          contentItemId: item._id,
+          title: item.title,
+          stages: dedupeByStageId(stagesInMonth).map((stage) => ({
+            stageId: stage._id,
+            stageName: stage.stageName,
+            role: stage.role,
+            assignedUser: stage.assignedUser || null,
+            dueDate: toYMD(stage.dueDate),
+            status: stage.status,
+          })),
+        };
+      });
+
+      return success(res, payload);
     } catch (err) {
       return failure(res, err.message || "Failed to fetch team calendar", 500);
     }
@@ -267,10 +349,11 @@ module.exports = {
       const clientIds = clientDocs.map((c) => c._id);
       if (!clientIds.length) return success(res, { month, groups: [] });
 
-      const contentItems = await ContentItem.find({ client: { $in: clientIds }, month })
+      const contentItemsRaw = await ContentItem.find({ client: { $in: clientIds }, month })
         .populate("client", "clientName brandName")
         .sort({ clientPostingDate: 1 })
         .lean();
+      const contentItems = dedupeById(contentItemsRaw);
 
       const groupsMap = new Map();
       for (const item of contentItems) {
@@ -284,7 +367,9 @@ module.exports = {
         groupsMap.get(key).items.push(item);
       }
 
-      const groups = [...groupsMap.values()].sort(
+      const groups = [...groupsMap.values()]
+        .map((g) => ({ ...g, items: dedupeById(g.items || []) }))
+        .sort(
         (a, b) => new Date(a.clientPostingDate) - new Date(b.clientPostingDate)
       );
 

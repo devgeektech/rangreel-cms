@@ -26,6 +26,7 @@ const WorkflowStageSchema = new mongoose.Schema(
         "planned",
         "assigned",
         "in_progress",
+        "completed",
         "submitted",
         "approved",
         "rejected",
@@ -45,6 +46,11 @@ const WorkflowStageSchema = new mongoose.Schema(
     hook: { type: String, trim: true, default: "" },
     concept: { type: String, trim: true, default: "" },
     captionDirection: { type: String, trim: true, default: "" },
+    contentBrief: {
+      type: [String],
+      default: [],
+      // contentBrief is strategist-defined content points for the reel.
+    },
     footageLink: { type: String, trim: true, default: "" },
     editedFileLink: { type: String, trim: true, default: "" },
     designFileLink: { type: String, trim: true, default: "" },
@@ -72,6 +78,11 @@ const contentItemSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+    },
+    videoUrl: {
+      type: String,
+      trim: true,
+      default: "",
     },
     month: {
       type: String,

@@ -1,4 +1,5 @@
 const express = require("express");
+const path = require("path");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const helmet = require("helmet");
@@ -10,6 +11,8 @@ const packageRoutes = require("./routes/package.routes");
 const holidayRoutes = require("./routes/holiday.routes");
 const clientRoutes = require("./routes/client.routes");
 const contentRoutes = require("./routes/content.routes");
+const contentReadRoutes = require("./routes/contentRead.routes");
+const uploadRoutes = require("./routes/upload.routes");
 const managerReadRoutes = require("./routes/managerRead.routes");
 
 const app = express();
@@ -25,6 +28,9 @@ app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
 
+// Local temp uploads (Prompt 27). Later can be replaced by S3/Cloudinary.
+app.use("/temp", express.static(path.join(__dirname, "..", "temp")));
+
 app.get("/api/health", (req, res) => {
   res.status(200).json({ status: "ok" });
 });
@@ -36,6 +42,8 @@ app.use("/api/admin/packages", packageRoutes);
 app.use("/api/admin/holidays", holidayRoutes);
 app.use("/api/manager/clients", clientRoutes);
 app.use("/api/manager/content", contentRoutes);
+app.use("/api/content", contentReadRoutes);
+app.use("/api/uploads", uploadRoutes);
 app.use("/api/manager", managerReadRoutes);
 
 app.use((req, res) => {

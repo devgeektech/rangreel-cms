@@ -1,11 +1,19 @@
 const User = require("../models/User");
 const ContentItem = require("../models/ContentItem");
+const Role = require("../models/Role");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
 
 const failure = (res, error, statusCode = 400) =>
   res.status(statusCode).json({ success: false, error });
+
+const toYMD = (value) => {
+  if (!value) return "";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString().split("T")[0];
+};
 
 const normalizeMonthTarget = (targetMonth) => {
   if (!targetMonth) return null;
@@ -45,27 +53,52 @@ const getMyTasks = async (req, res) => {
 
     const items = await ContentItem.find({
       month,
-      "workflowStages.assignedUser": req.user.id,
+      workflowStages: {
+        $elemMatch: {
+          assignedUser: req.user.id,
+          status: { $in: ["assigned", "in_progress"] },
+        },
+      },
     })
       .populate("client", "brandName clientName")
       .select("title contentType plan clientPostingDate overallStatus workflowStages client")
       .lean();
 
     const tasks = items.map((item) => {
-      const filteredStages = (item.workflowStages || []).filter(
-        (s) => s.assignedUser && String(s.assignedUser) === String(req.user.id)
-      );
+      const filteredStages = (item.workflowStages || []).filter((s) => {
+        const isMine = s.assignedUser && String(s.assignedUser) === String(req.user.id);
+        const stageStatus = String(s.status || "").toLowerCase();
+        const isActive = stageStatus === "assigned" || stageStatus === "in_progress";
+        return isMine && isActive;
+      });
+
+      const approvalStage = (item.workflowStages || []).find((s) => {
+        const n = String(s?.stageName || "").toLowerCase();
+        return n === "approval" || n === "approve";
+      });
 
       return {
         contentItemId: item._id,
         title: item.title,
         contentType: item.contentType,
         plan: item.plan,
-        clientPostingDate: item.clientPostingDate,
+        clientPostingDate: toYMD(item.clientPostingDate),
         clientBrandName: item.client?.brandName || "",
-        stages: filteredStages,
+        approvalStatus: approvalStage?.status || "",
+        stages: filteredStages.map((s) => ({
+          ...s,
+          dueDate: toYMD(s.dueDate),
+          completedAt: toYMD(s.completedAt),
+        })),
         overallStatus: item.overallStatus,
       };
+    });
+
+    console.log("[getMyTasks] returned tasks", {
+      userId: String(req.user.id),
+      month,
+      count: tasks.length,
+      taskTitles: tasks.map((t) => t.title),
     });
 
     return success(res, tasks);
@@ -77,7 +110,40 @@ const getMyTasks = async (req, res) => {
 const updateMyTaskStatus = async (req, res) => {
   try {
     const { itemId, stageId } = req.params;
-    const { status: requestedStatus } = req.body || {};
+    const body = req.body || {};
+    const { status: requestedStatus } = body;
+
+    // Only worker roles update via this endpoint. Managers approve/reject via manager routes.
+    if (req.user?.roleType !== "user") {
+      return failure(res, "Only user roles can update stage status", 403);
+    }
+
+    const me = await User.findById(req.user.id).select("role roleType isActive").lean();
+    if (!me || me.isActive === false) {
+      return failure(res, "User not found", 404);
+    }
+    const roleDoc = me.role
+      ? await Role.findById(me.role).select("slug name").lean()
+      : null;
+
+    const canonicalRoleKey = (raw) => {
+      const key = String(raw || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+      if (!key) return "";
+
+      // Common slug->stage-role aliases.
+      if (key === "editor") return "videoeditor";
+      if (key === "videoeditor") return "videoeditor";
+      if (key === "posting") return "postingexecutive";
+      if (key === "postingexecutive") return "postingexecutive";
+      if (key === "designer") return "graphicdesigner";
+      if (key === "graphicdesigner") return "graphicdesigner";
+
+      return key;
+    };
+
+    const myRoleKey = canonicalRoleKey(roleDoc?.slug || roleDoc?.name);
 
     const contentItem = await ContentItem.findById(itemId);
     if (!contentItem) return failure(res, "ContentItem not found", 404);
@@ -94,46 +160,38 @@ const updateMyTaskStatus = async (req, res) => {
       return failure(res, "You are not assigned to this stage", 403);
     }
 
+    // Prompt 30: role must match stage role.
+    const stageRoleKey = canonicalRoleKey(stage.role);
+    if (!myRoleKey || !stageRoleKey || myRoleKey !== stageRoleKey) {
+      return failure(res, "Forbidden: role does not match stage role", 403);
+    }
+
     const currentStatus = stage.status;
     const stageNameNormalized = String(stage.stageName || "").toLowerCase();
 
-    // Posting Executive: allow Post stage -> posted and update overallStatus.
-    if (requestedStatus === "posted") {
-      if (stageNameNormalized !== "post") {
-        return failure(res, 'Only "Post" stages can be marked as posted', 400);
-      }
-
-      stage.status = "posted";
-      stage.completedAt = new Date();
-      contentItem.overallStatus = "posted";
-      await contentItem.save();
-
-      return success(res, {
-        itemId: contentItem._id,
-        stage,
-        overallStatus: contentItem.overallStatus,
-      });
-    }
-
-    // Default transitions for other stages:
+    // Prompt 18 lifecycle:
+    // assigned -> in_progress -> completed
+    // (accept "planned" as legacy alias of "assigned" for backward compatibility)
+    const effectiveCurrentStatus =
+      currentStatus === "planned" ? "assigned" : currentStatus;
     const inferredNextStatus =
-      currentStatus === "planned"
+      effectiveCurrentStatus === "assigned"
         ? "in_progress"
-        : currentStatus === "in_progress"
-        ? "submitted"
+        : effectiveCurrentStatus === "in_progress"
+        ? "completed"
         : null;
 
     const nextStatus = requestedStatus || inferredNextStatus;
     if (!nextStatus) return failure(res, "Stage status transition is not allowed", 400);
 
     const allowed =
-      (currentStatus === "planned" && nextStatus === "in_progress") ||
-      (currentStatus === "in_progress" && nextStatus === "submitted");
+      (effectiveCurrentStatus === "assigned" && nextStatus === "in_progress") ||
+      (effectiveCurrentStatus === "in_progress" && nextStatus === "completed");
 
     if (!allowed) return failure(res, "Stage status transition is not allowed", 400);
 
     stage.status = nextStatus;
-    if (nextStatus === "submitted") {
+    if (nextStatus === "completed") {
       stage.completedAt = new Date();
       const n = stageNameNormalized;
       if (n === "plan") {
@@ -141,31 +199,29 @@ const updateMyTaskStatus = async (req, res) => {
         if (body.concept !== undefined) stage.concept = String(body.concept || "").trim();
         if (body.captionDirection !== undefined)
           stage.captionDirection = String(body.captionDirection || "").trim();
+        if (body.contentBrief !== undefined) {
+          if (!Array.isArray(body.contentBrief)) {
+            return failure(res, "contentBrief must be an array of strings", 400);
+          }
+          const cleaned = body.contentBrief
+            .map((x) => String(x || "").trim())
+            .filter((x) => x.length > 0);
+          stage.contentBrief = cleaned;
+        }
       }
       if (n === "shoot" && body.footageLink !== undefined)
         stage.footageLink = String(body.footageLink || "").trim();
-      if (n === "edit" && body.editedFileLink !== undefined)
-        stage.editedFileLink = String(body.editedFileLink || "").trim();
+      if (n === "edit") {
+        if (body.editedFileLink !== undefined)
+          stage.editedFileLink = String(body.editedFileLink || "").trim();
+        if (body.videoUrl !== undefined) {
+          contentItem.videoUrl = String(body.videoUrl || "").trim();
+        }
+      }
       if (n === "work" && body.designFileLink !== undefined)
         stage.designFileLink = String(body.designFileLink || "").trim();
-    }
-
-    // Workflow loop support:
-    // If the editor/designer submits again after a manager rejection, any
-    // subsequent approval stages that were previously rejected should become pending again.
-    if (nextStatus === "submitted" && (stageNameNormalized === "edit" || stageNameNormalized === "work")) {
-      for (let i = stageIndex + 1; i < (contentItem.workflowStages || []).length; i++) {
-        const s = contentItem.workflowStages[i];
-        const sName = String(s?.stageName || "").toLowerCase();
-        const sStatus = String(s?.status || "").toLowerCase();
-        const isApprovalStage = sName === "approval" || sName === "approve";
-        if (!isApprovalStage) continue;
-        if (sStatus !== "rejected") continue;
-
-        // Reset rejected approvals to pending.
-        s.status = "planned";
-        s.rejectionNote = "";
-        s.completedAt = undefined;
+      if (n === "post") {
+        contentItem.overallStatus = "posted";
       }
     }
 
