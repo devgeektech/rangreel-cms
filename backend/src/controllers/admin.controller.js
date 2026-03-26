@@ -17,6 +17,26 @@ const success = (res, data, statusCode = 200) =>
 const failure = (res, error, statusCode = 400) =>
   res.status(statusCode).json({ success: false, error });
 
+const toYMD = (value) => {
+  if (!value) return "";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString().split("T")[0];
+};
+
+const dedupeById = (docs) => {
+  const out = [];
+  const seen = new Set();
+  for (const d of docs || []) {
+    const id = d?._id ? String(d._id) : "";
+    if (!id) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(d);
+  }
+  return out;
+};
+
 const getRoles = async (req, res) => {
   try {
     const roles = await Role.find().sort({ createdAt: -1 });
@@ -387,10 +407,11 @@ const getAdminCalendar = async (req, res) => {
       return failure(res, "month must be in format YYYY-MM", 400);
     }
 
-    const items = await ContentItem.find({ month })
+    const itemsRaw = await ContentItem.find({ month })
       .populate("client", "clientName brandName")
       .sort({ clientPostingDate: 1 })
       .lean();
+    const items = dedupeById(itemsRaw);
 
     const ymdUTC = (d) => {
       const year = d.getUTCFullYear();
@@ -411,13 +432,48 @@ const getAdminCalendar = async (req, res) => {
       groupsMap.get(key).items.push(item);
     }
 
-    const groups = [...groupsMap.values()].sort(
+    const groups = [...groupsMap.values()]
+      .map((g) => ({ ...g, items: dedupeById(g.items || []) }))
+      .sort(
       (a, b) => new Date(a.clientPostingDate) - new Date(b.clientPostingDate)
     );
 
     return success(res, { month, groups });
   } catch (err) {
     return failure(res, err.message || "Failed to fetch admin calendar", 500);
+  }
+};
+
+// Prompt 37: Admin global calendar (all content items).
+const getAdminGlobalCalendar = async (req, res) => {
+  try {
+    const itemsRaw = await ContentItem.find()
+      .populate("client", "clientName brandName")
+      .sort({ clientPostingDate: 1 })
+      .lean();
+    const items = dedupeById(itemsRaw);
+
+    const payload = (items || []).map((item) => {
+      const postStage = (item.workflowStages || []).find(
+        (s) => String(s?.stageName || "").toLowerCase() === "post"
+      );
+      const postStatus = String(postStage?.status || "").toLowerCase();
+
+      const overallStatus = postStatus === "completed" ? "completed" : "pending";
+      const clientName = item.client?.clientName || item.client?.brandName || "";
+
+      return {
+        _id: item._id,
+        title: item.title,
+        clientName,
+        postingDate: toYMD(item.clientPostingDate),
+        overallStatus,
+      };
+    });
+
+    return success(res, payload);
+  } catch (err) {
+    return failure(res, err.message || "Failed to fetch admin global calendar", 500);
   }
 };
 
@@ -436,4 +492,5 @@ module.exports = {
   resetUserPassword,
   getAdminClients,
   getAdminCalendar,
+  getAdminGlobalCalendar,
 };

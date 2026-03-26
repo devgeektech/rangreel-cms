@@ -6,6 +6,12 @@ const contentController = require("../controllers/content.controller");
 
 const router = express.Router();
 
+router.get(
+  "/:id",
+  auth,
+  asyncHandler(contentController.getContentById)
+);
+
 router.patch(
   "/:itemId/stage/:stageId",
   auth,

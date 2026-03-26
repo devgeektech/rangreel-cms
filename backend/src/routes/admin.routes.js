@@ -48,5 +48,6 @@ router.get("/capacity-overview", asyncHandler(capacityController.capacityOvervie
 
 router.get("/clients", asyncHandler(adminController.getAdminClients));
 router.get("/calendar", asyncHandler(adminController.getAdminCalendar));
+router.get("/global-calendar", asyncHandler(adminController.getAdminGlobalCalendar));
 
 module.exports = router;
