@@ -58,6 +58,7 @@ const getContentById = async (req, res) => {
 
     return success(res, {
       title: item.title,
+      planType: item.planType || item.plan || "normal",
       contentBrief: Array.isArray(planStage?.contentBrief) ? planStage.contentBrief : [],
       videoUrl: item.videoUrl || "",
       stages: (item.workflowStages || []).map((s) => ({

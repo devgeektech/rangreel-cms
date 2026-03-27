@@ -74,6 +74,11 @@ const contentItemSchema = new mongoose.Schema(
       enum: ["normal", "urgent"],
       default: "normal",
     },
+    planType: {
+      type: String,
+      enum: ["urgent", "normal"],
+      default: "normal",
+    },
     title: {
       type: String,
       required: true,

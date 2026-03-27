@@ -258,7 +258,7 @@ module.exports = {
       }
 
       const itemsRaw = await ContentItem.find({ client: id, month }).select(
-        "title clientPostingDate"
+        "title clientPostingDate planType plan"
       );
       const items = dedupeById(itemsRaw);
 
@@ -267,6 +267,7 @@ module.exports = {
         .map((item) => ({
           title: item.title,
           postingDate: toYMD(item.clientPostingDate),
+          planType: item.planType || item.plan || "normal",
         }));
 
       return success(res, payload);
@@ -303,7 +304,7 @@ module.exports = {
         client: id,
         "workflowStages.dueDate": { $gte: startDate, $lte: endDate },
       })
-        .select("title workflowStages clientPostingDate")
+        .select("title workflowStages clientPostingDate planType plan")
         .populate("workflowStages.assignedUser", "name avatar")
         .sort({ clientPostingDate: 1 });
       const items = dedupeById(itemsRaw);
@@ -318,6 +319,7 @@ module.exports = {
         return {
           contentItemId: item._id,
           title: item.title,
+          planType: item.planType || item.plan || "normal",
           stages: dedupeByStageId(stagesInMonth).map((stage) => ({
             stageId: stage._id,
             stageName: stage.stageName,
