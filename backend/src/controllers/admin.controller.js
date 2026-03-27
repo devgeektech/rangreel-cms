@@ -467,6 +467,7 @@ const getAdminGlobalCalendar = async (req, res) => {
         title: item.title,
         clientName,
         postingDate: toYMD(item.clientPostingDate),
+        planType: item.planType || item.plan || "normal",
         overallStatus,
       };
     });

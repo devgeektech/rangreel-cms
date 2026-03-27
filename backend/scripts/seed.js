@@ -6,6 +6,18 @@ dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const Role = require("../src/models/Role");
 const User = require("../src/models/User");
+const TeamCapacity = require("../src/models/TeamCapacity");
+
+/** Prompt 45: global per-role daily capacity (admin-controlled defaults). */
+const teamCapacitySeed = [
+  { role: "strategist", dailyCapacity: 5 },
+  { role: "videographer", dailyCapacity: 3 },
+  { role: "videoEditor", dailyCapacity: 7 },
+  { role: "manager", dailyCapacity: 10 },
+  { role: "postingExecutive", dailyCapacity: 10 },
+  { role: "graphicDesigner", dailyCapacity: 6 },
+  { role: "photographer", dailyCapacity: 4 },
+];
 
 const rolesToSeed = [
   {
@@ -162,6 +174,16 @@ const seed = async () => {
         mustChangePass: false,
       });
       console.log("Admin user created successfully.");
+    }
+
+    console.log("Upserting global team capacity (TeamCapacity)...");
+    for (const row of teamCapacitySeed) {
+      await TeamCapacity.updateOne(
+        { role: row.role },
+        { $set: { dailyCapacity: row.dailyCapacity } },
+        { upsert: true }
+      );
+      console.log(`  ${row.role}: ${row.dailyCapacity}/day`);
     }
 
     console.log("Seed completed successfully.");

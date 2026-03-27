@@ -8,6 +8,7 @@ const {
 } = require("../middleware/validation");
 const adminController = require("../controllers/admin.controller");
 const capacityController = require("../controllers/capacity.controller");
+const teamCapacityController = require("../controllers/teamCapacity.controller");
 
 const router = express.Router();
 
@@ -45,6 +46,9 @@ router.put(
 router.get("/users/:id/capacity", asyncHandler(capacityController.getCapacity));
 router.patch("/users/:id/capacity", asyncHandler(capacityController.setCapacity));
 router.get("/capacity-overview", asyncHandler(capacityController.capacityOverview));
+
+router.get("/team-capacity", asyncHandler(teamCapacityController.listTeamCapacity));
+router.patch("/team-capacity/:role", asyncHandler(teamCapacityController.patchTeamCapacity));
 
 router.get("/clients", asyncHandler(adminController.getAdminClients));
 router.get("/calendar", asyncHandler(adminController.getAdminCalendar));
