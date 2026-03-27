@@ -1,0 +1,304 @@
+/**
+ * Centralised API client for the Rangreel backend.
+ * Base URL: NEXT_PUBLIC_API_URL (e.g. http://localhost:5000/api).
+ * All requests use credentials: 'include' for httpOnly cookie auth.
+ */
+
+function getBaseUrl() {
+  const base = process.env.NEXT_PUBLIC_API_URL;
+  if (!base) {
+    throw new Error("NEXT_PUBLIC_API_URL is not set");
+  }
+  return base.replace(/\/$/, "");
+}
+
+/**
+ * @param {string} path - Path relative to API root (e.g. '/auth/login' or 'auth/login')
+ * @param {RequestInit} [options] - fetch options; credentials and JSON body are handled for you
+ * @returns {Promise<Response>}
+ */
+export async function apiFetch(path, options = {}) {
+  const base = getBaseUrl();
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const url = `${base}${normalizedPath}`;
+
+  const headers = new Headers(options.headers);
+
+  let body = options.body;
+  if (
+    body &&
+    typeof body === "object" &&
+    !(body instanceof FormData) &&
+    !(body instanceof Blob) &&
+    !(body instanceof ArrayBuffer)
+  ) {
+    if (!headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+    body = JSON.stringify(body);
+  }
+
+  return fetch(url, {
+    ...options,
+    credentials: "include",
+    headers,
+    body,
+  });
+}
+
+/**
+ * Parse JSON if Content-Type is JSON; otherwise return text or null.
+ * @param {Response} res
+ */
+async function parseResponse(res) {
+  const contentType = res.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return res.json();
+  }
+  const text = await res.text();
+  return text || null;
+}
+
+/**
+ * @param {string} path
+ * @param {RequestInit} [options]
+ */
+export async function apiRequest(path, options = {}) {
+  const res = await apiFetch(path, options);
+  const data = await parseResponse(res);
+  return { res, data };
+}
+
+async function requestJson(path, options = {}) {
+  const { res, data } = await apiRequest(path, options);
+  if (!res.ok) {
+    const errorMessage =
+      (data && (data.error || data.message)) || "Request failed";
+    const error = new Error(errorMessage);
+    error.status = res.status;
+    error.data = data;
+    throw error;
+  }
+  return data;
+}
+
+export const api = {
+  get: (path, options = {}) => apiFetch(path, { ...options, method: "GET" }),
+
+  post: (path, body, options = {}) =>
+    apiFetch(path, { ...options, method: "POST", body }),
+
+  put: (path, body, options = {}) =>
+    apiFetch(path, { ...options, method: "PUT", body }),
+
+  patch: (path, body, options = {}) =>
+    apiFetch(path, { ...options, method: "PATCH", body }),
+
+  delete: (path, options = {}) =>
+    apiFetch(path, { ...options, method: "DELETE" }),
+
+  login: (payload) =>
+    requestJson("/auth/login", {
+      method: "POST",
+      body: payload,
+    }),
+
+  changePassword: (payload) =>
+    requestJson("/auth/change-password", {
+      method: "POST",
+      body: payload,
+    }),
+
+  logout: () =>
+    requestJson("/auth/logout", {
+      method: "POST",
+    }),
+
+  getMe: () => requestJson("/user/me", { method: "GET" }),
+
+  getRoles: () => requestJson("/admin/roles", { method: "GET" }),
+  createRole: (payload) =>
+    requestJson("/admin/roles", {
+      method: "POST",
+      body: payload,
+    }),
+  updateRole: (id, payload) =>
+    requestJson(`/admin/roles/${id}`, {
+      method: "PUT",
+      body: payload,
+    }),
+  deleteRole: (id) =>
+    requestJson(`/admin/roles/${id}`, {
+      method: "DELETE",
+    }),
+
+  getManagers: () => requestJson("/admin/managers", { method: "GET" }),
+  createManager: (payload) =>
+    requestJson("/admin/managers", {
+      method: "POST",
+      body: payload,
+    }),
+  updateManager: (id, payload) =>
+    requestJson(`/admin/managers/${id}`, {
+      method: "PUT",
+      body: payload,
+    }),
+  resetManagerPassword: (id, payload) =>
+    requestJson(`/admin/managers/${id}/reset-password`, {
+      method: "PUT",
+      body: payload,
+    }),
+
+  getUsers: ({ role, search, includeAdmins } = {}) => {
+    const params = new URLSearchParams();
+    if (role) params.set("role", role);
+    if (search) params.set("search", search);
+    if (includeAdmins) params.set("includeAdmins", "true");
+    const query = params.toString();
+    return requestJson(`/admin/users${query ? `?${query}` : ""}`, { method: "GET" });
+  },
+  createUser: (payload) =>
+    requestJson("/admin/users", {
+      method: "POST",
+      body: payload,
+    }),
+  updateUser: (id, payload) =>
+    requestJson(`/admin/users/${id}`, {
+      method: "PUT",
+      body: payload,
+    }),
+  resetUserPassword: (id, payload) =>
+    requestJson(`/admin/users/${id}/reset-password`, {
+      method: "PUT",
+      body: payload,
+    }),
+
+  getPackages: () => requestJson("/admin/packages", { method: "GET" }),
+  createPackage: (body) =>
+    requestJson("/admin/packages", {
+      method: "POST",
+      body,
+    }),
+  updatePackage: (id, body) =>
+    requestJson(`/admin/packages/${id}`, {
+      method: "PATCH",
+      body,
+    }),
+  deletePackage: (id) =>
+    requestJson(`/admin/packages/${id}`, {
+      method: "DELETE",
+    }),
+
+  // -------------------------------------------------------------------------
+  // Admin — public holidays
+  // -------------------------------------------------------------------------
+  getHolidays: () => requestJson("/admin/holidays", { method: "GET" }),
+  createHoliday: (body) =>
+    requestJson("/admin/holidays", {
+      method: "POST",
+      body,
+    }),
+  deleteHoliday: (id) =>
+    requestJson(`/admin/holidays/${id}`, {
+      method: "DELETE",
+    }),
+
+  // -------------------------------------------------------------------------
+  // Admin — global calendar & clients (read-only calendar)
+  // -------------------------------------------------------------------------
+  getAdminCalendar: (month) =>
+    requestJson(`/admin/calendar?month=${encodeURIComponent(month)}`, {
+      method: "GET",
+    }),
+  getAdminClients: () => requestJson("/admin/clients", { method: "GET" }),
+
+  /** Prompt 46/50: global per-role daily caps (TeamCapacity) */
+  getTeamCapacity: () => requestJson("/admin/team-capacity", { method: "GET" }),
+  patchTeamCapacity: (role, body) =>
+    requestJson(`/admin/team-capacity/${encodeURIComponent(role)}`, {
+      method: "PATCH",
+      body,
+    }),
+
+  // Manager clients
+  getMyClients: () => requestJson("/manager/clients", { method: "GET" }),
+  createClient: (body) =>
+    requestJson("/manager/clients", {
+      method: "POST",
+      body,
+    }),
+  getClient: (id) => requestJson(`/manager/clients/${id}`, { method: "GET" }),
+  updateClient: (id, body) =>
+    requestJson(`/manager/clients/${id}`, {
+      method: "PATCH",
+      body,
+    }),
+  updateClientGoogleReviews: (id, body) =>
+    requestJson(`/manager/clients/${id}/google-reviews`, {
+      method: "PATCH",
+      body,
+    }),
+
+  // Manager calendars
+  getClientCalendar: (id, month) =>
+    requestJson(`/manager/clients/${id}/client-calendar?month=${encodeURIComponent(month)}`, {
+      method: "GET",
+    }),
+  getTeamCalendar: (id, month) =>
+    requestJson(`/manager/clients/${id}/team-calendar?month=${encodeURIComponent(month)}`, {
+      method: "GET",
+    }),
+  getManagerGlobalCalendar: (month) =>
+    requestJson(`/manager/clients/global-calendar?month=${encodeURIComponent(month)}`, {
+      method: "GET",
+    }),
+
+  // Manager reads (packages/users for client creation)
+  getManagerPackages: () => requestJson("/manager/packages", { method: "GET" }),
+  getTeamUsers: () => requestJson("/manager/team-users", { method: "GET" }),
+
+  // Manager stage actions
+  reshuffleStage: (itemId, stageId, body) =>
+    requestJson(`/manager/content/${itemId}/stage/${stageId}`, {
+      method: "PATCH",
+      body,
+    }),
+  updateStageStatus: (itemId, stageId, body) =>
+    requestJson(`/manager/content/${itemId}/stage/${stageId}/status`, {
+      method: "PATCH",
+      body,
+    }),
+
+  // Content detail (Prompt 25)
+  getContent: (id) => requestJson(`/content/${encodeURIComponent(id)}`, { method: "GET" }),
+
+  uploadVideo: async (file) => {
+    const form = new FormData();
+    form.append("file", file);
+    const { res, data } = await apiRequest("/uploads/video", {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      const errorMessage = (data && (data.error || data.message)) || "Upload failed";
+      const err = new Error(errorMessage);
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  },
+
+  // My tasks
+  getMyTasks: (month) =>
+    requestJson(`/user/my-tasks?month=${encodeURIComponent(month)}`, {
+      method: "GET",
+    }),
+  updateMyTaskStatus: (itemId, stageId, body) =>
+    requestJson(`/user/my-tasks/${itemId}/${stageId}`, {
+      method: "PATCH",
+      body,
+    }),
+};
+
+export { getBaseUrl };
