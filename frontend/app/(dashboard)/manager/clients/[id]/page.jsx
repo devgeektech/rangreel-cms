@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   Calendar,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
   Film,
+  Layers,
   Square,
   Star,
   User,
@@ -76,6 +77,7 @@ function statusBadge(status) {
 
 export default function ManagerClientDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const id = params?.id;
 
   const [loading, setLoading] = useState(true);
@@ -234,6 +236,23 @@ export default function ManagerClientDetailPage() {
   };
 
   const team = client?.team || {};
+  const activePlan = client?.activeContentCounts;
+  const pkg = client?.package || {};
+  const scheduledReels =
+    activePlan != null && activePlan.noOfReels != null
+      ? Number(activePlan.noOfReels) > 0
+      : (Number(pkg.noOfReels) || 0) > 0 || Boolean(team.reels && Object.values(team.reels).some(Boolean));
+  const scheduledStatic =
+    activePlan != null && activePlan.noOfStaticPosts != null
+      ? Number(activePlan.noOfStaticPosts) > 0
+      : (Number(pkg.noOfPosts ?? pkg.noOfStaticPosts) || 0) > 0 ||
+        Boolean(team.posts && Object.values(team.posts).some(Boolean));
+  const scheduledCarousel =
+    activePlan != null && activePlan.noOfCarousels != null
+      ? Number(activePlan.noOfCarousels) > 0
+      : (Number(pkg.noOfCarousels) || 0) > 0 ||
+        Boolean(team.carousel && Object.values(team.carousel).some(Boolean));
+
   const reviewsTarget = Number(client?.googleReviewsTarget ?? client?.package?.noOfGoogleReviews ?? 0);
   const reviewsAchieved = Number(client?.googleReviewsAchieved ?? 0);
   const reviewsPct =
@@ -280,7 +299,10 @@ export default function ManagerClientDetailPage() {
               <CardContent className="space-y-2 text-sm">
                 <Row label="Package" value={client.package?.name || "-"} />
                 <Row label="Reels" value={client.package?.noOfReels ?? 0} />
-                <Row label="Static Posts" value={client.package?.noOfStaticPosts ?? 0} />
+                <Row
+                  label="Static (package)"
+                  value={client.package?.noOfPosts ?? client.package?.noOfStaticPosts ?? 0}
+                />
                 <Row label="Carousels" value={client.package?.noOfCarousels ?? 0} />
                 <Row label="Google Reviews (package)" value={client.package?.noOfGoogleReviews ?? 0} />
                 <Row label="GMB Posting" value={client.package?.gmbPosting ? "Included" : "Not Included"} />
@@ -288,6 +310,14 @@ export default function ManagerClientDetailPage() {
                   label="Campaign Management"
                   value={client.package?.campaignManagement ? "Included" : "Not Included"}
                 />
+                {client.activeContentCounts ? (
+                  <div className="mt-3 border-t border-border pt-3">
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">Scheduled for this client</p>
+                    <Row label="Reels" value={client.activeContentCounts.noOfReels ?? 0} />
+                    <Row label="Static" value={client.activeContentCounts.noOfStaticPosts ?? 0} />
+                    <Row label="Carousels" value={client.activeContentCounts.noOfCarousels ?? 0} />
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
 
@@ -331,15 +361,50 @@ export default function ManagerClientDetailPage() {
           <Card>
             <CardHeader>
               <CardTitle>Team</CardTitle>
+              <CardDescription>
+                Per workflow: reels, static, and carousel each have their own assignees (matches client creation).
+              </CardDescription>
             </CardHeader>
-            <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              <TeamCard label="Strategist" user={team.strategist} />
-              <TeamCard label="Videographer" user={team.videographer} />
-              <TeamCard label="Video Editor" user={team.videoEditor} />
-              <TeamCard label="Graphic Designer" user={team.graphicDesigner} />
-              <TeamCard label="Posting Executive" user={team.postingExecutive} />
-              <TeamCard label="Campaign Manager" user={team.campaignManager} />
-              <TeamCard label="Photographer" user={team.photographer} />
+            <CardContent className="space-y-8">
+              {scheduledReels ? (
+                <TeamGroup title="Reels team" emoji="🎬">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    <TeamCard label="Strategist" user={team.reels?.strategist} />
+                    <TeamCard label="Videographer" user={team.reels?.videographer} />
+                    <TeamCard label="Video Editor" user={team.reels?.videoEditor} />
+                    <TeamCard label="Manager" user={team.reels?.manager} />
+                    <TeamCard label="Posting Executive" user={team.reels?.postingExecutive} />
+                  </div>
+                </TeamGroup>
+              ) : (
+                <p className="text-sm text-muted-foreground">No reels team — static/carousel-only or not scheduled for this client.</p>
+              )}
+
+              {scheduledStatic ? (
+                <TeamGroup title="Static team" emoji="🖼">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    <TeamCard label="Strategist" user={team.posts?.strategist} />
+                    <TeamCard label="Graphic Designer" user={team.posts?.graphicDesigner} />
+                    <TeamCard label="Manager" user={team.posts?.manager} />
+                    <TeamCard label="Posting Executive" user={team.posts?.postingExecutive} />
+                  </div>
+                </TeamGroup>
+              ) : (
+                <p className="text-sm text-muted-foreground">No static team for this client.</p>
+              )}
+
+              {scheduledCarousel ? (
+                <TeamGroup title="Carousel team" emoji="📚">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    <TeamCard label="Strategist" user={team.carousel?.strategist} />
+                    <TeamCard label="Graphic Designer" user={team.carousel?.graphicDesigner} />
+                    <TeamCard label="Manager" user={team.carousel?.manager} />
+                    <TeamCard label="Posting Executive" user={team.carousel?.postingExecutive} />
+                  </div>
+                </TeamGroup>
+              ) : (
+                <p className="text-sm text-muted-foreground">No carousel team for this client.</p>
+              )}
             </CardContent>
           </Card>
 
@@ -380,6 +445,13 @@ export default function ManagerClientDetailPage() {
                 onClick={() => setTab("team")}
               >
                 Team Calendar
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => router.push(`/manager/internal-calendar/${id}`)}
+              >
+                Internal Calendar
               </Button>
             </div>
           </div>
@@ -598,6 +670,20 @@ function Row({ label, value }) {
     <div className="flex items-center justify-between gap-3">
       <span className="text-muted-foreground">{label}</span>
       <span className="font-medium text-right">{value}</span>
+    </div>
+  );
+}
+
+function TeamGroup({ title, emoji, children }) {
+  return (
+    <div className="space-y-3">
+      <h4 className="text-sm font-semibold">
+        <span className="mr-1.5" aria-hidden>
+          {emoji}
+        </span>
+        {title}
+      </h4>
+      {children}
     </div>
   );
 }
