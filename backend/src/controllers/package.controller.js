@@ -40,6 +40,7 @@ const updatePackage = async (req, res) => {
       "name",
       "noOfReels",
       "noOfStaticPosts",
+      "noOfPosts",
       "noOfCarousels",
       "noOfGoogleReviews",
       "gmbPosting",

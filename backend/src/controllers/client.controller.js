@@ -2,6 +2,7 @@ const Client = require("../models/Client");
 const Package = require("../models/Package");
 const { generateClientReels } = require("../services/simpleCalendar.service");
 const ContentItem = require("../models/ContentItem");
+const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 
 const normalizeMonthTarget = (targetMonth) => {
   if (!targetMonth) return null;
@@ -70,13 +71,114 @@ const dedupeByStageId = (stages) => {
 const populateClientQuery = (query) => {
   return query
     .populate("package")
-    .populate("team.strategist")
-    .populate("team.videographer")
-    .populate("team.videoEditor")
-    .populate("team.graphicDesigner")
-    .populate("team.postingExecutive")
-    .populate("team.campaignManager")
-    .populate("team.photographer");
+    .populate("team.reels.strategist")
+    .populate("team.reels.videographer")
+    .populate("team.reels.videoEditor")
+    .populate("team.reels.manager")
+    .populate("team.reels.postingExecutive")
+    .populate("team.posts.strategist")
+    .populate("team.posts.graphicDesigner")
+    .populate("team.posts.manager")
+    .populate("team.posts.postingExecutive")
+    .populate("team.carousel.strategist")
+    .populate("team.carousel.graphicDesigner")
+    .populate("team.carousel.manager")
+    .populate("team.carousel.postingExecutive");
+};
+
+const hasValue = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+
+const REEL_ROLE_KEYS = ["strategist", "videographer", "videoEditor", "manager", "postingExecutive"];
+const POST_ROLE_KEYS = ["strategist", "graphicDesigner", "manager", "postingExecutive"];
+
+const groupAnyFilled = (group, keys) => keys.some((k) => hasValue(group?.[k]));
+const groupAllFilled = (group, keys) => keys.every((k) => hasValue(group?.[k]));
+
+const packageCounts = (pkg) => ({
+  reelsCount: Number(pkg?.noOfReels) || 0,
+  postsCount: Number(pkg?.noOfPosts ?? pkg?.noOfStaticPosts) || 0,
+  carouselsCount: Number(pkg?.noOfCarousels) || 0,
+});
+
+/** contentEnabled false = do not schedule this type for the client (even if the package includes it). */
+const effectiveContentCounts = (pkg, contentEnabled = {}) => {
+  const caps = packageCounts(pkg);
+  return {
+    reelsCount: contentEnabled.reels === false ? 0 : caps.reelsCount,
+    postsCount: contentEnabled.posts === false ? 0 : caps.postsCount,
+    carouselsCount: contentEnabled.carousel === false ? 0 : caps.carouselsCount,
+  };
+};
+
+/**
+ * Teams must be complete for each content type that is scheduled for this client (effective counts > 0).
+ * Types not scheduled must have empty team rows.
+ */
+const validateTeamForPackage = (team, effective) => {
+  const { reelsCount, postsCount, carouselsCount } = effective;
+  const reels = team?.reels || {};
+  const posts = team?.posts || {};
+  const carousel = team?.carousel || {};
+
+  if (reelsCount > 0) {
+    if (!groupAllFilled(reels, REEL_ROLE_KEYS)) {
+      return "Reels are scheduled for this client — assign every role in the reels team";
+    }
+  } else if (groupAnyFilled(reels, REEL_ROLE_KEYS)) {
+    return "Reels are not scheduled for this client — leave the reels team empty";
+  }
+
+  if (postsCount > 0) {
+    if (!groupAllFilled(posts, POST_ROLE_KEYS)) {
+      return "Static content is scheduled — assign every role in the static team";
+    }
+  } else if (groupAnyFilled(posts, POST_ROLE_KEYS)) {
+    return "Static is not scheduled for this client — leave the static team empty";
+  }
+
+  if (carouselsCount > 0) {
+    if (!groupAllFilled(carousel, POST_ROLE_KEYS)) {
+      return "Carousels are scheduled — assign every role in the carousel team";
+    }
+  } else if (groupAnyFilled(carousel, POST_ROLE_KEYS)) {
+    return "Carousels are not scheduled for this client — leave the carousel team empty";
+  }
+
+  return null;
+};
+
+const pickTeamSubsetForPackage = (team, effective) => {
+  const { reelsCount, postsCount, carouselsCount } = effective;
+  const out = {};
+  if (reelsCount > 0) out.reels = team?.reels;
+  if (postsCount > 0) out.posts = team?.posts;
+  if (carouselsCount > 0) out.carousel = team?.carousel;
+  return out;
+};
+
+const toDraftType = (item) => {
+  const t = String(item?.type || "").toLowerCase();
+  if (t === "reel" || t === "post" || t === "carousel") return t;
+  const ct = String(item?.contentType || "").toLowerCase();
+  if (ct === "carousel") return "carousel";
+  if (ct === "static_post" || ct === "post") return "post";
+  return "reel";
+};
+
+const toDraftItems = (contentItems) => {
+  return (contentItems || []).map((item) => ({
+    contentId: item._id,
+    type: toDraftType(item),
+    stages: (item.workflowStages || []).map((stage) => ({
+      name: stage.stageName,
+      role: stage.role,
+      assignedUser: stage.assignedUser,
+      date: stage.dueDate,
+      status: stage.status || "assigned",
+    })),
+    postingDate: item.clientPostingDate,
+    isLocked: true,
+  }));
 };
 
 const createClient = async (req, res) => {
@@ -93,13 +195,37 @@ const createClient = async (req, res) => {
       team,
       googleReviewsTarget: bodyReviewsTarget,
       googleReviewsAchieved: bodyReviewsAchieved,
+      contentEnabled,
     } = req.body;
 
     if (!packageId) {
       return failure(res, "package is required", 400);
     }
 
-    const pkg = await Package.findById(packageId).select("noOfGoogleReviews").lean();
+    const pkg = await Package.findById(packageId)
+      .select("noOfGoogleReviews noOfReels noOfPosts noOfStaticPosts noOfCarousels")
+      .lean();
+    if (!pkg) {
+      return failure(res, "Package not found", 400);
+    }
+
+    const effective = effectiveContentCounts(pkg, contentEnabled || {});
+    if (
+      effective.reelsCount + effective.postsCount + effective.carouselsCount === 0 &&
+      packageCounts(pkg).reelsCount + packageCounts(pkg).postsCount + packageCounts(pkg).carouselsCount > 0
+    ) {
+      return failure(
+        res,
+        "Turn on at least one content type (reels, static, or carousels) for this client",
+        400
+      );
+    }
+    const teamError = validateTeamForPackage(team, effective);
+    if (teamError) {
+      return failure(res, teamError, 400);
+    }
+
+    const teamToSave = pickTeamSubsetForPackage(team, effective);
     const googleReviewsTarget =
       typeof bodyReviewsTarget === "number"
         ? Math.max(0, bodyReviewsTarget)
@@ -120,12 +246,34 @@ const createClient = async (req, res) => {
       googleReviewsAchieved,
       manager: req.user.id,
       package: packageId,
-      team,
+      team: teamToSave,
+      activeContentCounts: {
+        noOfReels: effective.reelsCount,
+        noOfStaticPosts: effective.postsCount,
+        noOfCarousels: effective.carouselsCount,
+      },
       createdBy: req.user.id,
     });
 
     // Prompt 16: only run the new simple calendar service.
     await generateClientReels(client);
+
+    // Prompt 68: keep an editable draft copy in sync with generated ContentItems.
+    const generatedItems = await ContentItem.find({ client: client._id })
+      .select("_id type contentType workflowStages clientPostingDate")
+      .sort({ clientPostingDate: 1 })
+      .lean();
+
+    await ClientScheduleDraft.findOneAndUpdate(
+      { clientId: client._id },
+      {
+        $set: {
+          clientId: client._id,
+          items: toDraftItems(generatedItems),
+        },
+      },
+      { upsert: true, new: true, runValidators: true }
+    );
 
     const populated = await populateClientQuery(Client.findById(client._id));
     return success(res, populated, 201);

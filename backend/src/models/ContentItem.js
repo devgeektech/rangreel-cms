@@ -69,6 +69,11 @@ const contentItemSchema = new mongoose.Schema(
       enum: ["reel", "static_post", "carousel", "gmb_post", "campaign"],
       required: true,
     },
+    type: {
+      type: String,
+      enum: ["reel", "post", "carousel"],
+      default: "reel",
+    },
     plan: {
       type: String,
       enum: ["normal", "urgent"],
