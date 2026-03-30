@@ -8,7 +8,6 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import EmptyState from "@/components/shared/EmptyState";
 import ContentCalendarDnd from "@/components/calendar/ContentCalendarDnd";
 
@@ -32,12 +31,10 @@ export default function ManagerInternalCalendarPage() {
 
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState(null);
-  const [savingKey, setSavingKey] = useState("");
   const [roleCapMap, setRoleCapMap] = useState({});
-  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
-  const [suggestions, setSuggestions] = useState([]);
-  const [pendingStageEdit, setPendingStageEdit] = useState(null);
   const [calendarState, setCalendarState] = useState(null);
+  const [customizing, setCustomizing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async () => {
     if (!clientId) return;
@@ -83,42 +80,18 @@ export default function ManagerInternalCalendarPage() {
     };
   }, []);
 
-  const updateStage = async (contentId, stageName, newDateYMD) => {
-    const opKey = `${contentId}:${stageName}`;
+  const submitCalendar = async () => {
+    if (!clientId || !calendarState?.items) return;
     try {
-      setSavingKey(opKey);
-      const res = await api.updateInternalCalendarStage({
-        contentId,
-        stageName,
-        newDate: newDateYMD,
-      });
-      if (res?.success === false) {
-        const suggestions = Array.isArray(res?.suggestions) ? res.suggestions : [];
-        if (suggestions.length > 0) {
-          setSuggestions(suggestions);
-          setPendingStageEdit({ contentId, stageName });
-          setSuggestionsOpen(true);
-          throw new Error(`capacity_suggestions:${suggestions.join(",")}`);
-        }
-        throw new Error("capacity_exceeded");
-      }
-      toast.success("Stage date updated");
+      setSubmitting(true);
+      await api.submitInternalCalendar(clientId, { items: calendarState.items });
+      toast.success("Schedule saved");
+      setCustomizing(false);
       await load();
     } catch (err) {
-      if (String(err?.message || "").startsWith("capacity_suggestions")) {
-        return;
-      }
-      if (
-        String(err?.message || "").toLowerCase().includes("capacity exceeded") ||
-        String(err?.message || "").startsWith("capacity_exceeded")
-      ) {
-        toast.error("Capacity exceeded for this role");
-      } else {
-        toast.error(err.message || "Failed to update stage date");
-      }
-      throw err;
+      toast.error(err?.message || "Failed to save schedule");
     } finally {
-      setSavingKey("");
+      setSubmitting(false);
     }
   };
 
@@ -128,13 +101,29 @@ export default function ManagerInternalCalendarPage() {
         <div>
           <h2 className="text-2xl font-semibold">Internal calendar</h2>
           <p className="text-sm text-muted-foreground">
-            Drag stages between days to reschedule. Post and design stages stay fixed. Calendar state updates after each save.
+            Auto schedule is read-only. Use “Customize Schedule” to edit stages (warnings only), then submit to persist.
           </p>
         </div>
-        <Button type="button" variant="outline" onClick={() => router.back()}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back
-        </Button>
+        <div className="flex items-center gap-2">
+          {customizing ? (
+            <>
+              <Button type="button" variant="outline" onClick={() => { setCustomizing(false); load(); }} disabled={submitting}>
+                Cancel
+              </Button>
+              <Button type="button" onClick={submitCalendar} disabled={submitting}>
+                {submitting ? "Saving..." : "Submit schedule"}
+              </Button>
+            </>
+          ) : (
+            <Button type="button" onClick={() => setCustomizing(true)} disabled={submitting}>
+              Customize Schedule
+            </Button>
+          )}
+          <Button type="button" variant="outline" onClick={() => router.back()}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Back
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -161,55 +150,21 @@ export default function ManagerInternalCalendarPage() {
               description="No internal calendar schedule found for this client yet."
             />
           ) : (
-            <div className={savingKey ? "pointer-events-none opacity-75 transition" : ""}>
+            <div className={submitting ? "pointer-events-none opacity-75 transition" : ""}>
               <ContentCalendarDnd
                 key={clientId}
                 clientId={clientId}
                 draft={calendarState || draft}
                 onCalendarStateChange={setCalendarState}
                 roleCapMap={roleCapMap}
-                saving={Boolean(savingKey)}
-                onStageMove={async ({ contentId, stageName, newDateYmd }) => {
-                  await updateStage(contentId, stageName, newDateYmd);
-                }}
+                saving={submitting}
+                canEdit={customizing}
+                controlledDraft
               />
             </div>
           )}
         </CardContent>
       </Card>
-
-      <Dialog open={suggestionsOpen} onOpenChange={setSuggestionsOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Selected date is full</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">Suggested dates:</p>
-            <div className="flex flex-wrap gap-2">
-              {suggestions.map((date, idx) => (
-                <Button
-                  key={date}
-                  type="button"
-                  variant={idx === 0 ? "default" : "outline"}
-                  onClick={async () => {
-                    if (!pendingStageEdit) return;
-                    await updateStage(
-                      pendingStageEdit.contentId,
-                      pendingStageEdit.stageName,
-                      date
-                    );
-                    setSuggestionsOpen(false);
-                    setSuggestions([]);
-                    setPendingStageEdit(null);
-                  }}
-                >
-                  {prettyDate(date)}
-                </Button>
-              ))}
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <Card>
         <CardHeader>
@@ -217,7 +172,7 @@ export default function ManagerInternalCalendarPage() {
           <CardDescription>Read-only posting dates per content item.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
-          {(draft?.items || []).map((item) => (
+          {((calendarState || draft)?.items || []).map((item) => (
             <div key={String(item.contentId)} className="flex items-center justify-between rounded border p-2">
               <span className="font-medium capitalize">{item.type}</span>
               <span className="text-muted-foreground">{prettyDate(item.postingDate)}</span>

@@ -245,7 +245,7 @@ export default function ManagerClientDetailPage() {
   const scheduledStatic =
     activePlan != null && activePlan.noOfStaticPosts != null
       ? Number(activePlan.noOfStaticPosts) > 0
-      : (Number(pkg.noOfPosts ?? pkg.noOfStaticPosts) || 0) > 0 ||
+      : ((Number(pkg.noOfPosts) || 0) + (Number(pkg.noOfStaticPosts) || 0)) > 0 ||
         Boolean(team.posts && Object.values(team.posts).some(Boolean));
   const scheduledCarousel =
     activePlan != null && activePlan.noOfCarousels != null
@@ -301,7 +301,7 @@ export default function ManagerClientDetailPage() {
                 <Row label="Reels" value={client.package?.noOfReels ?? 0} />
                 <Row
                   label="Static (package)"
-                  value={client.package?.noOfPosts ?? client.package?.noOfStaticPosts ?? 0}
+                  value={(Number(client.package?.noOfPosts) || 0) + (Number(client.package?.noOfStaticPosts) || 0)}
                 />
                 <Row label="Carousels" value={client.package?.noOfCarousels ?? 0} />
                 <Row label="Google Reviews (package)" value={client.package?.noOfGoogleReviews ?? 0} />

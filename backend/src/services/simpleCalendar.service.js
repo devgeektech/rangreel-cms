@@ -186,9 +186,7 @@ async function generateClientReels(client) {
     : populatedClient?.package?.noOfReels || 0;
   const postsCount = hasPlan
     ? Number(plan.noOfStaticPosts) || 0
-    : populatedClient?.package?.noOfPosts ??
-      populatedClient?.package?.noOfStaticPosts ??
-      0;
+    : (Number(populatedClient?.package?.noOfPosts) || 0) + (Number(populatedClient?.package?.noOfStaticPosts) || 0);
   const carouselsCount = hasPlan
     ? Number(plan.noOfCarousels) || 0
     : populatedClient?.package?.noOfCarousels || 0;

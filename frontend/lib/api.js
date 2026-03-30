@@ -280,9 +280,29 @@ export const api = {
       body,
     }),
 
+  submitInternalCalendar: (clientId, body) =>
+    requestJson(`/internal-calendar/${encodeURIComponent(clientId)}/submit`, {
+      method: "POST",
+      body,
+    }),
+
   /** Smart scheduling: capacity warnings only (does not block saves). */
   checkCalendarConflicts: (body) =>
     requestJson("/calendar/check-conflicts", {
+      method: "POST",
+      body,
+    }),
+
+  /** Preview-only conflict checks for a "new client" (no clientId subtraction). */
+  checkCalendarConflictsNew: (body) =>
+    requestJson("/calendar/check-conflicts-new", {
+      method: "POST",
+      body,
+    }),
+
+  /** Generate an in-memory auto draft calendar (no DB writes). */
+  generateCalendarDraft: (body) =>
+    requestJson("/calendar/generate-draft", {
       method: "POST",
       body,
     }),
