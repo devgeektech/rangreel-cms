@@ -269,6 +269,31 @@ export const api = {
       body,
     }),
 
+  // Internal calendar (Prompt 69/70)
+  getInternalCalendar: (clientId) =>
+    requestJson(`/internal-calendar/${encodeURIComponent(clientId)}`, {
+      method: "GET",
+    }),
+  updateInternalCalendarStage: (body) =>
+    requestJson("/internal-calendar/update", {
+      method: "PATCH",
+      body,
+    }),
+
+  /** Smart scheduling: capacity warnings only (does not block saves). */
+  checkCalendarConflicts: (body) =>
+    requestJson("/calendar/check-conflicts", {
+      method: "POST",
+      body,
+    }),
+
+  /** Backward workflow template from posting date (manager/admin). */
+  previewStagesFromPosting: (body) =>
+    requestJson("/calendar/preview-stages-from-posting", {
+      method: "POST",
+      body,
+    }),
+
   // Content detail (Prompt 25)
   getContent: (id) => requestJson(`/content/${encodeURIComponent(id)}`, { method: "GET" }),
 
