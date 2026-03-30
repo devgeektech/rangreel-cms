@@ -7,6 +7,11 @@ const router = express.Router();
 
 router.get("/:clientId", auth, asyncHandler(internalCalendarController.getInternalCalendar));
 router.patch("/update", auth, asyncHandler(internalCalendarController.updateInternalCalendarStage));
+router.post(
+  "/:clientId/submit",
+  auth,
+  asyncHandler(internalCalendarController.submitInternalCalendar)
+);
 
 module.exports = router;
 

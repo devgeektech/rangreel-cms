@@ -11,9 +11,17 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { Film, GripVertical, Layers, Square } from "lucide-react";
+import { AlertTriangle, Film, GripVertical, Layers, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { applyDragWithChainShift } from "@/lib/calendarDraftUtils";
@@ -104,21 +112,31 @@ function getMonthGridCells(year, monthIndex) {
 function buildStageEntries(draft, editableStages) {
   const editable = editableStages instanceof Set ? editableStages : new Set(editableStages);
   const out = [];
+  const counters = { reel: 0, static_post: 0, carousel: 0 };
   for (const item of draft?.items || []) {
     const ct = normalizeCalendarContentType(item.type);
+    counters[ct] = (counters[ct] || 0) + 1;
+    const contentLabel = `${(CONTENT_TYPE_META[ct] || CONTENT_TYPE_META.static_post).label} ${counters[ct]}`;
     for (const stage of item?.stages || []) {
       if (!stage?.date) continue;
       const ymd = String(stage.date).slice(0, 10);
       const locked = !editable.has(stage.name);
+      const assignedUserId = stage?.assignedUser?._id
+        ? String(stage.assignedUser._id)
+        : stage?.assignedUser
+          ? String(stage.assignedUser)
+          : "";
       out.push({
         id: `${item.contentId}:${stage.name}`,
         contentId: String(item.contentId),
         stageName: stage.name,
         role: stage.role,
         dateYmd: ymd,
+        assignedUserId,
         contentType: ct,
         locked,
         title: item.title || "",
+        contentLabel,
       });
     }
   }
@@ -165,11 +183,11 @@ function DayCell({ ymd, padKey, children, isToday, loadStyle, overloadDetail }) 
   );
 }
 
-function StageChip({ entry, filterType, saving }) {
+function StageChip({ entry, filterType, saving, canEdit, warnings, onOpenDetails }) {
   const meta = CONTENT_TYPE_META[entry.contentType] || CONTENT_TYPE_META.static_post;
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: entry.id,
-    disabled: entry.locked || saving,
+    disabled: entry.locked || saving || !canEdit,
     data: {
       contentId: entry.contentId,
       stageName: entry.stageName,
@@ -182,6 +200,18 @@ function StageChip({ entry, filterType, saving }) {
     return null;
   }
 
+  const hasWarnings = Array.isArray(warnings) && warnings.length > 0;
+  const warningTitle = hasWarnings
+    ? warnings.map((w) => w.message || `${w.role}: ${w.effectiveCount}/${w.capacity}`).join(" · ")
+    : undefined;
+  const hoverTitle = [
+    entry.contentLabel ? `${entry.contentLabel}` : meta.label,
+    `${entry.stageName} · ${entry.role}`,
+    warningTitle ? `Warnings: ${warningTitle}` : "",
+  ]
+    .filter(Boolean)
+    .join(" — ");
+
   const style = transform
     ? {
         transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
@@ -192,14 +222,16 @@ function StageChip({ entry, filterType, saving }) {
     <div
       ref={setNodeRef}
       style={style}
+      title={hoverTitle}
       className={cn(
         "flex items-start gap-0.5 rounded border px-1 py-0.5 text-[10px] leading-tight",
         meta.chip,
+        hasWarnings && "border-red-600/70 bg-red-500/10 ring-1 ring-red-500/20",
         (entry.locked || saving) && "opacity-70",
         isDragging && "opacity-40"
       )}
     >
-      {!entry.locked && !saving ? (
+      {!entry.locked && !saving && canEdit ? (
         <button
           type="button"
           className="mt-0.5 shrink-0 cursor-grab touch-none text-current/70 active:cursor-grabbing"
@@ -212,12 +244,20 @@ function StageChip({ entry, filterType, saving }) {
       ) : (
         <span className="mt-0.5 w-3 shrink-0" />
       )}
-      <div className="min-w-0 flex-1">
+      <button
+        type="button"
+        className="min-w-0 flex-1 text-left"
+        onClick={() => {
+          if (isDragging) return;
+          onOpenDetails?.(entry);
+        }}
+      >
         <div className="font-medium">{meta.label}</div>
         <div className="truncate text-[9px] opacity-90">
-          {entry.stageName} · {entry.role}
+          {(entry.contentLabel || meta.label) + " · "}{entry.stageName} · {entry.role}
         </div>
-      </div>
+      </button>
+      {hasWarnings ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-red-600" aria-hidden /> : null}
     </div>
   );
 }
@@ -273,6 +313,10 @@ export default function ContentCalendarDnd({
   roleCapMap = {},
   saving = false,
   clientId,
+  conflictMode = "existing",
+  canEdit = true,
+  controlledDraft = false,
+  userById = {},
 }) {
   const defaultMonth = useMemo(() => {
     const items = draft?.items || [];
@@ -295,30 +339,39 @@ export default function ContentCalendarDnd({
   const filterType = controlledFilter ?? innerFilter;
 
   useEffect(() => {
-    setLocalDraft(draft);
-  }, [draft]);
+    if (!controlledDraft) setLocalDraft(draft);
+  }, [draft, controlledDraft]);
+
+  const schedule = controlledDraft ? draft : localDraft;
 
   useEffect(() => {
-    if (!clientId || !(localDraft?.items || []).length) {
+    if (!(schedule?.items || []).length) {
       setConflictByDay({});
       return undefined;
     }
+
+    if (conflictMode === "existing" && !clientId) {
+      setConflictByDay({});
+      return undefined;
+    }
+
     const seq = ++conflictReqRef.current;
     const t = setTimeout(async () => {
       try {
-        const res = await api.checkCalendarConflicts({
-          clientId,
-          items: localDraft.items,
-        });
-        const payload = res?.data ?? res;
-        const byDay = payload?.byDay || {};
+        const requestBody = { items: schedule.items };
+        const res =
+          conflictMode === "new"
+            ? await api.checkCalendarConflictsNew(requestBody)
+            : await api.checkCalendarConflicts({ clientId, ...requestBody });
+        const respPayload = res?.data ?? res;
+        const byDay = respPayload?.byDay || {};
         if (seq === conflictReqRef.current) setConflictByDay(byDay);
       } catch {
         if (seq === conflictReqRef.current) setConflictByDay({});
       }
     }, 320);
     return () => clearTimeout(t);
-  }, [clientId, localDraft]);
+  }, [clientId, schedule, conflictMode]);
 
   useEffect(() => {
     if (controlledMonth) return;
@@ -352,7 +405,7 @@ export default function ContentCalendarDnd({
     [editableStageNames]
   );
 
-  const entries = useMemo(() => buildStageEntries(localDraft, editable), [localDraft, editable]);
+  const entries = useMemo(() => buildStageEntries(schedule, editable), [schedule, editable]);
 
   const entriesByDay = useMemo(() => {
     const map = new Map();
@@ -369,7 +422,7 @@ export default function ContentCalendarDnd({
     (ymd) => {
       let tasks = 0;
       let capacity = 0;
-      for (const item of localDraft?.items || []) {
+      for (const item of schedule?.items || []) {
         for (const stage of item?.stages || []) {
           if (!stage?.date || String(stage.date).slice(0, 10) !== ymd) continue;
           const role = String(stage.role);
@@ -397,7 +450,7 @@ export default function ContentCalendarDnd({
         title,
       };
     },
-    [localDraft, roleCapMap]
+    [schedule, roleCapMap]
   );
 
   const todayYmd = useMemo(() => {
@@ -412,15 +465,37 @@ export default function ContentCalendarDnd({
   );
 
   const [activeDragId, setActiveDragId] = useState(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsEntry, setDetailsEntry] = useState(null);
   const activeEntry = useMemo(
     () => entries.find((e) => e.id === activeDragId) || null,
     [entries, activeDragId]
   );
+  const detailsItem = useMemo(() => {
+    if (!detailsEntry) return null;
+    return (schedule?.items || []).find((it) => String(it.contentId) === String(detailsEntry.contentId)) || null;
+  }, [detailsEntry, schedule]);
+
+  const resolveUserName = useCallback(
+    (assignedUser) => {
+      if (!assignedUser) return "-";
+      if (typeof assignedUser === "object") return assignedUser?.name || assignedUser?._id || "-";
+      const id = String(assignedUser);
+      return userById?.[id]?.name || userById?.[id] || id;
+    },
+    [userById]
+  );
+
+  const openDetails = useCallback((entry) => {
+    setDetailsEntry(entry);
+    setDetailsOpen(true);
+  }, []);
 
   const handleDragEnd = async (event) => {
     setActiveDragId(null);
     const { active, over } = event;
-    if (!over || !onStageMove) return;
+    if (!over) return;
+    if (!canEdit) return;
 
     const data = active.data.current;
     if (!data || data.locked) return;
@@ -431,10 +506,17 @@ export default function ContentCalendarDnd({
     if (!/^\d{4}-\d{2}-\d{2}$/.test(newYmd)) return;
     if (newYmd === data.dateYmd) return;
 
-    const prev = localDraft;
+    const prev = schedule;
     const optimistic = applyDragWithChainShift(prev, data.contentId, data.stageName, newYmd);
-    setLocalDraft(optimistic);
-    onCalendarStateChange?.(optimistic);
+
+    if (controlledDraft) {
+      onCalendarStateChange?.(optimistic);
+    } else {
+      setLocalDraft(optimistic);
+      onCalendarStateChange?.(optimistic);
+    }
+
+    if (!onStageMove) return;
 
     try {
       await onStageMove({
@@ -444,7 +526,8 @@ export default function ContentCalendarDnd({
         previousYmd: data.dateYmd,
       });
     } catch {
-      setLocalDraft(prev);
+      if (controlledDraft) onCalendarStateChange?.(prev);
+      else setLocalDraft(prev);
       onCalendarStateChange?.(prev);
     }
   };
@@ -543,7 +626,19 @@ export default function ContentCalendarDnd({
                   overloadDetail={overloadDetail}
                 >
                   {list.map((entry) => (
-                    <StageChip key={entry.id} entry={entry} filterType={filterType} saving={saving} />
+                    <StageChip
+                      key={entry.id}
+                      entry={entry}
+                      filterType={filterType}
+                      saving={saving}
+                      canEdit={canEdit}
+                      onOpenDetails={openDetails}
+                      warnings={dayWarnings.filter(
+                        (w) =>
+                          String(w.role) === String(entry.role) &&
+                          String(w.userId || "") === String(entry.assignedUserId || "")
+                      )}
+                    />
                   ))}
                 </DayCell>
               );
@@ -552,6 +647,42 @@ export default function ContentCalendarDnd({
         </div>
         <DragOverlay dropAnimation={null}>{activeEntry ? <StageChipOverlay entry={activeEntry} /> : null}</DragOverlay>
       </DndContext>
+
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{detailsEntry?.contentLabel || "Task details"}</DialogTitle>
+            <DialogDescription>
+              {detailsEntry ? `${detailsEntry.stageName} · ${detailsEntry.role}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+
+          {detailsEntry ? (
+            <div className="space-y-2 text-sm">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Due date</span>
+                <span className="font-medium">{detailsEntry.dateYmd}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Assigned to</span>
+                <span className="font-medium">
+                  {resolveUserName(
+                    detailsItem?.stages?.find((s) => s?.name === detailsEntry.stageName)?.assignedUser
+                  )}
+                </span>
+              </div>
+              {detailsItem?.postingDate ? (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-muted-foreground">Posting date</span>
+                  <span className="font-medium">{String(detailsItem.postingDate).slice(0, 10)}</span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <DialogFooter showCloseButton />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

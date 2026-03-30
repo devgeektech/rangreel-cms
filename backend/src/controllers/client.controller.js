@@ -1,6 +1,7 @@
 const Client = require("../models/Client");
 const Package = require("../models/Package");
 const { generateClientReels } = require("../services/simpleCalendar.service");
+const { persistCalendarDraft } = require("../services/calendarDraftPersistence.service");
 const ContentItem = require("../models/ContentItem");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 
@@ -96,7 +97,7 @@ const groupAllFilled = (group, keys) => keys.every((k) => hasValue(group?.[k]));
 
 const packageCounts = (pkg) => ({
   reelsCount: Number(pkg?.noOfReels) || 0,
-  postsCount: Number(pkg?.noOfPosts ?? pkg?.noOfStaticPosts) || 0,
+  postsCount: (Number(pkg?.noOfPosts) || 0) + (Number(pkg?.noOfStaticPosts) || 0),
   carouselsCount: Number(pkg?.noOfCarousels) || 0,
 });
 
@@ -196,6 +197,7 @@ const createClient = async (req, res) => {
       googleReviewsTarget: bodyReviewsTarget,
       googleReviewsAchieved: bodyReviewsAchieved,
       contentEnabled,
+      calendarDraft,
     } = req.body;
 
     if (!packageId) {
@@ -255,8 +257,20 @@ const createClient = async (req, res) => {
       createdBy: req.user.id,
     });
 
-    // Prompt 16: only run the new simple calendar service.
-    await generateClientReels(client);
+    // Auto generation unless a final calendar draft is provided (wizard customize flow).
+    if (calendarDraft?.items && Array.isArray(calendarDraft.items) && calendarDraft.items.length > 0) {
+      const { endDate } = await persistCalendarDraft({
+        clientId: client._id,
+        calendarDraft,
+        createdBy: req.user.id,
+      });
+      if (endDate) {
+        await Client.updateOne({ _id: client._id }, { $set: { endDate } });
+      }
+    } else {
+      // Prompt 16: only run the new simple calendar service.
+      await generateClientReels(client);
+    }
 
     // Prompt 68: keep an editable draft copy in sync with generated ContentItems.
     const generatedItems = await ContentItem.find({ client: client._id })

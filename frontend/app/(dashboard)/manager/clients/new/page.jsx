@@ -11,7 +11,7 @@ import {
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +27,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { z } from "zod";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import ContentCalendarDnd from "@/components/calendar/ContentCalendarDnd";
 
 const stepLabels = ["Basic info", "Package & schedule", "Team"];
 
@@ -80,7 +81,7 @@ function buildClientSchema(packagesList) {
 
       const ce = data.contentEnabled || {};
       const reelCap = Number(pkg.noOfReels) || 0;
-      const postCap = Number(pkg.noOfPosts ?? pkg.noOfStaticPosts) || 0;
+      const postCap = (Number(pkg.noOfPosts) || 0) + (Number(pkg.noOfStaticPosts) || 0);
       const carCap = Number(pkg.noOfCarousels) || 0;
       const reelsCount = ce.reels === false ? 0 : reelCap;
       const postsCount = ce.posts === false ? 0 : postCap;
@@ -236,6 +237,11 @@ export default function NewClientPage() {
   const [packages, setPackages] = useState([]);
   const [usersLoading, setUsersLoading] = useState(true);
   const [users, setUsers] = useState([]);
+  const [calendarDraftLoading, setCalendarDraftLoading] = useState(false);
+  const [calendarDraft, setCalendarDraft] = useState(null);
+  const [customizingSchedule, setCustomizingSchedule] = useState(false);
+  const [scheduleSubmitted, setScheduleSubmitted] = useState(false);
+  const [calendarDraftError, setCalendarDraftError] = useState("");
   const packagesRef = useRef(packages);
   packagesRef.current = packages;
 
@@ -252,6 +258,8 @@ export default function NewClientPage() {
   });
 
   const selectedPackageId = watch("packageId");
+  const startDateWatch = watch("startDate");
+  const teamWatch = watch("team");
   const contentEnabledW = watch("contentEnabled");
   const selectedPackage = useMemo(
     () => (packages || []).find((p) => String(p._id) === String(selectedPackageId)),
@@ -260,12 +268,62 @@ export default function NewClientPage() {
 
   const pkgReelCap = selectedPackage ? (Number(selectedPackage.noOfReels) || 0) > 0 : false;
   const pkgPostCap =
-    selectedPackage ? (Number(selectedPackage.noOfPosts ?? selectedPackage.noOfStaticPosts) || 0) > 0 : false;
+    selectedPackage
+      ? ((Number(selectedPackage.noOfPosts) || 0) + (Number(selectedPackage.noOfStaticPosts) || 0)) > 0
+      : false;
   const pkgCarouselCap = selectedPackage ? (Number(selectedPackage.noOfCarousels) || 0) > 0 : false;
 
   const needReels = pkgReelCap && contentEnabledW?.reels !== false;
   const needPosts = pkgPostCap && contentEnabledW?.posts !== false;
   const needCarousel = pkgCarouselCap && contentEnabledW?.carousel !== false;
+
+  const reelsCompleteNow = !needReels || REEL_KEYS.every((k) => filled(teamWatch?.reels?.[k]));
+  const postsCompleteNow = !needPosts || POST_KEYS.every((k) => filled(teamWatch?.posts?.[k]));
+  const carouselsCompleteNow = !needCarousel || POST_KEYS.every((k) => filled(teamWatch?.carousel?.[k]));
+
+  // Dependency stability: `watch("team")` may keep object identity stable. These signatures
+  // ensure the preview generation effect reruns when dropdown values change.
+  const reelsTeamSignature = REEL_KEYS.map((k) => teamWatch?.reels?.[k] ?? "").join("|");
+  const postsTeamSignature = POST_KEYS.map((k) => teamWatch?.posts?.[k] ?? "").join("|");
+  const carouselsTeamSignature = POST_KEYS.map((k) => teamWatch?.carousel?.[k] ?? "").join("|");
+
+  const missingTeams = [];
+  if (needReels && !reelsCompleteNow) missingTeams.push("Reels team");
+  if (needPosts && !postsCompleteNow) missingTeams.push("Static team");
+  if (needCarousel && !carouselsCompleteNow) missingTeams.push("Carousel team");
+
+  const enabledTypeLabels = [];
+  if (needReels) enabledTypeLabels.push("Reels");
+  if (needPosts) enabledTypeLabels.push("Static");
+  if (needCarousel) enabledTypeLabels.push("Carousels");
+
+  const keyLabelReels = {
+    strategist: "Strategist",
+    videographer: "Videographer",
+    videoEditor: "Editor",
+    manager: "Manager",
+    postingExecutive: "Posting Executive",
+  };
+  const keyLabelPost = {
+    strategist: "Strategist",
+    graphicDesigner: "Graphic Designer",
+    manager: "Manager",
+    postingExecutive: "Posting Executive",
+  };
+
+  const missingRoleDetails = [];
+  if (needReels && !reelsCompleteNow) {
+    const missingKeys = REEL_KEYS.filter((k) => !filled(teamWatch?.reels?.[k]));
+    missingRoleDetails.push(`Reels: ${missingKeys.map((k) => keyLabelReels[k] || k).join(", ")}`);
+  }
+  if (needPosts && !postsCompleteNow) {
+    const missingKeys = POST_KEYS.filter((k) => !filled(teamWatch?.posts?.[k]));
+    missingRoleDetails.push(`Static: ${missingKeys.map((k) => keyLabelPost[k] || k).join(", ")}`);
+  }
+  if (needCarousel && !carouselsCompleteNow) {
+    const missingKeys = POST_KEYS.filter((k) => !filled(teamWatch?.carousel?.[k]));
+    missingRoleDetails.push(`Carousels: ${missingKeys.map((k) => keyLabelPost[k] || k).join(", ")}`);
+  }
 
   /** Only reset toggles when the user picks a different package — not on unrelated re-renders. */
   const scheduleSyncedPackageIdRef = useRef(null);
@@ -283,7 +341,7 @@ export default function NewClientPage() {
       "contentEnabled",
       {
         reels: (Number(pkg.noOfReels) || 0) > 0,
-        posts: (Number(pkg.noOfPosts ?? pkg.noOfStaticPosts) || 0) > 0,
+        posts: (Number(pkg.noOfPosts) || 0) + (Number(pkg.noOfStaticPosts) || 0) > 0,
         carousel: (Number(pkg.noOfCarousels) || 0) > 0,
       },
       { shouldValidate: false }
@@ -302,6 +360,64 @@ export default function NewClientPage() {
       setValue("team.carousel", { ...defaultValues.team.carousel });
     }
   }, [contentEnabledW, setValue]);
+
+  useEffect(() => {
+    if (step !== 2) return;
+    if (!selectedPackageId) return;
+    if (!startDateWatch) return;
+    if (!selectedPackage) return;
+
+    const reelsComplete = !needReels || REEL_KEYS.every((k) => filled(teamWatch?.reels?.[k]));
+    const postsComplete = !needPosts || POST_KEYS.every((k) => filled(teamWatch?.posts?.[k]));
+    const carouselsComplete = !needCarousel || POST_KEYS.every((k) => filled(teamWatch?.carousel?.[k]));
+
+    if (!reelsComplete || !postsComplete || !carouselsComplete) return;
+
+    let mounted = true;
+    setCalendarDraftLoading(true);
+    setCalendarDraftError("");
+
+    const t = setTimeout(async () => {
+      try {
+        const res = await api.generateCalendarDraft({
+          packageId: selectedPackageId,
+          startDate: startDateWatch,
+          team: teamWatch,
+          contentEnabled: contentEnabledW || {},
+        });
+
+        const payload = res?.data ?? res;
+        if (!mounted) return;
+        setCalendarDraft(payload || null);
+        setCustomizingSchedule(false);
+        setScheduleSubmitted(false);
+      } catch (err) {
+        if (!mounted) return;
+        setCalendarDraft(null);
+        setCalendarDraftError(err?.message || "Failed to generate schedule preview");
+      } finally {
+        if (!mounted) return;
+        setCalendarDraftLoading(false);
+      }
+    }, 450);
+
+    return () => {
+      mounted = false;
+      clearTimeout(t);
+    };
+  }, [
+    step,
+    selectedPackageId,
+    startDateWatch,
+    selectedPackage,
+    needReels,
+    needPosts,
+    needCarousel,
+    reelsTeamSignature,
+    postsTeamSignature,
+    carouselsTeamSignature,
+    contentEnabledW,
+  ]);
 
   const loadPackages = async () => {
     try {
@@ -356,6 +472,14 @@ export default function NewClientPage() {
     return map;
   }, [users]);
 
+  const userById = useMemo(() => {
+    const map = {};
+    (users || []).forEach((u) => {
+      if (u?._id) map[String(u._id)] = u;
+    });
+    return map;
+  }, [users]);
+
   const next = async () => {
     if (step === 0) {
       const ok = await trigger(["clientName", "brandName", "industry"]);
@@ -395,6 +519,7 @@ export default function NewClientPage() {
           posts: values.contentEnabled?.posts !== false,
           carousel: values.contentEnabled?.carousel !== false,
         },
+        calendarDraft: calendarDraft && Array.isArray(calendarDraft.items) ? calendarDraft : undefined,
         team: {
           reels: {
             strategist: values.team?.reels?.strategist || undefined,
@@ -547,7 +672,7 @@ export default function NewClientPage() {
                           <CardContent className="space-y-3 text-sm">
                             <div className="flex flex-wrap gap-2">
                               <StatChip label="Reels" value={pkg.noOfReels} />
-                              <StatChip label="Static" value={pkg.noOfPosts ?? pkg.noOfStaticPosts ?? 0} />
+                              <StatChip label="Static" value={(Number(pkg.noOfPosts) || 0) + (Number(pkg.noOfStaticPosts) || 0)} />
                               <StatChip label="Carousels" value={pkg.noOfCarousels} />
                               <StatChip label="Reviews" value={pkg.noOfGoogleReviews} />
                             </div>
@@ -587,8 +712,8 @@ export default function NewClientPage() {
                       control={control}
                     />
                     <ScheduleToggleRow
-                      label={`Static (${Number(selectedPackage.noOfPosts ?? selectedPackage.noOfStaticPosts) || 0} in package)`}
-                      disabled={!((Number(selectedPackage.noOfPosts ?? selectedPackage.noOfStaticPosts) || 0) > 0)}
+                      label={`Static (${(Number(selectedPackage.noOfPosts) || 0) + (Number(selectedPackage.noOfStaticPosts) || 0)} in package)`}
+                      disabled={!(((Number(selectedPackage.noOfPosts) || 0) + (Number(selectedPackage.noOfStaticPosts) || 0)) > 0)}
                       name="contentEnabled.posts"
                       control={control}
                     />
@@ -751,6 +876,79 @@ export default function NewClientPage() {
           </div>
         ) : null}
 
+        {step === 2 ? (
+          <Card className="mt-6">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">📅 Schedule preview</CardTitle>
+              <CardDescription>
+                Auto schedule is read-only. Customize to reschedule stages; capacity warnings are non-blocking.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {calendarDraftError ? (
+                <p className="text-sm text-destructive">{calendarDraftError}</p>
+              ) : calendarDraftLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 5 }).map((_, idx) => (
+                    <Skeleton key={idx} className="h-10 w-full" />
+                  ))}
+                </div>
+              ) : calendarDraft && Array.isArray(calendarDraft.items) && calendarDraft.items.length > 0 ? (
+                <>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!customizingSchedule ? (
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          setCustomizingSchedule(true);
+                          setScheduleSubmitted(false);
+                        }}
+                      >
+                        Customize Schedule
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        onClick={() => {
+                          setCustomizingSchedule(false);
+                          setScheduleSubmitted(true);
+                          toast.success("Schedule saved in preview (warnings allowed)");
+                        }}
+                      >
+                        {scheduleSubmitted ? "Schedule Submitted" : "Submit schedule"}
+                      </Button>
+                    )}
+                    <span className="text-xs text-muted-foreground">
+                      {customizingSchedule ? "Drag stages to reschedule" : "Preview mode"}
+                    </span>
+                  </div>
+
+                  <ContentCalendarDnd
+                    draft={calendarDraft}
+                    controlledDraft
+                    canEdit={customizingSchedule}
+                    conflictMode="new"
+                    roleCapMap={{}}
+                    saving={false}
+                    userById={userById}
+                    onCalendarStateChange={(nextDraft) => setCalendarDraft(nextDraft)}
+                  />
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {calendarDraft && Array.isArray(calendarDraft.items) && calendarDraft.items.length === 0
+                    ? "Schedule preview generated 0 items. Check that enabled content types have counts in the selected package."
+                    : missingTeams.length
+                      ? `Fill required teams to generate schedule preview (${missingRoleDetails.join("; ")}).`
+                      : enabledTypeLabels.length
+                        ? `Teams for enabled types (${enabledTypeLabels.join(", ")}) look complete, but preview is not generated yet. Change any team selection or refresh.`
+                        : "Fill required teams to generate schedule preview."}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
+
         <div className="flex items-center justify-between">
           <Button
             type="button"
@@ -776,7 +974,10 @@ export default function NewClientPage() {
               Next <ChevronRight className="ml-2 h-4 w-4" />
             </Button>
           ) : (
-            <Button type="submit" disabled={isSubmitting}>
+            <Button
+              type="submit"
+              disabled={isSubmitting}
+            >
               {isSubmitting ? "Creating..." : "Create Client"}
             </Button>
           )}
@@ -833,10 +1034,14 @@ function TeamSelect({ label, name, control, options, error }) {
       <Controller
         name={name}
         control={control}
-        render={({ field }) => (
+        render={({ field }) => {
+          const selected = (options || []).find((u) => String(u?._id) === String(field.value));
+          return (
           <Select value={field.value || undefined} onValueChange={(value) => field.onChange(value)}>
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select a user" />
+              <SelectValue placeholder="Select a user">
+                {selected?.name || (field.value ? "Selected user" : "")}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {(options || []).map((u) => (
@@ -846,7 +1051,8 @@ function TeamSelect({ label, name, control, options, error }) {
               ))}
             </SelectContent>
           </Select>
-        )}
+          );
+        }}
       />
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>

@@ -247,8 +247,93 @@ const updateInternalCalendarStage = async (req, res) => {
   }
 };
 
+const submitInternalCalendar = async (req, res) => {
+  try {
+    const { clientId } = req.params;
+    const { items } = req.body || {};
+
+    if (!clientId) return failure(res, "clientId is required", 400);
+    if (!Array.isArray(items)) {
+      return failure(res, "items must be an array", 400);
+    }
+
+    // Load the stored draft for access control and update the in-DB dates.
+    const draft = await ClientScheduleDraft.findOne({ clientId }).lean();
+    if (!draft) return failure(res, "Schedule draft not found", 404);
+
+    const allowed = await canAccessDraft(req, clientId, draft);
+    if (!allowed) return failure(res, "Forbidden", 403);
+
+    const draftDoc = await ClientScheduleDraft.findOne({ clientId });
+    if (!draftDoc) return failure(res, "Schedule draft not found", 404);
+
+    const receivedByContentId = new Map(
+      items.map((it) => [String(it?.contentId), it])
+    );
+
+    // Update draft items (dates only) based on what the UI submits.
+    draftDoc.items = (draftDoc.items || []).map((it) => {
+      const key = it?.contentId ? String(it.contentId) : "";
+      const incoming = receivedByContentId.get(key);
+      if (!incoming) return it;
+
+      // Posting date (Post stage) is locked; don't overwrite it from the UI payload.
+
+      const stageByName = new Map(
+        (incoming?.stages || []).map((s) => [String(s?.name), s])
+      );
+
+      it.stages = (it.stages || []).map((s) => {
+        if (String(s?.name) === "Post") return s;
+        const incomingStage = stageByName.get(String(s?.name));
+        if (!incomingStage) return s;
+        const d = normalizeUTCDate(incomingStage?.date);
+        if (d) s.date = d;
+        if (incomingStage?.status) s.status = incomingStage.status;
+        return s;
+      });
+
+      return it;
+    });
+
+    await draftDoc.save();
+
+    // Persist workflow stage dates into ContentItem documents as the final step.
+    const receivedContentIds = Array.from(receivedByContentId.keys()).filter(Boolean);
+
+    await Promise.all(
+      receivedContentIds.map(async (contentId) => {
+        const contentItem = await ContentItem.findById(contentId);
+        if (!contentItem) return;
+
+        const incoming = receivedByContentId.get(contentId);
+        const stageByName = new Map(
+          (incoming?.stages || []).map((s) => [String(s?.name), s])
+        );
+
+        contentItem.workflowStages = (contentItem.workflowStages || []).map((ws) => {
+          if (String(ws?.stageName) === "Post") return ws;
+          const incomingStage = stageByName.get(String(ws?.stageName));
+          if (!incomingStage) return ws;
+          const d = normalizeUTCDate(incomingStage?.date);
+          if (d) ws.dueDate = d;
+          if (incomingStage?.status) ws.status = incomingStage.status;
+          return ws;
+        });
+
+        await contentItem.save();
+      })
+    );
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    return failure(res, err.message || "Failed to submit internal calendar", 500);
+  }
+};
+
 module.exports = {
   getInternalCalendar,
   updateInternalCalendarStage,
+  submitInternalCalendar,
 };
 

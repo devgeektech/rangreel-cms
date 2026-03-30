@@ -7,6 +7,12 @@ const router = express.Router();
 
 router.post("/check-conflicts", auth, asyncHandler(calendarController.checkConflicts));
 router.post(
+  "/check-conflicts-new",
+  auth,
+  asyncHandler(calendarController.checkConflictsNew)
+);
+router.post("/generate-draft", auth, asyncHandler(calendarController.generateDraft));
+router.post(
   "/preview-stages-from-posting",
   auth,
   asyncHandler(calendarController.previewStagesFromPosting)
