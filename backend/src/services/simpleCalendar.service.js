@@ -69,6 +69,40 @@ const nextValidWorkdayUTC = (date, holidaySet) => {
   return d;
 };
 
+const mapLegacyFlatTeamToTyped = (team) => {
+  const flat = team || {};
+  const reels = {
+    strategist: flat.strategist,
+    videographer: flat.videographer,
+    videoEditor: flat.videoEditor,
+    manager: flat.manager,
+    postingExecutive: flat.postingExecutive,
+  };
+  const posts = {
+    strategist: flat.strategist,
+    graphicDesigner: flat.graphicDesigner,
+    manager: flat.manager,
+    postingExecutive: flat.postingExecutive,
+  };
+  const carousel = {
+    strategist: flat.strategist,
+    graphicDesigner: flat.graphicDesigner,
+    manager: flat.manager,
+    postingExecutive: flat.postingExecutive,
+  };
+  return { reels, posts, carousel };
+};
+
+const getTeamForContentType = (team, type) => {
+  const src = team || {};
+  const hasTypedTeam = Boolean(src.reels || src.posts || src.carousel);
+  const typed = hasTypedTeam ? src : mapLegacyFlatTeamToTyped(src);
+  if (type === "reel") return typed.reels || {};
+  if (type === "post") return typed.posts || {};
+  if (type === "carousel") return typed.carousel || {};
+  return {};
+};
+
 /**
  * Next valid workday for role/user at or after fromDate, respecting global capacity + weekends/holidays.
  * Prompt 51: bounded alignment loop; warn and return best workday instead of throwing.
@@ -130,17 +164,36 @@ async function generateClientReels(client) {
 
   const populatedClient = await Client.findById(clientId)
     .populate("package")
-    .populate("team.strategist")
-    .populate("team.videographer")
-    .populate("team.videoEditor")
-    .populate("team.postingExecutive")
-    .select("startDate endDate manager createdBy package team")
+    .populate("team.reels.strategist")
+    .populate("team.reels.videographer")
+    .populate("team.reels.videoEditor")
+    .populate("team.reels.manager")
+    .populate("team.reels.postingExecutive")
+    .select("startDate endDate manager createdBy package team activeContentCounts")
     .lean();
 
   if (!populatedClient?.startDate) return { insertedCount: 0, endDate: null };
 
-  const reelsCount = populatedClient?.package?.noOfReels || 0;
-  if (!Number.isFinite(reelsCount) || reelsCount <= 0) {
+  const plan = populatedClient.activeContentCounts;
+  const hasPlan =
+    plan &&
+    (Number.isFinite(plan.noOfReels) ||
+      Number.isFinite(plan.noOfStaticPosts) ||
+      Number.isFinite(plan.noOfCarousels));
+
+  const reelsCount = hasPlan
+    ? Number(plan.noOfReels) || 0
+    : populatedClient?.package?.noOfReels || 0;
+  const postsCount = hasPlan
+    ? Number(plan.noOfStaticPosts) || 0
+    : populatedClient?.package?.noOfPosts ??
+      populatedClient?.package?.noOfStaticPosts ??
+      0;
+  const carouselsCount = hasPlan
+    ? Number(plan.noOfCarousels) || 0
+    : populatedClient?.package?.noOfCarousels || 0;
+  const totalCount = reelsCount + postsCount + carouselsCount;
+  if (!Number.isFinite(totalCount) || totalCount <= 0) {
     const start = createUTCDate(populatedClient.startDate);
     if (start) {
       await Client.updateOne({ _id: populatedClient._id }, { $set: { endDate: start } });
@@ -152,21 +205,53 @@ async function generateClientReels(client) {
   if (!startSeedDate) return { insertedCount: 0, endDate: null };
   const baseStartDate = addDaysUTC(startSeedDate, 1);
 
-  const estimateEnd = addDaysUTC(baseStartDate, reelsCount * 40 + 180);
+  const estimateEnd = addDaysUTC(baseStartDate, totalCount * 40 + 180);
   const holidaySet = await buildHolidaySetUTC(baseStartDate, estimateEnd);
 
   const team = populatedClient.team || {};
-  const managerId = populatedClient.manager?._id || populatedClient.manager;
+  const reelTeam = getTeamForContentType(team, "reel");
+  const postTeam = getTeamForContentType(team, "post");
+  const carouselTeam = getTeamForContentType(team, "carousel");
+  const managerId =
+    reelTeam.manager?._id ||
+    reelTeam.manager ||
+    populatedClient.manager?._id ||
+    populatedClient.manager;
   const createdBy = populatedClient.createdBy || managerId;
 
-  const strategistId = team.strategist?._id || team.strategist;
-  const videographerId = team.videographer?._id || team.videographer;
-  const videoEditorId = team.videoEditor?._id || team.videoEditor;
-  const postingExecutiveId = team.postingExecutive?._id || team.postingExecutive;
+  const strategistId = reelTeam.strategist?._id || reelTeam.strategist;
+  const videographerId = reelTeam.videographer?._id || reelTeam.videographer;
+  const videoEditorId = reelTeam.videoEditor?._id || reelTeam.videoEditor;
+  const postingExecutiveId =
+    reelTeam.postingExecutive?._id || reelTeam.postingExecutive;
+  const postStrategistId = postTeam.strategist?._id || postTeam.strategist;
+  const postDesignerId =
+    postTeam.graphicDesigner?._id || postTeam.graphicDesigner;
+  const postManagerId =
+    postTeam.manager?._id || postTeam.manager;
+  const postPostingExecutiveId =
+    postTeam.postingExecutive?._id || postTeam.postingExecutive;
+  const carouselStrategistId =
+    carouselTeam.strategist?._id || carouselTeam.strategist;
+  const carouselDesignerId =
+    carouselTeam.graphicDesigner?._id || carouselTeam.graphicDesigner;
+  const carouselManagerId =
+    carouselTeam.manager?._id || carouselTeam.manager;
+  const carouselPostingExecutiveId =
+    carouselTeam.postingExecutive?._id || carouselTeam.postingExecutive;
 
   let insertedCount = 0;
   let lastPostingDate = null;
-  const usedPostingDayKeys = new Set();
+  const usedReelPostingDayKeys = new Set();
+  const usedPostPostingDayKeys = new Set();
+  const usedCarouselPostingDayKeys = new Set();
+  const keepLatestPosting = (d) => {
+    const cur = createUTCDate(d);
+    if (!cur) return;
+    if (!lastPostingDate || cur.getTime() > lastPostingDate.getTime()) {
+      lastPostingDate = cur;
+    }
+  };
 
   for (let i = 1; i <= reelsCount; i++) {
     const isUrgent = i <= 2;
@@ -268,7 +353,7 @@ async function generateClientReels(client) {
     // Prompt 56: avoid client-calendar clustering by spreading post days.
     // If a day is already used by another reel of the same client batch, push forward.
     let postingKey = ymdUTC(postDue);
-    while (postingKey && usedPostingDayKeys.has(postingKey)) {
+    while (postingKey && usedReelPostingDayKeys.has(postingKey)) {
       postDue = await scheduleStageDay(
         "postingExecutive",
         postingExecutiveId,
@@ -277,7 +362,7 @@ async function generateClientReels(client) {
       );
       postingKey = ymdUTC(postDue);
     }
-    if (postingKey) usedPostingDayKeys.add(postingKey);
+    if (postingKey) usedReelPostingDayKeys.add(postingKey);
 
     // Prompt 60: verify staggered parallel anchors vs execution outcomes.
     console.log({
@@ -288,7 +373,7 @@ async function generateClientReels(client) {
     });
 
     const postingDate = createUTCDate(postDue);
-    lastPostingDate = postingDate;
+    keepLatestPosting(postingDate);
 
     const workflowStages = [
       {
@@ -331,12 +416,194 @@ async function generateClientReels(client) {
     await ContentItem.create({
       client: populatedClient._id,
       contentType: "reel",
+      type: "reel",
       plan: isUrgent ? "urgent" : "normal",
       planType: isUrgent ? "urgent" : "normal",
       title: `Reel #${i}`,
       month: toMonthStringUTC(postingDate),
       clientPostingDate: createUTCDate(postingDate),
       workflowStages,
+      createdBy,
+    });
+    insertedCount += 1;
+  }
+
+  // Prompt 64: posts follow strategist -> design -> approval -> post (capacity-aware).
+  for (let i = 1; i <= postsCount; i++) {
+    const staggerOffset = (i - 1) * 2;
+    const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+    const itemStartDate = createUTCDate(nextValidWorkdayUTC(itemStartSeed, holidaySet));
+
+    const planDue = await scheduleStageDay(
+      "strategist",
+      postStrategistId,
+      itemStartDate,
+      holidaySet
+    );
+    const designDue = await scheduleStageDay(
+      "graphicDesigner",
+      postDesignerId,
+      addDaysUTC(planDue, 1),
+      holidaySet
+    );
+    // same day as design OR next day, depending on capacity/workday.
+    const approvalDue = await scheduleStageDay(
+      "manager",
+      postManagerId,
+      designDue,
+      holidaySet
+    );
+    let postDue = await scheduleStageDay(
+      "postingExecutive",
+      postPostingExecutiveId,
+      addDaysUTC(approvalDue, 1),
+      holidaySet
+    );
+
+    let postingKey = ymdUTC(postDue);
+    while (postingKey && usedPostPostingDayKeys.has(postingKey)) {
+      postDue = await scheduleStageDay(
+        "postingExecutive",
+        postPostingExecutiveId,
+        addDaysUTC(postDue, 1),
+        holidaySet
+      );
+      postingKey = ymdUTC(postDue);
+    }
+    if (postingKey) usedPostPostingDayKeys.add(postingKey);
+
+    const postingDate = createUTCDate(postDue);
+    keepLatestPosting(postingDate);
+
+    await ContentItem.create({
+      client: populatedClient._id,
+      contentType: "static_post",
+      type: "post",
+      plan: "normal",
+      planType: "normal",
+      title: `Post #${i}`,
+      month: toMonthStringUTC(postingDate),
+      clientPostingDate: postingDate,
+      workflowStages: [
+        {
+          stageName: "Plan",
+          role: "strategist",
+          assignedUser: postStrategistId || undefined,
+          dueDate: createUTCDate(planDue),
+          status: "assigned",
+        },
+        {
+          stageName: "Design",
+          role: "graphicDesigner",
+          assignedUser: postDesignerId || undefined,
+          dueDate: createUTCDate(designDue),
+          status: "assigned",
+        },
+        {
+          stageName: "Approval",
+          role: "manager",
+          assignedUser: postManagerId || undefined,
+          dueDate: createUTCDate(approvalDue),
+          status: "assigned",
+        },
+        {
+          stageName: "Post",
+          role: "postingExecutive",
+          assignedUser: postPostingExecutiveId || undefined,
+          dueDate: createUTCDate(postDue),
+          status: "assigned",
+        },
+      ],
+      createdBy,
+    });
+    insertedCount += 1;
+  }
+
+  // Prompt 64: carousel follows the same post workflow with carousel team assignees.
+  for (let i = 1; i <= carouselsCount; i++) {
+    const staggerOffset = (i - 1) * 2;
+    const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+    const itemStartDate = createUTCDate(nextValidWorkdayUTC(itemStartSeed, holidaySet));
+
+    const planDue = await scheduleStageDay(
+      "strategist",
+      carouselStrategistId,
+      itemStartDate,
+      holidaySet
+    );
+    const designDue = await scheduleStageDay(
+      "graphicDesigner",
+      carouselDesignerId,
+      addDaysUTC(planDue, 1),
+      holidaySet
+    );
+    const approvalDue = await scheduleStageDay(
+      "manager",
+      carouselManagerId,
+      designDue,
+      holidaySet
+    );
+    let postDue = await scheduleStageDay(
+      "postingExecutive",
+      carouselPostingExecutiveId,
+      addDaysUTC(approvalDue, 1),
+      holidaySet
+    );
+
+    let postingKey = ymdUTC(postDue);
+    while (postingKey && usedCarouselPostingDayKeys.has(postingKey)) {
+      postDue = await scheduleStageDay(
+        "postingExecutive",
+        carouselPostingExecutiveId,
+        addDaysUTC(postDue, 1),
+        holidaySet
+      );
+      postingKey = ymdUTC(postDue);
+    }
+    if (postingKey) usedCarouselPostingDayKeys.add(postingKey);
+
+    const postingDate = createUTCDate(postDue);
+    keepLatestPosting(postingDate);
+
+    await ContentItem.create({
+      client: populatedClient._id,
+      contentType: "carousel",
+      type: "carousel",
+      plan: "normal",
+      planType: "normal",
+      title: `Carousel #${i}`,
+      month: toMonthStringUTC(postingDate),
+      clientPostingDate: postingDate,
+      workflowStages: [
+        {
+          stageName: "Plan",
+          role: "strategist",
+          assignedUser: carouselStrategistId || undefined,
+          dueDate: createUTCDate(planDue),
+          status: "assigned",
+        },
+        {
+          stageName: "Design",
+          role: "graphicDesigner",
+          assignedUser: carouselDesignerId || undefined,
+          dueDate: createUTCDate(designDue),
+          status: "assigned",
+        },
+        {
+          stageName: "Approval",
+          role: "manager",
+          assignedUser: carouselManagerId || undefined,
+          dueDate: createUTCDate(approvalDue),
+          status: "assigned",
+        },
+        {
+          stageName: "Post",
+          role: "postingExecutive",
+          assignedUser: carouselPostingExecutiveId || undefined,
+          dueDate: createUTCDate(postDue),
+          status: "assigned",
+        },
+      ],
       createdBy,
     });
     insertedCount += 1;

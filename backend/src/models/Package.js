@@ -19,6 +19,12 @@ const packageSchema = new mongoose.Schema(
       min: 0,
       default: 0,
     },
+    noOfPosts: {
+      type: Number,
+      required: true,
+      min: 0,
+      default: 0,
+    },
     noOfCarousels: {
       type: Number,
       required: true,

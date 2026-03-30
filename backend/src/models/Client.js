@@ -1,5 +1,8 @@
 const mongoose = require("mongoose");
 
+/** User refs on team are optional so packages may include only reels, posts, or carousels. */
+const userRefOptional = { type: mongoose.Schema.Types.ObjectId, ref: "User", required: false };
+
 const clientSchema = new mongoose.Schema(
   {
     clientName: {
@@ -60,14 +63,35 @@ const clientSchema = new mongoose.Schema(
       ref: "Package",
       required: true,
     },
+    /**
+     * Effective schedule counts for this client (subset of package allowed at creation).
+     * When set, calendar generation uses these instead of package counts.
+     */
+    activeContentCounts: {
+      noOfReels: { type: Number, min: 0 },
+      noOfStaticPosts: { type: Number, min: 0 },
+      noOfCarousels: { type: Number, min: 0 },
+    },
     team: {
-      strategist: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-      videographer: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-      videoEditor: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-      graphicDesigner: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-      postingExecutive: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-      campaignManager: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
-      photographer: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      reels: {
+        strategist: userRefOptional,
+        videographer: userRefOptional,
+        videoEditor: userRefOptional,
+        manager: userRefOptional,
+        postingExecutive: userRefOptional,
+      },
+      posts: {
+        strategist: userRefOptional,
+        graphicDesigner: userRefOptional,
+        manager: userRefOptional,
+        postingExecutive: userRefOptional,
+      },
+      carousel: {
+        strategist: userRefOptional,
+        graphicDesigner: userRefOptional,
+        manager: userRefOptional,
+        postingExecutive: userRefOptional,
+      },
     },
     isActive: {
       type: Boolean,

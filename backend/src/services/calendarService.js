@@ -50,25 +50,48 @@ const normalizeUtcMidnight = (value) => {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 };
 
+const mapLegacyFlatTeamToReels = (team) => {
+  const flat = team || {};
+  return {
+    strategist: flat.strategist,
+    videographer: flat.videographer,
+    videoEditor: flat.videoEditor,
+    manager: flat.manager,
+    postingExecutive: flat.postingExecutive,
+  };
+};
+
+const getReelTeam = (client) => {
+  const team = client?.team || {};
+  if (team.reels) return team.reels;
+  return mapLegacyFlatTeamToReels(team);
+};
+
 const populateClientForCalendar = async (clientId) => {
   return Client.findById(clientId)
     .populate("package")
-    .populate("team.strategist")
-    .populate("team.videographer")
-    .populate("team.videoEditor")
-    .populate("team.graphicDesigner")
-    .populate("team.postingExecutive")
-    .populate("team.campaignManager")
-    .populate("team.photographer");
+    .populate("team.reels.strategist")
+    .populate("team.reels.videographer")
+    .populate("team.reels.videoEditor")
+    .populate("team.reels.manager")
+    .populate("team.reels.postingExecutive");
 };
 
 const getAssignedUserIdForRole = (client, role) => {
+  const reelTeam = getReelTeam(client);
   // Simplified role mapping (Prompt 17)
-  if (role === "strategist") return client.team?.strategist?._id || client.team?.strategist;
-  if (role === "videographer") return client.team?.videographer?._id || client.team?.videographer;
-  if (role === "videoEditor") return client.team?.videoEditor?._id || client.team?.videoEditor;
-  if (role === "manager") return client.manager?._id || client.manager;
-  if (role === "postingExecutive") return client.team?.postingExecutive?._id || client.team?.postingExecutive;
+  if (role === "strategist")
+    return reelTeam.strategist?._id || reelTeam.strategist;
+  if (role === "videographer")
+    return reelTeam.videographer?._id || reelTeam.videographer;
+  if (role === "videoEditor")
+    return reelTeam.videoEditor?._id || reelTeam.videoEditor;
+  if (role === "manager")
+    return (
+      reelTeam.manager?._id || reelTeam.manager || client.manager?._id || client.manager
+    );
+  if (role === "postingExecutive")
+    return reelTeam.postingExecutive?._id || reelTeam.postingExecutive;
   return undefined;
 };
 
@@ -132,6 +155,7 @@ const generateMonth = async (client, targetMonth) => {
     items.push({
       client: populatedClient._id,
       contentType: "reel",
+      type: "reel",
       plan: "normal",
       title: `Reel #${i + 1}`,
       month: targetMonth,
