@@ -16,7 +16,7 @@ import {
   Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -65,6 +65,81 @@ function roleIcon(role) {
   return Users2;
 }
 
+const BRIEF_TONE = {
+  luxury: "Luxury",
+  premium: "Premium",
+  bold: "Bold",
+  friendly: "Friendly",
+  minimal: "Minimal",
+  other: "Other",
+};
+const BRIEF_LANG = { english: "English", hindi: "Hindi", other: "Other" };
+const BRIEF_GOAL = { awareness: "Awareness", sales: "Sales", social_growth: "Social growth" };
+const CONTENT_PREF = {
+  education: "Educational",
+  promotional: "Promotional",
+  entertaining: "Entertaining",
+  trend_based: "Trend-based",
+};
+
+function hasMeaningfulClientBrief(b) {
+  if (!b || typeof b !== "object") return false;
+  const t = (x) => (typeof x === "string" ? x.trim() : "");
+  if (t(b.usp)) return true;
+  if (t(b.brandTone) || t(b.brandToneOther)) return true;
+  if (t(b.targetAudience)) return true;
+  if (t(b.keyProductsServices)) return true;
+  if (t(b.priorityFocus)) return true;
+  if (t(b.festivalsToTarget)) return true;
+  if (b.language && b.language !== "english") return true;
+  if (t(b.languageOther)) return true;
+  if (t(b.competitors)) return true;
+  if (t(b.accountsYouLikeReason)) return true;
+  if (t(b.mainGoal)) return true;
+  if (t(b.ageGroup)) return true;
+  if (t(b.focusLocations)) return true;
+  if (Array.isArray(b.contentPreference) && b.contentPreference.length > 0) return true;
+  const sa = b.shootAvailability;
+  if (sa && (sa.storeOrOfficeForShoot || sa.productsReadyForShoot || sa.modelsAvailable)) return true;
+  if (t(b.preferredShootDaysTiming) || t(b.bestPostingTime)) return true;
+  if (t(b.driveBrandKitUrl) || t(b.driveSocialCredentialsUrl) || t(b.driveOtherFilesUrl)) return true;
+  return false;
+}
+
+function formatFileSize(bytes) {
+  if (bytes == null || Number.isNaN(Number(bytes))) return "";
+  const n = Number(bytes);
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function downloadClientBriefFile(clientId, fileId, filename) {
+  const res = await apiFetch(
+    `/manager/clients/${encodeURIComponent(clientId)}/brief-assets/${encodeURIComponent(fileId)}/download`,
+    { method: "GET" }
+  );
+  if (!res.ok) {
+    let msg = "Download failed";
+    try {
+      const data = await res.json();
+      if (data?.error) msg = data.error;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || "download";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 function statusBadge(status) {
   const s = String(status || "").toLowerCase();
   if (s === "approved") return <Badge>Approved</Badge>;
@@ -94,6 +169,12 @@ export default function ManagerClientDetailPage() {
   const [googleReviewsSaving, setGoogleReviewsSaving] = useState(false);
   const [openReelDetail, setOpenReelDetail] = useState(false);
   const [selectedContentId, setSelectedContentId] = useState(null);
+  const [moreBriefFiles, setMoreBriefFiles] = useState({
+    brandKit: [],
+    socialCredentials: [],
+    other: [],
+  });
+  const [briefUploading, setBriefUploading] = useState(false);
 
   const loadClient = async () => {
     try {
@@ -104,6 +185,33 @@ export default function ManagerClientDetailPage() {
       toast.error(error.message || "Failed to load client");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const submitMoreBriefFiles = async () => {
+    if (!id) return;
+    const n =
+      moreBriefFiles.brandKit.length +
+      moreBriefFiles.socialCredentials.length +
+      moreBriefFiles.other.length;
+    if (n === 0) {
+      toast.error("Choose at least one file to upload");
+      return;
+    }
+    try {
+      setBriefUploading(true);
+      const formData = new FormData();
+      moreBriefFiles.brandKit.forEach((f) => formData.append("brandKit", f));
+      moreBriefFiles.socialCredentials.forEach((f) => formData.append("socialCredentials", f));
+      moreBriefFiles.other.forEach((f) => formData.append("other", f));
+      await api.uploadClientBriefAssets(id, formData);
+      toast.success("Files uploaded");
+      setMoreBriefFiles({ brandKit: [], socialCredentials: [], other: [] });
+      await loadClient();
+    } catch (error) {
+      toast.error(error.message || "Upload failed");
+    } finally {
+      setBriefUploading(false);
     }
   };
 
@@ -269,26 +377,342 @@ export default function ManagerClientDetailPage() {
       ) : client ? (
         <>
           <div className="grid gap-4 lg:grid-cols-3">
-            <Card>
+            <Card className="lg:col-span-2 xl:col-span-2">
               <CardHeader>
-                <CardTitle>Client Info</CardTitle>
+                <CardTitle>Client info</CardTitle>
+                <CardDescription>Onboarding details, positioning, and production preferences.</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                <Row label="Client" value={client.clientName} />
-                <Row label="Brand" value={client.brandName} />
-                <Row label="Industry" value={client.industry || "-"} />
-                <Row label="Business Type" value={client.businessType || "-"} />
-                <Row label="Start" value={client.startDate ? new Date(client.startDate).toLocaleDateString() : "-"} />
-                <Row label="End" value={client.endDate ? new Date(client.endDate).toLocaleDateString() : "-"} />
-                <div className="pt-2">
-                  <p className="text-xs font-medium text-muted-foreground">Social</p>
-                  <div className="mt-1 grid gap-1 text-muted-foreground">
+              <CardContent className="space-y-4 text-sm">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Row label="Name" value={client.clientName} />
+                  <Row label="Brand name" value={client.brandName} />
+                  <Row label="Contact number" value={client.contactNumber || "-"} />
+                  <Row label="Email" value={client.email || "-"} />
+                  <Row label="Website" value={client.website || "-"} />
+                  <Row label="Industry" value={client.industry || "-"} />
+                  <Row label="Business type" value={client.businessType || "-"} />
+                  <Row label="Start" value={client.startDate ? new Date(client.startDate).toLocaleDateString() : "-"} />
+                  <Row label="End" value={client.endDate ? new Date(client.endDate).toLocaleDateString() : "-"} />
+                </div>
+
+                {(client.socialCredentialsNotes || "").trim() ? (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground">Social credentials (notes)</p>
+                    <p className="mt-1 whitespace-pre-wrap text-foreground">{client.socialCredentialsNotes}</p>
+                  </div>
+                ) : null}
+
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">Social handles</p>
+                  <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-2">
                     <span>Instagram: {client.socialHandles?.instagram || "-"}</span>
                     <span>Facebook: {client.socialHandles?.facebook || "-"}</span>
                     <span>YouTube: {client.socialHandles?.youtube || "-"}</span>
                     <span>Google Business: {client.socialHandles?.googleBusiness || "-"}</span>
+                    <span>X / Twitter: {client.socialHandles?.twitter || "-"}</span>
+                    <span>LinkedIn: {client.socialHandles?.linkedin || "-"}</span>
+                    <span>TikTok: {client.socialHandles?.tiktok || "-"}</span>
+                    <span>Pinterest: {client.socialHandles?.pinterest || "-"}</span>
+                    <span className="sm:col-span-2">Other: {client.socialHandles?.other || "-"}</span>
                   </div>
                 </div>
+
+                <div className="space-y-3 border-t border-border pt-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Onboarding files</p>
+                  {[
+                    { title: "Brand kit / identity", files: client.clientBrief?.brandKitFiles },
+                    { title: "Social credentials", files: client.clientBrief?.socialCredentialsFiles },
+                    { title: "Other essential files", files: client.clientBrief?.otherBriefFiles },
+                  ].map(({ title, files }) =>
+                    Array.isArray(files) && files.length > 0 ? (
+                      <div key={title}>
+                        <p className="text-xs font-medium text-muted-foreground">{title}</p>
+                        <ul className="mt-1 space-y-1">
+                          {files.map((f) => (
+                            <li
+                              key={f._id}
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/20 px-2 py-1.5 text-xs"
+                            >
+                              <span className="min-w-0 break-all text-foreground">
+                                {f.originalName || f.storedName}
+                                {f.size ? (
+                                  <span className="ml-1 text-muted-foreground">({formatFileSize(f.size)})</span>
+                                ) : null}
+                              </span>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="shrink-0"
+                                onClick={() =>
+                                  downloadClientBriefFile(id, f._id, f.originalName || f.storedName).catch((e) =>
+                                    toast.error(e.message || "Download failed")
+                                  )
+                                }
+                              >
+                                Download
+                              </Button>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null
+                  )}
+                  {!client.clientBrief?.brandKitFiles?.length &&
+                  !client.clientBrief?.socialCredentialsFiles?.length &&
+                  !client.clientBrief?.otherBriefFiles?.length ? (
+                    <p className="text-xs text-muted-foreground">No files uploaded yet.</p>
+                  ) : null}
+
+                  <div className="rounded-lg border border-dashed border-border bg-muted/10 p-3">
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">Add more files</p>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Brand kit</Label>
+                        <Input
+                          type="file"
+                          multiple
+                          className="cursor-pointer text-xs file:mr-2"
+                          onChange={(e) => {
+                            const list = e.target.files;
+                            if (list?.length)
+                              setMoreBriefFiles((p) => ({
+                                ...p,
+                                brandKit: [...p.brandKit, ...Array.from(list)],
+                              }));
+                            e.target.value = "";
+                          }}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Social credentials</Label>
+                        <Input
+                          type="file"
+                          multiple
+                          className="cursor-pointer text-xs file:mr-2"
+                          onChange={(e) => {
+                            const list = e.target.files;
+                            if (list?.length)
+                              setMoreBriefFiles((p) => ({
+                                ...p,
+                                socialCredentials: [...p.socialCredentials, ...Array.from(list)],
+                              }));
+                            e.target.value = "";
+                          }}
+                        />
+                      </div>
+                      <div className="space-y-1 sm:col-span-2">
+                        <Label className="text-xs">Other</Label>
+                        <Input
+                          type="file"
+                          multiple
+                          className="cursor-pointer text-xs file:mr-2"
+                          onChange={(e) => {
+                            const list = e.target.files;
+                            if (list?.length)
+                              setMoreBriefFiles((p) => ({ ...p, other: [...p.other, ...Array.from(list)] }));
+                            e.target.value = "";
+                          }}
+                        />
+                      </div>
+                    </div>
+                    {(moreBriefFiles.brandKit.length > 0 ||
+                      moreBriefFiles.socialCredentials.length > 0 ||
+                      moreBriefFiles.other.length > 0) && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Queued:{" "}
+                        {[
+                          ...moreBriefFiles.brandKit,
+                          ...moreBriefFiles.socialCredentials,
+                          ...moreBriefFiles.other,
+                        ]
+                          .map((f) => f.name)
+                          .join(", ")}
+                      </p>
+                    )}
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="mt-3"
+                      disabled={briefUploading}
+                      onClick={submitMoreBriefFiles}
+                    >
+                      {briefUploading ? "Uploading…" : "Upload queued files"}
+                    </Button>
+                  </div>
+                </div>
+
+                {hasMeaningfulClientBrief(client.clientBrief) ? (
+                  <div className="space-y-3 border-t border-border pt-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Brand brief</p>
+                    {client.clientBrief.usp ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">USP</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{client.clientBrief.usp}</p>
+                      </div>
+                    ) : null}
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Row
+                        label="Brand tone"
+                        value={
+                          client.clientBrief.brandTone
+                            ? `${BRIEF_TONE[client.clientBrief.brandTone] || client.clientBrief.brandTone}${
+                                client.clientBrief.brandTone === "other" && client.clientBrief.brandToneOther
+                                  ? ` — ${client.clientBrief.brandToneOther}`
+                                  : ""
+                              }`
+                            : "-"
+                        }
+                      />
+                      <Row
+                        label="Language"
+                        value={
+                          client.clientBrief.language
+                            ? `${BRIEF_LANG[client.clientBrief.language] || client.clientBrief.language}${
+                                client.clientBrief.language === "other" && client.clientBrief.languageOther
+                                  ? ` — ${client.clientBrief.languageOther}`
+                                  : ""
+                              }`
+                            : "-"
+                        }
+                      />
+                      <Row
+                        label="Main goal"
+                        value={
+                          client.clientBrief.mainGoal
+                            ? BRIEF_GOAL[client.clientBrief.mainGoal] || client.clientBrief.mainGoal
+                            : "-"
+                        }
+                      />
+                      <Row label="Age group" value={client.clientBrief.ageGroup || "-"} />
+                    </div>
+                    {client.clientBrief.targetAudience ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Target audience</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{client.clientBrief.targetAudience}</p>
+                      </div>
+                    ) : null}
+                    {client.clientBrief.keyProductsServices ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Key products / services</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{client.clientBrief.keyProductsServices}</p>
+                      </div>
+                    ) : null}
+                    {client.clientBrief.priorityFocus ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Priority focus</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{client.clientBrief.priorityFocus}</p>
+                      </div>
+                    ) : null}
+                    {client.clientBrief.festivalsToTarget ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Festivals to target</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{client.clientBrief.festivalsToTarget}</p>
+                      </div>
+                    ) : null}
+                    {client.clientBrief.competitors ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Competitors</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{client.clientBrief.competitors}</p>
+                      </div>
+                    ) : null}
+                    {client.clientBrief.accountsYouLikeReason ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Accounts you like (with reason)</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{client.clientBrief.accountsYouLikeReason}</p>
+                      </div>
+                    ) : null}
+                    {client.clientBrief.focusLocations ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Focus locations</p>
+                        <p className="mt-0.5 whitespace-pre-wrap">{client.clientBrief.focusLocations}</p>
+                      </div>
+                    ) : null}
+                    {Array.isArray(client.clientBrief.contentPreference) &&
+                    client.clientBrief.contentPreference.length > 0 ? (
+                      <Row
+                        label="Content preference"
+                        value={client.clientBrief.contentPreference
+                          .map((k) => CONTENT_PREF[k] || k)
+                          .join(", ")}
+                      />
+                    ) : null}
+                    {client.clientBrief.shootAvailability ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Shoot readiness</p>
+                        <ul className="mt-1 list-inside list-disc text-muted-foreground">
+                          {client.clientBrief.shootAvailability.storeOrOfficeForShoot ? (
+                            <li>Store / office for shoot</li>
+                          ) : null}
+                          {client.clientBrief.shootAvailability.productsReadyForShoot ? (
+                            <li>Products ready for shoot</li>
+                          ) : null}
+                          {client.clientBrief.shootAvailability.modelsAvailable ? <li>Models available</li> : null}
+                          {!client.clientBrief.shootAvailability.storeOrOfficeForShoot &&
+                          !client.clientBrief.shootAvailability.productsReadyForShoot &&
+                          !client.clientBrief.shootAvailability.modelsAvailable ? (
+                            <li className="list-none text-muted-foreground/80">None selected</li>
+                          ) : null}
+                        </ul>
+                      </div>
+                    ) : null}
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Row
+                        label="Preferred shoot days / timing"
+                        value={client.clientBrief.preferredShootDaysTiming || "-"}
+                      />
+                      <Row label="Best posting time" value={client.clientBrief.bestPostingTime || "-"} />
+                    </div>
+                    {(client.clientBrief.driveBrandKitUrl ||
+                      client.clientBrief.driveSocialCredentialsUrl ||
+                      client.clientBrief.driveOtherFilesUrl) ? (
+                      <div>
+                        <p className="text-xs font-medium text-muted-foreground">Legacy external links</p>
+                        <div className="mt-1 grid gap-1 break-all text-xs">
+                          {client.clientBrief.driveBrandKitUrl ? (
+                            <span>
+                              Brand kit:{" "}
+                              <a
+                                className="text-primary underline underline-offset-2"
+                                href={client.clientBrief.driveBrandKitUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {client.clientBrief.driveBrandKitUrl}
+                              </a>
+                            </span>
+                          ) : null}
+                          {client.clientBrief.driveSocialCredentialsUrl ? (
+                            <span>
+                              Social credentials:{" "}
+                              <a
+                                className="text-primary underline underline-offset-2"
+                                href={client.clientBrief.driveSocialCredentialsUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {client.clientBrief.driveSocialCredentialsUrl}
+                              </a>
+                            </span>
+                          ) : null}
+                          {client.clientBrief.driveOtherFilesUrl ? (
+                            <span>
+                              Other:{" "}
+                              <a
+                                className="text-primary underline underline-offset-2"
+                                href={client.clientBrief.driveOtherFilesUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {client.clientBrief.driveOtherFilesUrl}
+                              </a>
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
 

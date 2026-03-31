@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { applyDragWithChainShift } from "@/lib/calendarDraftUtils";
+import { applyDragWithChainShiftBounded } from "@/lib/calendarDraftUtils";
 
 const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -143,7 +143,17 @@ function buildStageEntries(draft, editableStages) {
   return out;
 }
 
-function DayCell({ ymd, padKey, children, isToday, loadStyle, overloadDetail }) {
+function DayCell({
+  ymd,
+  padKey,
+  children,
+  isToday,
+  loadStyle,
+  overloadDetail,
+  warningSeverity = "none",
+  invalidDrop,
+  invalidReason,
+}) {
   const { setNodeRef, isOver } = useDroppable({
     id: ymd ? `day-${ymd}` : `pad-${padKey}`,
     disabled: !ymd,
@@ -154,7 +164,7 @@ function DayCell({ ymd, padKey, children, isToday, loadStyle, overloadDetail }) 
     return <div className="min-h-[88px] rounded-md border border-transparent bg-muted/20" />;
   }
 
-  const titleParts = [loadStyle?.title, overloadDetail].filter(Boolean);
+  const titleParts = [loadStyle?.title, overloadDetail, invalidReason].filter(Boolean);
   const combinedTitle = titleParts.join(" — ");
 
   return (
@@ -163,7 +173,11 @@ function DayCell({ ymd, padKey, children, isToday, loadStyle, overloadDetail }) 
       className={cn(
         "flex min-h-[88px] flex-col rounded-md border p-1 transition-colors",
         loadStyle?.className,
-        overloadDetail && "border-red-600/70 bg-red-500/15 ring-1 ring-red-500/40",
+        overloadDetail &&
+          (warningSeverity === "overloaded"
+            ? "border-red-600/70 bg-red-500/15 ring-1 ring-red-500/40"
+            : "border-blue-600/70 bg-blue-500/15 ring-1 ring-blue-500/40"),
+        invalidDrop && "border-red-600/80 bg-red-500/20 ring-2 ring-red-500/60",
         isOver && "ring-2 ring-primary ring-offset-1"
       )}
       title={combinedTitle || undefined}
@@ -201,6 +215,9 @@ function StageChip({ entry, filterType, saving, canEdit, warnings, onOpenDetails
   }
 
   const hasWarnings = Array.isArray(warnings) && warnings.length > 0;
+  const hasOverloadedWarning = hasWarnings
+    ? warnings.some((w) => Number(w?.effectiveCount) > Number(w?.capacity))
+    : false;
   const warningTitle = hasWarnings
     ? warnings.map((w) => w.message || `${w.role}: ${w.effectiveCount}/${w.capacity}`).join(" · ")
     : undefined;
@@ -226,7 +243,10 @@ function StageChip({ entry, filterType, saving, canEdit, warnings, onOpenDetails
       className={cn(
         "flex items-start gap-0.5 rounded border px-1 py-0.5 text-[10px] leading-tight",
         meta.chip,
-        hasWarnings && "border-red-600/70 bg-red-500/10 ring-1 ring-red-500/20",
+        hasWarnings &&
+          (hasOverloadedWarning
+            ? "border-red-600/70 bg-red-500/10 ring-1 ring-red-500/20"
+            : "border-blue-600/70 bg-blue-500/10 ring-1 ring-blue-500/20"),
         (entry.locked || saving) && "opacity-70",
         isDragging && "opacity-40"
       )}
@@ -257,7 +277,15 @@ function StageChip({ entry, filterType, saving, canEdit, warnings, onOpenDetails
           {(entry.contentLabel || meta.label) + " · "}{entry.stageName} · {entry.role}
         </div>
       </button>
-      {hasWarnings ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-red-600" aria-hidden /> : null}
+      {hasWarnings ? (
+        <AlertTriangle
+          className={cn(
+            "mt-0.5 h-3 w-3 shrink-0",
+            hasOverloadedWarning ? "text-red-600" : "text-blue-600"
+          )}
+          aria-hidden
+        />
+      ) : null}
     </div>
   );
 }
@@ -435,9 +463,14 @@ export default function ContentCalendarDnd({
       const ratio = capacity > 0 ? tasks / capacity : 0;
       const title =
         capacity > 0 ? `${tasks}/${capacity} task slots (by role capacity)` : "No capacity data";
-      if (ratio >= 1)
+      if (ratio > 1)
         return {
-          className: "border-red-500/30 bg-red-500/10",
+          className: "border-red-500/35 bg-red-500/12",
+          title: `${title} — overloaded`,
+        };
+      if (ratio === 1)
+        return {
+          className: "border-orange-500/35 bg-orange-500/12",
           title,
         };
       if (ratio >= 0.6)
@@ -465,6 +498,9 @@ export default function ContentCalendarDnd({
   );
 
   const [activeDragId, setActiveDragId] = useState(null);
+  const [invalidDropYmd, setInvalidDropYmd] = useState("");
+  const [dropError, setDropError] = useState("");
+  const [invalidDropReason, setInvalidDropReason] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsEntry, setDetailsEntry] = useState(null);
   const activeEntry = useMemo(
@@ -491,8 +527,27 @@ export default function ContentCalendarDnd({
     setDetailsOpen(true);
   }, []);
 
+  const postingDateByContentId = useMemo(() => {
+    const map = new Map();
+    for (const item of schedule?.items || []) {
+      const key = String(item?.contentId || "");
+      if (!key) continue;
+      map.set(key, String(item?.postingDate || "").slice(0, 10));
+    }
+    return map;
+  }, [schedule]);
+
+  const isAfterYmd = useCallback((a, b) => {
+    const da = Date.parse(`${a}T00:00:00.000Z`);
+    const db = Date.parse(`${b}T00:00:00.000Z`);
+    if (!Number.isFinite(da) || !Number.isFinite(db)) return false;
+    return da > db;
+  }, []);
+
   const handleDragEnd = async (event) => {
     setActiveDragId(null);
+    setInvalidDropYmd("");
+    setInvalidDropReason("");
     const { active, over } = event;
     if (!over) return;
     if (!canEdit) return;
@@ -507,7 +562,17 @@ export default function ContentCalendarDnd({
     if (newYmd === data.dateYmd) return;
 
     const prev = schedule;
-    const optimistic = applyDragWithChainShift(prev, data.contentId, data.stageName, newYmd);
+    const moved = applyDragWithChainShiftBounded(prev, data.contentId, data.stageName, newYmd);
+    if (moved.blocked) {
+      setDropError(moved.reason || "Invalid drop: stage cannot be after posting date");
+      return;
+    }
+    if (moved.clamped && moved.reason) {
+      setDropError(moved.reason);
+    } else {
+      setDropError("");
+    }
+    const optimistic = moved.draft;
 
     if (controlledDraft) {
       onCalendarStateChange?.(optimistic);
@@ -525,11 +590,49 @@ export default function ContentCalendarDnd({
         newDateYmd: newYmd,
         previousYmd: data.dateYmd,
       });
-    } catch {
+    } catch (err) {
       if (controlledDraft) onCalendarStateChange?.(prev);
       else setLocalDraft(prev);
       onCalendarStateChange?.(prev);
+      setDropError(err?.message || "Failed to move stage");
     }
+  };
+
+  const handleDragStart = ({ active }) => {
+    setActiveDragId(String(active.id));
+    setDropError("");
+    setInvalidDropYmd("");
+    setInvalidDropReason("");
+  };
+
+  const handleDragOver = ({ active, over }) => {
+    if (!over) {
+      setInvalidDropYmd("");
+      setInvalidDropReason("");
+      return;
+    }
+    const overId = String(over.id || "");
+    if (!overId.startsWith("day-")) {
+      setInvalidDropYmd("");
+      setInvalidDropReason("");
+      return;
+    }
+    const ymd = overId.slice(4);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+      setInvalidDropYmd("");
+      setInvalidDropReason("");
+      return;
+    }
+    const data = active?.data?.current;
+    const contentId = String(data?.contentId || "");
+    const postingYmd = postingDateByContentId.get(contentId);
+    if (postingYmd && isAfterYmd(ymd, postingYmd)) {
+      setInvalidDropYmd(ymd);
+      setInvalidDropReason(`Invalid drop: selected date is after posting date (${postingYmd})`);
+      return;
+    }
+    setInvalidDropYmd("");
+    setInvalidDropReason("");
   };
 
   return (
@@ -584,12 +687,16 @@ export default function ContentCalendarDnd({
           <span className="mr-1 h-2 w-2 rounded-full bg-amber-500" aria-hidden />
           Medium
         </Badge>
-        <Badge variant="outline" className="border-red-500/40 font-normal">
-          <span className="mr-1 h-2 w-2 rounded-full bg-red-500" aria-hidden />
+        <Badge variant="outline" className="border-orange-500/40 font-normal">
+          <span className="mr-1 h-2 w-2 rounded-full bg-orange-500" aria-hidden />
           Busy
         </Badge>
         <Badge variant="outline" className="border-red-600/60 font-normal">
-          <span className="mr-1 h-2 w-2 rounded-full bg-red-600" aria-hidden />
+          <span className="mr-1 h-2 w-2 rounded-full bg-red-500" aria-hidden />
+          Overloaded
+        </Badge>
+        <Badge variant="outline" className="border-blue-600/60 font-normal">
+          <span className="mr-1 h-2 w-2 rounded-full bg-blue-600" aria-hidden />
           Capacity warning
         </Badge>
       </div>
@@ -597,8 +704,13 @@ export default function ContentCalendarDnd({
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
-        onDragStart={({ active }) => setActiveDragId(String(active.id))}
-        onDragCancel={() => setActiveDragId(null)}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragCancel={() => {
+          setActiveDragId(null);
+          setInvalidDropYmd("");
+          setInvalidDropReason("");
+        }}
         onDragEnd={handleDragEnd}
       >
         <div className="overflow-x-auto">
@@ -612,6 +724,9 @@ export default function ContentCalendarDnd({
               const loadStyle = ymd ? dayLoadStyle(ymd) : null;
               const list = ymd ? entriesByDay.get(ymd) || [] : [];
               const dayWarnings = ymd && conflictByDay[ymd] ? conflictByDay[ymd] : [];
+              const overloadedByWarnings = dayWarnings.some(
+                (w) => Number(w?.effectiveCount) > Number(w?.capacity)
+              );
               const overloadDetail =
                 dayWarnings.length > 0
                   ? dayWarnings.map((w) => w.message || `${w.role}: ${w.effectiveCount}/${w.capacity}`).join(" · ")
@@ -624,6 +739,9 @@ export default function ContentCalendarDnd({
                   isToday={ymd === todayYmd}
                   loadStyle={loadStyle}
                   overloadDetail={overloadDetail}
+                  warningSeverity={overloadedByWarnings ? "overloaded" : dayWarnings.length ? "warning" : "none"}
+                  invalidDrop={ymd === invalidDropYmd}
+                  invalidReason={ymd === invalidDropYmd ? invalidDropReason : ""}
                 >
                   {list.map((entry) => (
                     <StageChip
@@ -647,6 +765,7 @@ export default function ContentCalendarDnd({
         </div>
         <DragOverlay dropAnimation={null}>{activeEntry ? <StageChipOverlay entry={activeEntry} /> : null}</DragOverlay>
       </DndContext>
+      {dropError ? <p className="text-sm text-destructive">{dropError}</p> : null}
 
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DialogContent>
