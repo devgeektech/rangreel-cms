@@ -55,6 +55,11 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
+  if (err?.name === "MulterError") {
+    const msg =
+      err.code === "LIMIT_FILE_SIZE" ? "File exceeds size limit (max 50MB per file)" : err.message;
+    return res.status(400).json({ success: false, error: msg });
+  }
   console.error(err.stack);
   res.status(500).json({ success: false, error: err.message });
 });

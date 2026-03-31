@@ -1,5 +1,9 @@
+const fs = require("fs");
+const path = require("path");
+const mongoose = require("mongoose");
 const Client = require("../models/Client");
 const Package = require("../models/Package");
+const { uploadsRoot, BRIEF_UPLOAD_FIELDS } = require("../multer/clientBriefUpload");
 const { generateClientReels } = require("../services/simpleCalendar.service");
 const { persistCalendarDraft } = require("../services/calendarDraftPersistence.service");
 const ContentItem = require("../models/ContentItem");
@@ -68,6 +72,29 @@ const dedupeByStageId = (stages) => {
   }
   return out;
 };
+
+/** Client JSON must not set uploaded file metadata; use POST …/brief-assets. */
+const stripNonPatchableBriefKeys = (raw) => {
+  if (!raw || typeof raw !== "object") return {};
+  const {
+    brandKitFiles: _bk,
+    socialCredentialsFiles: _sc,
+    otherBriefFiles: _ob,
+    ...rest
+  } = raw;
+  return rest;
+};
+
+function findBriefFileRecord(client, fileId) {
+  if (!mongoose.Types.ObjectId.isValid(fileId)) return null;
+  for (const { arrayKey, slug } of BRIEF_UPLOAD_FIELDS) {
+    const arr = client.clientBrief?.[arrayKey];
+    if (!Array.isArray(arr) || typeof arr.id !== "function") continue;
+    const doc = arr.id(fileId);
+    if (doc) return { doc, slug, arrayKey };
+  }
+  return null;
+}
 
 const populateClientQuery = (query) => {
   return query
@@ -187,9 +214,14 @@ const createClient = async (req, res) => {
     const {
       clientName,
       brandName,
+      contactNumber,
+      email,
+      website,
       industry,
       businessType,
       socialHandles,
+      socialCredentialsNotes,
+      clientBrief,
       startDate,
       status,
       package: packageId,
@@ -238,9 +270,17 @@ const createClient = async (req, res) => {
     const client = await Client.create({
       clientName,
       brandName,
+      contactNumber: contactNumber ?? "",
+      email: email ?? "",
+      website: website ?? "",
       industry,
       businessType,
-      socialHandles,
+      socialHandles: socialHandles || {},
+      socialCredentialsNotes: socialCredentialsNotes ?? "",
+      clientBrief:
+        clientBrief && typeof clientBrief === "object"
+          ? stripNonPatchableBriefKeys(clientBrief)
+          : {},
       startDate,
       // endDate is computed by calendar generation.
       status,
@@ -342,9 +382,13 @@ const updateClient = async (req, res) => {
     const allowedFields = [
       "clientName",
       "brandName",
+      "contactNumber",
+      "email",
+      "website",
       "industry",
       "businessType",
       "socialHandles",
+      "socialCredentialsNotes",
       "startDate",
       "status",
     ];
@@ -355,12 +399,106 @@ const updateClient = async (req, res) => {
       }
     });
 
+    if (rest.clientBrief && typeof rest.clientBrief === "object") {
+      const cleaned = stripNonPatchableBriefKeys(rest.clientBrief);
+      client.clientBrief = {
+        ...(client.clientBrief?.toObject ? client.clientBrief.toObject() : client.clientBrief),
+        ...cleaned,
+      };
+      client.markModified("clientBrief");
+    }
+
     await client.save();
 
     const populated = await populateClientQuery(Client.findById(client._id));
     return success(res, populated);
   } catch (err) {
     return failure(res, err.message || "Failed to update client", 500);
+  }
+};
+
+const appendClientBriefAssets = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const client = await Client.findOne({ _id: id, manager: req.user.id });
+    if (!client) {
+      return failure(res, "Client not found", 404);
+    }
+
+    const uploaded = req.files || {};
+    let added = 0;
+    for (const { arrayKey } of BRIEF_UPLOAD_FIELDS) {
+      if (!Array.isArray(client.clientBrief[arrayKey])) {
+        client.clientBrief[arrayKey] = [];
+      }
+    }
+    for (const { field, arrayKey } of BRIEF_UPLOAD_FIELDS) {
+      const list = uploaded[field];
+      if (!list?.length) continue;
+      for (const f of list) {
+        client.clientBrief[arrayKey].push({
+          storedName: f.filename,
+          originalName: f.originalname,
+          mimeType: f.mimetype,
+          size: f.size,
+          uploadedAt: new Date(),
+        });
+        added += 1;
+      }
+    }
+
+    if (added === 0) {
+      return failure(res, "No files received. Use fields brandKit, socialCredentials, or other.", 400);
+    }
+
+    client.markModified("clientBrief");
+    await client.save();
+
+    const populated = await populateClientQuery(Client.findById(client._id));
+    return success(res, populated);
+  } catch (err) {
+    return failure(res, err.message || "Failed to save uploads", 500);
+  }
+};
+
+const downloadClientBriefAsset = async (req, res) => {
+  try {
+    const { id, fileId } = req.params;
+    const client = await Client.findOne({ _id: id, manager: req.user.id });
+    if (!client) {
+      return failure(res, "Client not found", 404);
+    }
+
+    const found = findBriefFileRecord(client, fileId);
+    if (!found) {
+      return failure(res, "File not found", 404);
+    }
+
+    const { doc, slug } = found;
+    const abs = path.join(
+      uploadsRoot,
+      "clients",
+      String(id),
+      "brief",
+      slug,
+      doc.storedName
+    );
+
+    if (!fs.existsSync(abs)) {
+      return failure(res, "File missing on server", 404);
+    }
+
+    const asciiName = String(doc.originalName || doc.storedName).replace(/[^\x20-\x7E]/g, "_");
+    res.setHeader("Content-Type", doc.mimeType || "application/octet-stream");
+    res.setHeader("Content-Disposition", `attachment; filename="${asciiName}"`);
+
+    const stream = fs.createReadStream(abs);
+    stream.on("error", () => {
+      if (!res.headersSent) failure(res, "Failed to read file", 500);
+    });
+    stream.pipe(res);
+  } catch (err) {
+    return failure(res, err.message || "Failed to download file", 500);
   }
 };
 
@@ -404,6 +542,8 @@ module.exports = {
   getClients,
   getClient,
   updateClient,
+  appendClientBriefAssets,
+  downloadClientBriefAsset,
   updateClientGoogleReviews,
   getClientCalendar: async (req, res) => {
     try {

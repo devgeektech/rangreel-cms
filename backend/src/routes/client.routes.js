@@ -1,6 +1,8 @@
 const express = require("express");
 const auth = require("../middleware/auth");
 const roleGuard = require("../middleware/roleGuard");
+const asyncHandler = require("../middleware/asyncHandler");
+const { uploadBriefFields } = require("../multer/clientBriefUpload");
 const clientController = require("../controllers/client.controller");
 
 const router = express.Router();
@@ -12,8 +14,22 @@ router.get("/", clientController.getClients);
 router.get("/global-calendar", clientController.getManagerGlobalCalendar);
 router.get("/:id/client-calendar", clientController.getClientCalendar);
 router.get("/:id/team-calendar", clientController.getTeamCalendar);
-router.get("/:id", clientController.getClient);
+router.post(
+  "/:id/brief-assets",
+  (req, res, next) => {
+    uploadBriefFields(req, res, (err) => {
+      if (err) return next(err);
+      next();
+    });
+  },
+  asyncHandler(clientController.appendClientBriefAssets)
+);
+router.get(
+  "/:id/brief-assets/:fileId/download",
+  asyncHandler(clientController.downloadClientBriefAsset)
+);
 router.patch("/:id/google-reviews", clientController.updateClientGoogleReviews);
+router.get("/:id", clientController.getClient);
 router.patch("/:id", clientController.updateClient);
 
 module.exports = router;
