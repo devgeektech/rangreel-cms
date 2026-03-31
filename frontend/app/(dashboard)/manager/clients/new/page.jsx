@@ -28,8 +28,56 @@ import { z } from "zod";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import ContentCalendarDnd from "@/components/calendar/ContentCalendarDnd";
+import { cn } from "@/lib/utils";
 
 const stepLabels = ["Basic info", "Package & schedule", "Team"];
+
+const optionalStr = z.string().optional().default("");
+
+const clientBriefShape = z.object({
+  usp: optionalStr,
+  brandTone: z
+    .enum(["luxury", "premium", "bold", "friendly", "minimal", "other", ""])
+    .optional()
+    .default(""),
+  brandToneOther: optionalStr,
+  targetAudience: optionalStr,
+  keyProductsServices: optionalStr,
+  priorityFocus: optionalStr,
+  festivalsToTarget: optionalStr,
+  language: z.enum(["english", "hindi", "other", ""]).optional().default("english"),
+  languageOther: optionalStr,
+  competitors: optionalStr,
+  accountsYouLikeReason: optionalStr,
+  mainGoal: z.enum(["awareness", "sales", "social_growth", ""]).optional().default(""),
+  ageGroup: optionalStr,
+  focusLocations: optionalStr,
+  contentPreference: z
+    .array(z.enum(["education", "promotional", "entertaining", "trend_based"]))
+    .optional()
+    .default([]),
+  shootAvailability: z
+    .object({
+      storeOrOfficeForShoot: z.boolean().optional().default(false),
+      productsReadyForShoot: z.boolean().optional().default(false),
+      modelsAvailable: z.boolean().optional().default(false),
+    })
+    .optional(),
+  preferredShootDaysTiming: optionalStr,
+  bestPostingTime: optionalStr,
+});
+
+const socialHandlesShape = z.object({
+  instagram: optionalStr,
+  facebook: optionalStr,
+  youtube: optionalStr,
+  googleBusiness: optionalStr,
+  twitter: optionalStr,
+  linkedin: optionalStr,
+  tiktok: optionalStr,
+  pinterest: optionalStr,
+  other: optionalStr,
+});
 
 const optionalTeamStr = z.string().optional().default("");
 
@@ -58,6 +106,12 @@ function buildClientSchema(packagesList) {
     .object({
       clientName: z.string().trim().min(1, "Client Name is required"),
       brandName: z.string().trim().min(1, "Brand Name is required"),
+      contactNumber: optionalStr,
+      email: optionalStr,
+      website: optionalStr,
+      socialHandles: socialHandlesShape,
+      socialCredentialsNotes: optionalStr,
+      clientBrief: clientBriefShape,
       industry: z.string().optional().default(""),
       packageId: z.string().min(1, "Package selection is required"),
       startDate: z.string().min(1, "Start date is required"),
@@ -166,9 +220,50 @@ function buildClientSchema(packagesList) {
     });
 }
 
+const defaultClientBrief = {
+  usp: "",
+  brandTone: "",
+  brandToneOther: "",
+  targetAudience: "",
+  keyProductsServices: "",
+  priorityFocus: "",
+  festivalsToTarget: "",
+  language: "english",
+  languageOther: "",
+  competitors: "",
+  accountsYouLikeReason: "",
+  mainGoal: "",
+  ageGroup: "",
+  focusLocations: "",
+  contentPreference: [],
+  shootAvailability: {
+    storeOrOfficeForShoot: false,
+    productsReadyForShoot: false,
+    modelsAvailable: false,
+  },
+  preferredShootDaysTiming: "",
+  bestPostingTime: "",
+};
+
 const defaultValues = {
   clientName: "",
   brandName: "",
+  contactNumber: "",
+  email: "",
+  website: "",
+  socialHandles: {
+    instagram: "",
+    facebook: "",
+    youtube: "",
+    googleBusiness: "",
+    twitter: "",
+    linkedin: "",
+    tiktok: "",
+    pinterest: "",
+    other: "",
+  },
+  socialCredentialsNotes: "",
+  clientBrief: { ...defaultClientBrief },
   industry: "",
   packageId: "",
   startDate: "",
@@ -230,6 +325,34 @@ function BoolBadge({ value }) {
   );
 }
 
+const emptyBriefFiles = { brandKit: [], socialCredentials: [], other: [] };
+
+function BriefFilePicker({ label, hint, files, onFilesAdded }) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-sm font-medium">{label}</Label>
+      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      <Input
+        type="file"
+        multiple
+        className="cursor-pointer text-sm file:mr-2"
+        onChange={(e) => {
+          const list = e.target.files;
+          if (list?.length) onFilesAdded(Array.from(list));
+          e.target.value = "";
+        }}
+      />
+      {files.length > 0 ? (
+        <ul className="mt-1 max-h-28 overflow-y-auto rounded-md border border-border bg-muted/30 px-2 py-1 text-xs text-muted-foreground">
+          {files.map((f, i) => (
+            <li key={`${f.name}-${f.size}-${i}`}>{f.name}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 export default function NewClientPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
@@ -242,6 +365,7 @@ export default function NewClientPage() {
   const [customizingSchedule, setCustomizingSchedule] = useState(false);
   const [scheduleSubmitted, setScheduleSubmitted] = useState(false);
   const [calendarDraftError, setCalendarDraftError] = useState("");
+  const [briefFiles, setBriefFiles] = useState(emptyBriefFiles);
   const packagesRef = useRef(packages);
   packagesRef.current = packages;
 
@@ -500,16 +624,35 @@ export default function NewClientPage() {
     if (step !== 2) return;
 
     try {
+      const brief = values.clientBrief || {};
       const payload = {
         clientName: values.clientName.trim(),
         brandName: values.brandName.trim(),
+        contactNumber: (values.contactNumber || "").trim(),
+        email: (values.email || "").trim(),
+        website: (values.website || "").trim(),
         industry: values.industry || "",
         businessType: "",
+        socialCredentialsNotes: (values.socialCredentialsNotes || "").trim(),
         socialHandles: {
-          instagram: "",
-          facebook: "",
-          youtube: "",
-          googleBusiness: "",
+          instagram: (values.socialHandles?.instagram || "").trim(),
+          facebook: (values.socialHandles?.facebook || "").trim(),
+          youtube: (values.socialHandles?.youtube || "").trim(),
+          googleBusiness: (values.socialHandles?.googleBusiness || "").trim(),
+          twitter: (values.socialHandles?.twitter || "").trim(),
+          linkedin: (values.socialHandles?.linkedin || "").trim(),
+          tiktok: (values.socialHandles?.tiktok || "").trim(),
+          pinterest: (values.socialHandles?.pinterest || "").trim(),
+          other: (values.socialHandles?.other || "").trim(),
+        },
+        clientBrief: {
+          ...defaultClientBrief,
+          ...brief,
+          contentPreference: Array.isArray(brief.contentPreference) ? brief.contentPreference : [],
+          shootAvailability: {
+            ...defaultClientBrief.shootAvailability,
+            ...(brief.shootAvailability || {}),
+          },
         },
         startDate: toIsoUtcMidnight(values.startDate),
         status: "active",
@@ -544,8 +687,26 @@ export default function NewClientPage() {
       };
 
       const res = await api.createClient(payload);
+      const clientId = res?.data?._id;
+      const fileCount =
+        briefFiles.brandKit.length + briefFiles.socialCredentials.length + briefFiles.other.length;
+      if (clientId && fileCount > 0) {
+        try {
+          const formData = new FormData();
+          briefFiles.brandKit.forEach((f) => formData.append("brandKit", f));
+          briefFiles.socialCredentials.forEach((f) => formData.append("socialCredentials", f));
+          briefFiles.other.forEach((f) => formData.append("other", f));
+          await api.uploadClientBriefAssets(clientId, formData);
+        } catch (uploadErr) {
+          toast.error(
+            uploadErr.message || "Client was created, but file upload failed. Add files from the client page."
+          );
+          router.push(`/manager/clients/${clientId}`);
+          return;
+        }
+      }
       toast.success("Client created");
-      router.push(`/manager/clients/${res?.data?._id}`);
+      if (clientId) router.push(`/manager/clients/${clientId}`);
     } catch (error) {
       toast.error(error.message || "Failed to create client");
     }
@@ -580,34 +741,364 @@ export default function NewClientPage() {
 
       <form className="space-y-5" onSubmit={handleSubmit(onSubmit)}>
         {step === 0 ? (
-          <Card>
-            <CardHeader>
-              <CardTitle>Basic info</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 sm:max-w-xl">
-              <Field label="Client name *" error={errors.clientName?.message}>
-                <Controller
-                  name="clientName"
-                  control={control}
-                  render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
-                />
-              </Field>
-              <Field label="Brand name *" error={errors.brandName?.message}>
-                <Controller
-                  name="brandName"
-                  control={control}
-                  render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
-                />
-              </Field>
-              <Field label="Industry" error={errors.industry?.message}>
-                <Controller
-                  name="industry"
-                  control={control}
-                  render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} placeholder="Optional" />}
-                />
-              </Field>
-            </CardContent>
-          </Card>
+          <div className="space-y-5">
+            <Card>
+              <CardHeader>
+                <CardTitle>Client info</CardTitle>
+                <CardDescription>
+                  Capture brand, contact, positioning, and production preferences. Upload brand kit, credentials, and
+                  other files directly — they are stored securely for your team.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 md:grid-cols-2">
+                <Field label="Name *" error={errors.clientName?.message}>
+                  <Controller
+                    name="clientName"
+                    control={control}
+                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                  />
+                </Field>
+                <Field label="Brand name *" error={errors.brandName?.message}>
+                  <Controller
+                    name="brandName"
+                    control={control}
+                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                  />
+                </Field>
+                <Field label="Contact number" error={errors.contactNumber?.message}>
+                  <Controller
+                    name="contactNumber"
+                    control={control}
+                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                  />
+                </Field>
+                <Field label="Email" error={errors.email?.message}>
+                  <Controller
+                    name="email"
+                    control={control}
+                    render={({ field }) => <Input type="email" value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                  />
+                </Field>
+                <Field label="Website" error={errors.website?.message}>
+                  <Controller
+                    name="website"
+                    control={control}
+                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} placeholder="https://..." />}
+                  />
+                </Field>
+                <Field label="Industry" error={errors.industry?.message}>
+                  <Controller
+                    name="industry"
+                    control={control}
+                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} placeholder="Optional" />}
+                  />
+                </Field>
+
+                <div className="md:col-span-2">
+                  <Label className="mb-2 block">All social media credentials (free text)</Label>
+                  <Controller
+                    name="socialCredentialsNotes"
+                    control={control}
+                    render={({ field }) => (
+                      <TextArea {...field} placeholder="Handles, passwords shared securely, agency access notes…" />
+                    )}
+                  />
+                </div>
+
+                <div className="md:col-span-2 border-t border-border pt-4">
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">Social handles (optional rows)</p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {[
+                      ["socialHandles.instagram", "Instagram"],
+                      ["socialHandles.facebook", "Facebook"],
+                      ["socialHandles.youtube", "YouTube"],
+                      ["socialHandles.googleBusiness", "Google Business"],
+                      ["socialHandles.twitter", "X / Twitter"],
+                      ["socialHandles.linkedin", "LinkedIn"],
+                      ["socialHandles.tiktok", "TikTok"],
+                      ["socialHandles.pinterest", "Pinterest"],
+                      ["socialHandles.other", "Other"],
+                    ].map(([name, label]) => (
+                      <Field key={name} label={label}>
+                        <Controller
+                          name={name}
+                          control={control}
+                          render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                        />
+                      </Field>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="md:col-span-2 border-t border-border pt-4">
+                  <Label className="mb-1">USP — what makes you different?</Label>
+                  <Controller
+                    name="clientBrief.usp"
+                    control={control}
+                    render={({ field }) => <TextArea {...field} />}
+                  />
+                </div>
+
+                <Field label="Brand tone" error={errors.clientBrief?.brandTone?.message}>
+                  <Controller
+                    name="clientBrief.brandTone"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value || undefined} onValueChange={(v) => field.onChange(v)}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Choose one" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="luxury">Luxury</SelectItem>
+                          <SelectItem value="premium">Premium</SelectItem>
+                          <SelectItem value="bold">Bold</SelectItem>
+                          <SelectItem value="friendly">Friendly</SelectItem>
+                          <SelectItem value="minimal">Minimal</SelectItem>
+                          <SelectItem value="other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </Field>
+                {(watch("clientBrief.brandTone") === "other") ? (
+                  <Field label="Brand tone (other)">
+                    <Controller
+                      name="clientBrief.brandToneOther"
+                      control={control}
+                      render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                    />
+                  </Field>
+                ) : null}
+
+                <div className="md:col-span-2">
+                  <Label className="mb-1">Who is your target audience?</Label>
+                  <Controller
+                    name="clientBrief.targetAudience"
+                    control={control}
+                    render={({ field }) => <TextArea {...field} />}
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <Label className="mb-1">Key products / services</Label>
+                  <Controller
+                    name="clientBrief.keyProductsServices"
+                    control={control}
+                    render={({ field }) => <TextArea {...field} />}
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <Label className="mb-1">Priority focus — what do you want to push?</Label>
+                  <Controller
+                    name="clientBrief.priorityFocus"
+                    control={control}
+                    render={({ field }) => <TextArea {...field} />}
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <Label className="mb-1">Festivals to target aggressively</Label>
+                  <Controller
+                    name="clientBrief.festivalsToTarget"
+                    control={control}
+                    render={({ field }) => <TextArea {...field} />}
+                  />
+                </div>
+
+                <Field label="Language">
+                  <Controller
+                    name="clientBrief.language"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value || undefined} onValueChange={(v) => field.onChange(v)}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="english">English</SelectItem>
+                          <SelectItem value="hindi">Hindi</SelectItem>
+                          <SelectItem value="other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </Field>
+                {(watch("clientBrief.language") === "other") ? (
+                  <Field label="Language (other)">
+                    <Controller
+                      name="clientBrief.languageOther"
+                      control={control}
+                      render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                    />
+                  </Field>
+                ) : null}
+
+                <div className="md:col-span-2">
+                  <Label className="mb-1">Competitors</Label>
+                  <Controller
+                    name="clientBrief.competitors"
+                    control={control}
+                    render={({ field }) => <TextArea {...field} />}
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <Label className="mb-1">Accounts you like — and why</Label>
+                  <Controller
+                    name="clientBrief.accountsYouLikeReason"
+                    control={control}
+                    render={({ field }) => <TextArea {...field} />}
+                  />
+                </div>
+
+                <Field label="Main goal">
+                  <Controller
+                    name="clientBrief.mainGoal"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value || undefined} onValueChange={(v) => field.onChange(v)}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Choose one" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="awareness">Awareness</SelectItem>
+                          <SelectItem value="sales">Sales</SelectItem>
+                          <SelectItem value="social_growth">Social growth</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    )}
+                  />
+                </Field>
+
+                <Field label="Age group">
+                  <Controller
+                    name="clientBrief.ageGroup"
+                    control={control}
+                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                  />
+                </Field>
+
+                <div className="md:col-span-2">
+                  <Label className="mb-1">Locations we must focus on</Label>
+                  <Controller
+                    name="clientBrief.focusLocations"
+                    control={control}
+                    render={({ field }) => <TextArea {...field} />}
+                  />
+                </div>
+
+                <div className="md:col-span-2">
+                  <Label className="mb-2 block">Content you prefer (multi-select)</Label>
+                  <Controller
+                    name="clientBrief.contentPreference"
+                    control={control}
+                    render={({ field }) => (
+                      <div className="flex flex-wrap gap-3">
+                        {[
+                          ["education", "Educational"],
+                          ["promotional", "Promotional"],
+                          ["entertaining", "Entertaining"],
+                          ["trend_based", "Trend-based"],
+                        ].map(([value, label]) => {
+                          const set = new Set(field.value || []);
+                          const checked = set.has(value);
+                          return (
+                            <label key={value} className="flex items-center gap-2 text-sm">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(next) => {
+                                  const s = new Set(field.value || []);
+                                  if (next === true) s.add(value);
+                                  else s.delete(value);
+                                  field.onChange(Array.from(s));
+                                }}
+                              />
+                              {label}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  />
+                </div>
+
+                <div className="md:col-span-2 border-t border-border pt-4">
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">Do you have the following for shoot?</p>
+                  <div className="flex flex-col gap-2">
+                    {[
+                      ["clientBrief.shootAvailability.storeOrOfficeForShoot", "Store / office location for shoot"],
+                      ["clientBrief.shootAvailability.productsReadyForShoot", "Products ready for shoot"],
+                      ["clientBrief.shootAvailability.modelsAvailable", "Models available"],
+                    ].map(([name, label]) => (
+                      <Controller
+                        key={name}
+                        name={name}
+                        control={control}
+                        render={({ field }) => (
+                          <label className="flex items-center gap-2 text-sm">
+                            <Checkbox checked={field.value === true} onCheckedChange={(v) => field.onChange(v === true)} />
+                            {label}
+                          </label>
+                        )}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                <Field label="Preferred shoot days / timing">
+                  <Controller
+                    name="clientBrief.preferredShootDaysTiming"
+                    control={control}
+                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                  />
+                </Field>
+                <Field label="Best posting time (if any)">
+                  <Controller
+                    name="clientBrief.bestPostingTime"
+                    control={control}
+                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                  />
+                </Field>
+
+                <div className="md:col-span-2 border-t border-border pt-4">
+                  <p className="mb-2 text-sm font-medium">Onboarding files</p>
+                  <p className="mb-3 text-xs text-muted-foreground">
+                    Upload brand kit / identity, social media credential exports, and any other items we must have. You can
+                    select multiple files per category (max 50MB each). Files are saved right after the client is created.
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <BriefFilePicker
+                      label="Brand kit / identity"
+                      hint="Logos, fonts, guidelines, ZIPs, PDFs, etc."
+                      files={briefFiles.brandKit}
+                      onFilesAdded={(added) =>
+                        setBriefFiles((prev) => ({ ...prev, brandKit: [...prev.brandKit, ...added] }))
+                      }
+                    />
+                    <BriefFilePicker
+                      label="Social media credentials"
+                      hint="Exports or documents with handles / access details."
+                      files={briefFiles.socialCredentials}
+                      onFilesAdded={(added) =>
+                        setBriefFiles((prev) => ({ ...prev, socialCredentials: [...prev.socialCredentials, ...added] }))
+                      }
+                    />
+                    <div className="sm:col-span-2">
+                      <BriefFilePicker
+                        label="Other essential files"
+                        hint="Briefs, contracts, reference assets, etc."
+                        files={briefFiles.other}
+                        onFilesAdded={(added) =>
+                          setBriefFiles((prev) => ({ ...prev, other: [...prev.other, ...added] }))
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         ) : null}
 
         {step === 1 ? (
@@ -984,6 +1475,19 @@ export default function NewClientPage() {
         </div>
       </form>
     </section>
+  );
+}
+
+function TextArea({ className, ...props }) {
+  return (
+    <textarea
+      data-slot="textarea"
+      className={cn(
+        "min-h-[96px] w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm dark:bg-input/30",
+        className
+      )}
+      {...props}
+    />
   );
 }
 

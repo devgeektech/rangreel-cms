@@ -227,6 +227,24 @@ export const api = {
       method: "POST",
       body,
     }),
+
+  uploadClientBriefAssets: async (clientId, formData) => {
+    const { res, data } = await apiRequest(
+      `/manager/clients/${encodeURIComponent(clientId)}/brief-assets`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
+    if (!res.ok) {
+      const errorMessage = (data && (data.error || data.message)) || "Upload failed";
+      const err = new Error(errorMessage);
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  },
   getClient: (id) => requestJson(`/manager/clients/${id}`, { method: "GET" }),
   updateClient: (id, body) =>
     requestJson(`/manager/clients/${id}`, {
