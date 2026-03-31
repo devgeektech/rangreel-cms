@@ -1,4 +1,9 @@
 const ContentItem = require("../models/ContentItem");
+const {
+  validateStagesNotAfterPosting,
+  recalculateStagesFromPosting,
+  clampStagesToPosting,
+} = require("./stageBoundary.service");
 
 function normalizeUTCDate(ymd) {
   if (!ymd) return null;
@@ -37,10 +42,25 @@ async function persistCalendarDraft({ clientId, calendarDraft, createdBy }) {
     const planType = item.planType || "normal";
     const plan = item.plan || planType || "normal";
 
-    const workflowStages = (item.stages || []).map((s) => {
+    let stageSource = item.stages || [];
+    const boundary = validateStagesNotAfterPosting(stageSource, postingDate);
+    if (!boundary.ok) {
+      // If posting date was moved earlier, rebuild stage dates from posting date template.
+      const recalculated = recalculateStagesFromPosting({
+        itemType: item.type,
+        postingDate,
+        existingStages: stageSource,
+      });
+      stageSource = recalculated.stages || stageSource;
+    }
+
+    const clamped = clampStagesToPosting(stageSource, postingDate);
+    stageSource = clamped.stages || stageSource;
+
+    const workflowStages = stageSource.map((s) => {
       const due = normalizeUTCDate(s.date);
       return {
-        stageName: s.name,
+        stageName: s.name || s.stageName,
         role: s.role,
         assignedUser: s.assignedUser || undefined,
         dueDate: due,

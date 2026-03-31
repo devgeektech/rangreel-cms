@@ -5,6 +5,10 @@ const {
   getNextAvailableDate,
   suggestNextAvailableSlots,
 } = require("../services/capacityAvailability.service");
+const {
+  validateStagesNotAfterPosting,
+  isAfterDate,
+} = require("../services/stageBoundary.service");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -139,6 +143,10 @@ const updateInternalCalendarStage = async (req, res) => {
 
     const requested = normalizeUTCDate(newDate);
     if (!requested) return failure(res, "newDate must be a valid date", 400);
+    const postingDate = normalizeUTCDate(item.postingDate);
+    if (postingDate && isAfterDate(requested, postingDate)) {
+      return failure(res, "Stage date must not exceed posting date", 400);
+    }
 
     const targetStage = stages[stageIndex];
     const oldTargetDate = normalizeUTCDate(targetStage?.date);
@@ -185,18 +193,24 @@ const updateInternalCalendarStage = async (req, res) => {
       if (!USER_EDITABLE_STAGES.has(String(s?.name))) break;
       if (!s?.assignedUser) continue;
       const oldNextDate = normalizeUTCDate(s.date) || addDaysUTC(resolvedTargetDate, i - stageIndex);
-      const shiftedByDelta = normalizeUTCDate(addDaysUTC(oldNextDate, Math.round(deltaMs / 86400000)));
+      let shiftedByDelta = normalizeUTCDate(addDaysUTC(oldNextDate, Math.round(deltaMs / 86400000)));
+      if (postingDate && shiftedByDelta && shiftedByDelta.getTime() > postingDate.getTime()) {
+        shiftedByDelta = postingDate;
+      }
       const next = normalizeUTCDate(
         await getNextAvailableDate(s.role, s.assignedUser, shiftedByDelta, {
           capacityDelta,
         })
       );
-      s.date = next;
+      if (postingDate && next && next.getTime() > postingDate.getTime()) {
+        s.date = postingDate;
+      } else {
+        s.date = next;
+      }
     }
 
     // Prompt 79: keep post locked, but enforce dependency sanity against locked posting date.
     const approvalStage = stages.find((s) => String(s?.name) === "Approval");
-    const postingDate = normalizeUTCDate(item.postingDate);
     if (approvalStage?.date && postingDate) {
       const approvalDate = normalizeUTCDate(approvalStage.date);
       if (approvalDate && approvalDate.getTime() >= postingDate.getTime()) {
@@ -206,6 +220,10 @@ const updateInternalCalendarStage = async (req, res) => {
           400
         );
       }
+    }
+    const boundary = validateStagesNotAfterPosting(stages, postingDate);
+    if (!boundary.ok) {
+      return failure(res, "Stage date must not exceed posting date", 400);
     }
 
     // Prompt 72: keep ContentItem workflow stage dates in sync with the draft.
@@ -272,6 +290,7 @@ const submitInternalCalendar = async (req, res) => {
     );
 
     // Update draft items (dates only) based on what the UI submits.
+    let boundaryError = "";
     draftDoc.items = (draftDoc.items || []).map((it) => {
       const key = it?.contentId ? String(it.contentId) : "";
       const incoming = receivedByContentId.get(key);
@@ -293,14 +312,21 @@ const submitInternalCalendar = async (req, res) => {
         return s;
       });
 
+      const boundary = validateStagesNotAfterPosting(it.stages || [], it.postingDate);
+      if (!boundary.ok) {
+        boundaryError = "Stage date must not exceed posting date";
+      }
+
       return it;
     });
+    if (boundaryError) return failure(res, boundaryError, 400);
 
     await draftDoc.save();
 
     // Persist workflow stage dates into ContentItem documents as the final step.
     const receivedContentIds = Array.from(receivedByContentId.keys()).filter(Boolean);
 
+    let contentBoundaryError = "";
     await Promise.all(
       receivedContentIds.map(async (contentId) => {
         const contentItem = await ContentItem.findById(contentId);
@@ -321,9 +347,22 @@ const submitInternalCalendar = async (req, res) => {
           return ws;
         });
 
+        const boundary = validateStagesNotAfterPosting(
+          (contentItem.workflowStages || []).map((ws) => ({
+            stageName: ws.stageName,
+            dueDate: ws.dueDate,
+          })),
+          contentItem.clientPostingDate
+        );
+        if (!boundary.ok) {
+          contentBoundaryError = "Stage date must not exceed posting date";
+          return;
+        }
+
         await contentItem.save();
       })
     );
+    if (contentBoundaryError) return failure(res, contentBoundaryError, 400);
 
     return res.status(200).json({ success: true });
   } catch (err) {
