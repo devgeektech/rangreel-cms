@@ -24,7 +24,8 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { applyDragWithChainShiftBounded } from "@/lib/calendarDraftUtils";
+import { toast } from "sonner";
+import { applyCustomizationDrag, applyManagerEditDrag } from "@/lib/calendarDraftUtils";
 
 const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -197,11 +198,21 @@ function DayCell({
   );
 }
 
-function StageChip({ entry, filterType, saving, canEdit, warnings, onOpenDetails }) {
+function StageChip({
+  entry,
+  filterType,
+  saving,
+  canEdit,
+  isCustomizationMode,
+  lockPostStage,
+  warnings,
+  onOpenDetails,
+}) {
   const meta = CONTENT_TYPE_META[entry.contentType] || CONTENT_TYPE_META.static_post;
+  const postLocked = lockPostStage && entry.stageName === "Post";
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: entry.id,
-    disabled: entry.locked || saving || !canEdit,
+    disabled: entry.locked || saving || !canEdit || postLocked,
     data: {
       contentId: entry.contentId,
       stageName: entry.stageName,
@@ -224,6 +235,9 @@ function StageChip({ entry, filterType, saving, canEdit, warnings, onOpenDetails
   const hoverTitle = [
     entry.contentLabel ? `${entry.contentLabel}` : meta.label,
     `${entry.stageName} · ${entry.role}`,
+    isCustomizationMode && (entry.stageName === "Plan" || entry.stageName === "Post")
+      ? "Dragging this will shift entire timeline"
+      : "",
     warningTitle ? `Warnings: ${warningTitle}` : "",
   ]
     .filter(Boolean)
@@ -251,7 +265,7 @@ function StageChip({ entry, filterType, saving, canEdit, warnings, onOpenDetails
         isDragging && "opacity-40"
       )}
     >
-      {!entry.locked && !saving && canEdit ? (
+      {!entry.locked && !saving && canEdit && !postLocked ? (
         <button
           type="button"
           className="mt-0.5 shrink-0 cursor-grab touch-none text-current/70 active:cursor-grabbing"
@@ -276,6 +290,15 @@ function StageChip({ entry, filterType, saving, canEdit, warnings, onOpenDetails
         <div className="truncate text-[9px] opacity-90">
           {(entry.contentLabel || meta.label) + " · "}{entry.stageName} · {entry.role}
         </div>
+        {isCustomizationMode && entry.stageName === "Plan" ? (
+          <div className="mt-0.5 text-[9px] text-muted-foreground">Plan — Moves entire workflow</div>
+        ) : null}
+        {isCustomizationMode && entry.stageName === "Post" ? (
+          <div className="mt-0.5 text-[9px] text-muted-foreground">Post — Controls final date</div>
+        ) : null}
+        {!isCustomizationMode && postLocked ? (
+          <div className="mt-0.5 text-[9px] text-muted-foreground">Post (Locked)</div>
+        ) : null}
       </button>
       {hasWarnings ? (
         <AlertTriangle
@@ -345,6 +368,9 @@ export default function ContentCalendarDnd({
   canEdit = true,
   controlledDraft = false,
   userById = {},
+  isCustomizationMode = false,
+  allowPostCreationEdit = false,
+  lockPostStage = false,
 }) {
   const defaultMonth = useMemo(() => {
     const items = draft?.items || [];
@@ -550,7 +576,7 @@ export default function ContentCalendarDnd({
     setInvalidDropReason("");
     const { active, over } = event;
     if (!over) return;
-    if (!canEdit) return;
+    if (!canEdit || (!isCustomizationMode && !allowPostCreationEdit)) return;
 
     const data = active.data.current;
     if (!data || data.locked) return;
@@ -562,16 +588,16 @@ export default function ContentCalendarDnd({
     if (newYmd === data.dateYmd) return;
 
     const prev = schedule;
-    const moved = applyDragWithChainShiftBounded(prev, data.contentId, data.stageName, newYmd);
+    const moved = isCustomizationMode
+      ? applyCustomizationDrag(prev, data.contentId, data.stageName, newYmd)
+      : applyManagerEditDrag(prev, data.contentId, data.stageName, newYmd);
     if (moved.blocked) {
-      setDropError(moved.reason || "Invalid drop: stage cannot be after posting date");
+      const msg = moved.reason || "Invalid phase move";
+      setDropError(msg);
+      toast.error(msg);
       return;
     }
-    if (moved.clamped && moved.reason) {
-      setDropError(moved.reason);
-    } else {
-      setDropError("");
-    }
+    setDropError("");
     const optimistic = moved.draft;
 
     if (controlledDraft) {
@@ -589,6 +615,8 @@ export default function ContentCalendarDnd({
         stageName: data.stageName,
         newDateYmd: newYmd,
         previousYmd: data.dateYmd,
+        nextStages:
+          optimistic?.items?.find((it) => String(it.contentId) === String(data.contentId))?.stages || [],
       });
     } catch (err) {
       if (controlledDraft) onCalendarStateChange?.(prev);
@@ -625,10 +653,20 @@ export default function ContentCalendarDnd({
     }
     const data = active?.data?.current;
     const contentId = String(data?.contentId || "");
+    const stageName = String(data?.stageName || "");
+    const isBoundaryController = stageName === "Post" || stageName === "Plan";
     const postingYmd = postingDateByContentId.get(contentId);
-    if (postingYmd && isAfterYmd(ymd, postingYmd)) {
+    if (
+      (isCustomizationMode ? !isBoundaryController : stageName !== "Post") &&
+      postingYmd &&
+      isAfterYmd(ymd, postingYmd)
+    ) {
       setInvalidDropYmd(ymd);
-      setInvalidDropReason(`Invalid drop: selected date is after posting date (${postingYmd})`);
+      setInvalidDropReason(
+        isCustomizationMode
+          ? "Phase cannot reach or exceed posting date. Move Post instead."
+          : "Cannot move beyond posting date"
+      );
       return;
     }
     setInvalidDropYmd("");
@@ -750,6 +788,8 @@ export default function ContentCalendarDnd({
                       filterType={filterType}
                       saving={saving}
                       canEdit={canEdit}
+                      isCustomizationMode={isCustomizationMode}
+                      lockPostStage={lockPostStage}
                       onOpenDetails={openDetails}
                       warnings={dayWarnings.filter(
                         (w) =>

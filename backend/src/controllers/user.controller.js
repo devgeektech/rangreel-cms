@@ -236,8 +236,49 @@ const updateMyTaskStatus = async (req, res) => {
   }
 };
 
+const getTeamClient = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return failure(res, "Client id is required", 400);
+
+    const assigned = await ContentItem.exists({
+      client: id,
+      "workflowStages.assignedUser": req.user.id,
+    });
+    if (!assigned && req.user?.roleType !== "admin" && req.user?.roleType !== "manager") {
+      return failure(res, "Forbidden", 403);
+    }
+
+    const items = await ContentItem.find({ client: id })
+      .select("title type contentType clientPostingDate workflowStages")
+      .sort({ clientPostingDate: 1 })
+      .lean();
+
+    return success(res, {
+      clientId: id,
+      contentItems: (items || []).map((item) => ({
+        _id: item._id,
+        title: item.title,
+        type: item.type,
+        contentType: item.contentType,
+        postingDate: toYMD(item.clientPostingDate),
+        stages: (item.workflowStages || []).map((s) => ({
+          stageName: s.stageName,
+          dueDate: toYMD(s.dueDate),
+          role: s.role,
+          status: s.status,
+          assignedUser: s.assignedUser || null,
+        })),
+      })),
+    });
+  } catch (error) {
+    return failure(res, error.message || "Failed to fetch client", 500);
+  }
+};
+
 module.exports = {
   getMe,
   getMyTasks,
   updateMyTaskStatus,
+  getTeamClient,
 };

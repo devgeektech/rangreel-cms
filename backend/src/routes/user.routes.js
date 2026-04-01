@@ -8,6 +8,7 @@ const router = express.Router();
 router.get("/me", auth, asyncHandler(userController.getMe));
 
 router.get("/my-tasks", auth, asyncHandler(userController.getMyTasks));
+router.get("/clients/:id", auth, asyncHandler(userController.getTeamClient));
 router.patch(
   "/my-tasks/:itemId/:stageId",
   auth,

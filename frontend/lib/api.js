@@ -286,6 +286,11 @@ export const api = {
       method: "PATCH",
       body,
     }),
+  patchContentItemStages: (itemId, body) =>
+    requestJson(`/content-items/${encodeURIComponent(itemId)}/stages`, {
+      method: "PATCH",
+      body,
+    }),
 
   // Internal calendar (Prompt 69/70)
   getInternalCalendar: (clientId) =>
@@ -355,6 +360,10 @@ export const api = {
   // My tasks
   getMyTasks: (month) =>
     requestJson(`/user/my-tasks?month=${encodeURIComponent(month)}`, {
+      method: "GET",
+    }),
+  getTeamClient: (id) =>
+    requestJson(`/user/clients/${encodeURIComponent(id)}`, {
       method: "GET",
     }),
   updateMyTaskStatus: (itemId, stageId, body) =>

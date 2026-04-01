@@ -99,3 +99,131 @@ export function applyDragWithChainShiftBounded(draft, contentId, stageName, newD
 }
 
 export { USER_EDITABLE_AFTER_DRAG };
+
+/**
+ * Phase 12: pre-creation customization drag engine.
+ *
+ * Rules:
+ * - Dragging Plan/Post shifts ALL stages by offsetDays.
+ * - Middle phases (Shoot/Edit/Approval) can move only between prev/next and before Post.
+ * - Nothing can cross Post. Stage order must remain Plan < Shoot < Edit < Approval < Post.
+ */
+export function applyCustomizationDrag(draft, contentId, stageName, newDateYmd) {
+  const items = draft?.items || [];
+  const item = items.find((it) => String(it.contentId) === String(contentId));
+  if (!item) return { draft, blocked: true, reason: "Content item not found" };
+
+  const stages = Array.isArray(item.stages) ? item.stages : [];
+  const idx = stages.findIndex((s) => String(s.name) === String(stageName));
+  if (idx === -1) return { draft, blocked: true, reason: "Stage not found" };
+
+  const oldYmd = String(stages[idx].date || "").slice(0, 10);
+  const offsetDays = daysDiffYmd(oldYmd, newDateYmd);
+  if (offsetDays === 0) return { draft, blocked: false, reason: "" };
+
+  const isPost = String(stageName) === "Post";
+  const isPlan = String(stageName) === "Plan";
+  const postStage = stages.find((s) => String(s.name) === "Post");
+  const postDate = String(postStage?.date || item.postingDate || "").slice(0, 10);
+  const nextStages = [...stages];
+
+  if (isPost || isPlan) {
+    for (let i = 0; i < nextStages.length; i++) {
+      const cur = String(nextStages[i]?.date || "").slice(0, 10);
+      nextStages[i] = { ...nextStages[i], date: addDaysToYmd(cur, offsetDays) };
+    }
+  } else {
+    const prevStageDate = idx > 0 ? String(nextStages[idx - 1]?.date || "").slice(0, 10) : "";
+    const nextStageDate =
+      idx < nextStages.length - 1 ? String(nextStages[idx + 1]?.date || "").slice(0, 10) : "";
+
+    if (postDate && compareYmd(newDateYmd, postDate) >= 0) {
+      return {
+        draft,
+        blocked: true,
+        reason: "Phase cannot reach or exceed posting date. Move Post instead.",
+        code: "after_post",
+      };
+    }
+    if (prevStageDate && compareYmd(newDateYmd, prevStageDate) <= 0) {
+      return { draft, blocked: true, reason: "Cannot overlap previous phase", code: "prev_overlap" };
+    }
+    if (nextStageDate && compareYmd(newDateYmd, nextStageDate) >= 0) {
+      return { draft, blocked: true, reason: "Cannot overlap next phase", code: "next_overlap" };
+    }
+
+    nextStages[idx] = { ...nextStages[idx], date: newDateYmd };
+  }
+
+  // Safety: ensure Post remains last phase by date.
+  const postIdx = nextStages.findIndex((s) => String(s.name) === "Post");
+  if (postIdx !== -1) {
+    const pd = String(nextStages[postIdx]?.date || "").slice(0, 10);
+    for (let i = 0; i < nextStages.length - 1; i++) {
+      const d = String(nextStages[i]?.date || "").slice(0, 10);
+      if (pd && d && compareYmd(d, pd) >= 0) {
+        return {
+          draft,
+          blocked: true,
+          reason: "Phase cannot reach or exceed posting date. Move Post instead.",
+          code: "after_post",
+        };
+      }
+    }
+  }
+
+  const nextDraft = {
+    ...draft,
+    items: items.map((it) =>
+      String(it.contentId) === String(contentId) ? { ...it, stages: nextStages } : it
+    ),
+  };
+
+  return { draft: nextDraft, blocked: false, reason: "" };
+}
+
+/**
+ * Post-creation manager edit rules:
+ * - Post is locked (cannot move).
+ * - Any other phase can move only within strict prev/next boundaries and before Post.
+ * - No full-pipeline shift.
+ */
+export function applyManagerEditDrag(draft, contentId, stageName, newDateYmd) {
+  const items = draft?.items || [];
+  const item = items.find((it) => String(it.contentId) === String(contentId));
+  if (!item) return { draft, blocked: true, reason: "Content item not found" };
+
+  const stages = Array.isArray(item.stages) ? item.stages : [];
+  const idx = stages.findIndex((s) => String(s.name) === String(stageName));
+  if (idx === -1) return { draft, blocked: true, reason: "Stage not found" };
+  if (String(stageName) === "Post") {
+    return { draft, blocked: true, reason: "Post phase cannot be edited after creation" };
+  }
+
+  const postStage = stages.find((s) => String(s.name) === "Post");
+  const postDate = String(postStage?.date || item.postingDate || "").slice(0, 10);
+  const prevStageDate = idx > 0 ? String(stages[idx - 1]?.date || "").slice(0, 10) : "";
+  const nextStageDate = idx < stages.length - 1 ? String(stages[idx + 1]?.date || "").slice(0, 10) : "";
+
+  if (postDate && compareYmd(newDateYmd, postDate) >= 0) {
+    return { draft, blocked: true, reason: "Cannot move beyond posting date" };
+  }
+  if (prevStageDate && compareYmd(newDateYmd, prevStageDate) <= 0) {
+    return { draft, blocked: true, reason: "Cannot overlap previous phase" };
+  }
+  if (nextStageDate && compareYmd(newDateYmd, nextStageDate) >= 0) {
+    return { draft, blocked: true, reason: "Cannot overlap next phase" };
+  }
+
+  const nextStages = [...stages];
+  nextStages[idx] = { ...nextStages[idx], date: newDateYmd };
+
+  const nextDraft = {
+    ...draft,
+    items: items.map((it) =>
+      String(it.contentId) === String(contentId) ? { ...it, stages: nextStages } : it
+    ),
+  };
+
+  return { draft: nextDraft, blocked: false, reason: "" };
+}

@@ -44,6 +44,7 @@ app.use("/api/admin/packages", packageRoutes);
 app.use("/api/admin/holidays", holidayRoutes);
 app.use("/api/manager/clients", clientRoutes);
 app.use("/api/manager/content", contentRoutes);
+app.use("/api/content-items", contentRoutes);
 app.use("/api/content", contentReadRoutes);
 app.use("/api/uploads", uploadRoutes);
 app.use("/api/manager", managerReadRoutes);

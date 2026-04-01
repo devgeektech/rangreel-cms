@@ -354,6 +354,7 @@ function BriefFilePicker({ label, hint, files, onFilesAdded }) {
 }
 
 export default function NewClientPage() {
+  const isCustomizationMode = true;
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [packagesLoading, setPackagesLoading] = useState(true);
@@ -663,6 +664,22 @@ export default function NewClientPage() {
           carousel: values.contentEnabled?.carousel !== false,
         },
         calendarDraft: calendarDraft && Array.isArray(calendarDraft.items) ? calendarDraft : undefined,
+        customStages:
+          calendarDraft && Array.isArray(calendarDraft.items)
+            ? calendarDraft.items.map((item) => ({
+                contentItemId: item.contentId,
+                type: item.type,
+                title: item.title,
+                postingDate: item.postingDate,
+                stages: (item.stages || []).map((s) => ({
+                  stageName: s.name,
+                  dueDate: s.date,
+                  role: s.role,
+                  assignedUser: s.assignedUser,
+                  status: s.status,
+                })),
+              }))
+            : undefined,
         team: {
           reels: {
             strategist: values.team?.reels?.strategist || undefined,
@@ -1418,6 +1435,8 @@ export default function NewClientPage() {
                     draft={calendarDraft}
                     controlledDraft
                     canEdit={customizingSchedule}
+                    isCustomizationMode={isCustomizationMode}
+                    editableStageNames={customizingSchedule ? ["Plan", "Shoot", "Edit", "Approval", "Post"] : ["Plan", "Shoot", "Edit", "Approval"]}
                     conflictMode="new"
                     roleCapMap={{}}
                     saving={false}
