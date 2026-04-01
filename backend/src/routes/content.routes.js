@@ -26,5 +26,12 @@ router.patch(
   asyncHandler(contentController.updateStageStatus)
 );
 
+router.patch(
+  "/:id/stages",
+  auth,
+  roleGuard("manager"),
+  asyncHandler(contentController.patchContentItemStages)
+);
+
 module.exports = router;
 

@@ -85,6 +85,50 @@ const stripNonPatchableBriefKeys = (raw) => {
   return rest;
 };
 
+function validateStages(stages) {
+  for (let i = 0; i < stages.length - 1; i++) {
+    const a = stages[i]?.dueDate || stages[i]?.date;
+    const b = stages[i + 1]?.dueDate || stages[i + 1]?.date;
+    if (new Date(a) >= new Date(b)) {
+      throw new Error("Invalid stage order");
+    }
+  }
+}
+
+function validatePhaseOrderByName(stages) {
+  const order = ["Plan", "Shoot", "Edit", "Approval", "Post"];
+  const pos = new Map(order.map((n, i) => [n, i]));
+  const names = (stages || []).map((s) => s?.name || s?.stageName).filter(Boolean);
+  // Require all known stages in correct order when present.
+  for (let i = 0; i < names.length; i++) {
+    const a = pos.get(String(names[i]));
+    if (a == null) continue;
+    for (let j = i + 1; j < names.length; j++) {
+      const b = pos.get(String(names[j]));
+      if (b == null) continue;
+      if (a >= b) throw new Error("Invalid stage order");
+      break;
+    }
+  }
+  const last = names[names.length - 1];
+  if (last && String(last) !== "Post") {
+    // Not always enforced for all templates, but Phase 12 requires Post as last.
+    throw new Error("Invalid stage order");
+  }
+}
+
+function normalizeCustomStageRows(stages) {
+  return (stages || []).map((s) => ({
+    name: s?.name || s?.stageName || "",
+    stageName: s?.stageName || s?.name || "",
+    role: s?.role,
+    assignedUser: s?.assignedUser || undefined,
+    date: s?.date || s?.dueDate,
+    dueDate: s?.dueDate || s?.date,
+    status: s?.status || "assigned",
+  }));
+}
+
 function findBriefFileRecord(client, fileId) {
   if (!mongoose.Types.ObjectId.isValid(fileId)) return null;
   for (const { arrayKey, slug } of BRIEF_UPLOAD_FIELDS) {
@@ -230,6 +274,7 @@ const createClient = async (req, res) => {
       googleReviewsAchieved: bodyReviewsAchieved,
       contentEnabled,
       calendarDraft,
+      customStages,
     } = req.body;
 
     if (!packageId) {
@@ -297,11 +342,62 @@ const createClient = async (req, res) => {
       createdBy: req.user.id,
     });
 
-    // Auto generation unless a final calendar draft is provided (wizard customize flow).
-    if (calendarDraft?.items && Array.isArray(calendarDraft.items) && calendarDraft.items.length > 0) {
+    const hasCalendarDraft =
+      calendarDraft?.items && Array.isArray(calendarDraft.items) && calendarDraft.items.length > 0;
+    const hasCustomStages = Array.isArray(customStages) && customStages.length > 0;
+
+    // Auto generation unless pre-creation customization payload is provided.
+    if (hasCalendarDraft || hasCustomStages) {
+      let draftToPersist = hasCalendarDraft ? { ...calendarDraft } : { items: [] };
+
+      if (hasCustomStages) {
+        const looksLikeFullDraftItems = customStages.every(
+          (row) => Array.isArray(row?.stages) && row?.type && row?.postingDate
+        );
+
+        if (!hasCalendarDraft && !looksLikeFullDraftItems) {
+          return failure(
+            res,
+            "customStages requires calendarDraft.items or full item payload (type, postingDate, stages)",
+            400
+          );
+        }
+
+        if (!hasCalendarDraft && looksLikeFullDraftItems) {
+          const builtItems = customStages.map((row, idx) => {
+            const normalizedStages = normalizeCustomStageRows(row.stages || []);
+            validateStages(normalizedStages);
+            validatePhaseOrderByName(normalizedStages);
+            return {
+              contentId: row.contentItemId || row.contentId || `custom-${idx + 1}`,
+              type: row.type,
+              title: row.title || row.contentItemId || `Item ${idx + 1}`,
+              postingDate: row.postingDate,
+              isLocked: true,
+              stages: normalizedStages,
+            };
+          });
+          draftToPersist = { items: builtItems };
+        } else {
+          const nextItems = (draftToPersist.items || []).map((it) => ({ ...it }));
+          for (const row of customStages) {
+            const key = String(row?.contentItemId || row?.contentId || "");
+            if (!key) continue;
+            const idx = nextItems.findIndex((it) => String(it.contentId) === key);
+            if (idx === -1) continue;
+            if (!Array.isArray(row.stages) || row.stages.length === 0) continue;
+            const normalizedStages = normalizeCustomStageRows(row.stages);
+            validateStages(normalizedStages);
+            validatePhaseOrderByName(normalizedStages);
+            nextItems[idx] = { ...nextItems[idx], stages: normalizedStages };
+          }
+          draftToPersist = { ...draftToPersist, items: nextItems };
+        }
+      }
+
       const { endDate } = await persistCalendarDraft({
         clientId: client._id,
-        calendarDraft,
+        calendarDraft: draftToPersist,
         createdBy: req.user.id,
       });
       if (endDate) {
@@ -358,7 +454,30 @@ const getClient = async (req, res) => {
       return failure(res, "Client not found", 404);
     }
 
-    return success(res, client);
+    const contentItems = await ContentItem.find({ client: id })
+      .select("title type contentType clientPostingDate workflowStages month planType")
+      .sort({ clientPostingDate: 1 })
+      .lean();
+
+    const clientObj = client.toObject ? client.toObject() : client;
+    clientObj.contentItems = (contentItems || []).map((item) => ({
+      _id: item._id,
+      title: item.title,
+      type: item.type,
+      contentType: item.contentType,
+      postingDate: toYMD(item.clientPostingDate),
+      month: item.month,
+      planType: item.planType || "normal",
+      stages: (item.workflowStages || []).map((s) => ({
+        stageName: s.stageName,
+        dueDate: toYMD(s.dueDate),
+        role: s.role,
+        status: s.status,
+        assignedUser: s.assignedUser || null,
+      })),
+    }));
+
+    return success(res, clientObj);
   } catch (err) {
     return failure(res, err.message || "Failed to fetch client", 500);
   }

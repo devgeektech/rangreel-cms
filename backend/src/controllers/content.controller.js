@@ -1,6 +1,7 @@
 const ContentItem = require("../models/ContentItem");
 // const PublicHoliday = require("../models/PublicHoliday"); // Prompt 20 safe cleanup: keep model, stop using in runtime flow.
 const Client = require("../models/Client");
+const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -291,9 +292,92 @@ const updateStageStatus = async (req, res) => {
   }
 };
 
+const STAGE_ORDER = ["Plan", "Shoot", "Edit", "Approval", "Post"];
+
+const validateStrictStageOrder = (stages) => {
+  const byName = new Map((stages || []).map((s) => [String(s.stageName || s.name), s]));
+  for (let i = 0; i < STAGE_ORDER.length - 1; i++) {
+    const a = byName.get(STAGE_ORDER[i]);
+    const b = byName.get(STAGE_ORDER[i + 1]);
+    if (!a || !b) continue;
+    const da = normalizeUtcMidnight(a.dueDate || a.date);
+    const db = normalizeUtcMidnight(b.dueDate || b.date);
+    if (!da || !db || da.getTime() >= db.getTime()) throw new Error("Invalid stage order");
+  }
+};
+
+const patchContentItemStages = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { stages } = req.body || {};
+    if (!Array.isArray(stages) || stages.length === 0) {
+      return failure(res, "stages is required", 400);
+    }
+
+    const contentItem = await ContentItem.findById(id);
+    if (!contentItem) return failure(res, "ContentItem not found", 404);
+
+    const client = await Client.findOne({ _id: contentItem.client, manager: req.user.id }).select("_id");
+    if (!client) return failure(res, "Client not found or access denied", 403);
+
+    const incomingByName = new Map(
+      stages.map((s) => [String(s?.stageName || s?.name || ""), normalizeUtcMidnight(s?.dueDate || s?.date)])
+    );
+
+    const postExisting = (contentItem.workflowStages || []).find(
+      (s) => String(s?.stageName || "") === "Post"
+    );
+    const postIncoming = incomingByName.get("Post");
+    if (postIncoming && postExisting?.dueDate) {
+      const existingPost = normalizeUtcMidnight(postExisting.dueDate);
+      if (existingPost && postIncoming.getTime() !== existingPost.getTime()) {
+        return failure(res, "Post phase cannot be edited after creation", 400);
+      }
+    }
+
+    const nextWorkflowStages = (contentItem.workflowStages || []).map((ws) => {
+      const key = String(ws.stageName || "");
+      const incomingDate = incomingByName.get(key);
+      if (!incomingDate || key === "Post") return ws;
+      ws.dueDate = incomingDate;
+      return ws;
+    });
+
+    validateStrictStageOrder(
+      nextWorkflowStages.map((ws) => ({ stageName: ws.stageName, dueDate: ws.dueDate }))
+    );
+
+    contentItem.workflowStages = nextWorkflowStages;
+    await contentItem.save();
+
+    const draft = await ClientScheduleDraft.findOne({ "items.contentId": contentItem._id });
+    if (draft) {
+      const item = (draft.items || []).find((it) => String(it.contentId) === String(contentItem._id));
+      if (item) {
+        item.stages = (item.stages || []).map((s) => {
+          const key = String(s.name || "");
+          const incomingDate = incomingByName.get(key);
+          if (!incomingDate || key === "Post") return s;
+          s.date = incomingDate;
+          return s;
+        });
+        validateStrictStageOrder(
+          (item.stages || []).map((s) => ({ stageName: s.name, dueDate: s.date }))
+        );
+      }
+      await draft.save();
+    }
+
+    return success(res, { itemId: contentItem._id });
+  } catch (err) {
+    return failure(res, err.message || "Failed to update stages", 500);
+  }
+};
+
 module.exports = {
   getContentById,
   reshuffleStage,
   updateStageStatus,
+  patchContentItemStages,
 };
 

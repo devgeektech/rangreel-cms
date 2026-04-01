@@ -95,6 +95,15 @@ export default function ManagerInternalCalendarPage() {
     }
   };
 
+  const moveStage = async ({ contentId, nextStages }) => {
+    await api.patchContentItemStages(contentId, {
+      stages: (nextStages || []).map((s) => ({
+        stageName: s.name,
+        dueDate: s.date,
+      })),
+    });
+  };
+
   return (
     <section className="space-y-5">
       <div className="flex items-center justify-between gap-3">
@@ -156,9 +165,13 @@ export default function ManagerInternalCalendarPage() {
                 clientId={clientId}
                 draft={calendarState || draft}
                 onCalendarStateChange={setCalendarState}
+                onStageMove={moveStage}
                 roleCapMap={roleCapMap}
                 saving={submitting}
                 canEdit={customizing}
+                isCustomizationMode={false}
+                allowPostCreationEdit
+                lockPostStage
                 controlledDraft
               />
             </div>

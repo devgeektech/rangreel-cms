@@ -75,31 +75,41 @@ const getInternalCalendar = async (req, res) => {
   try {
     const { clientId } = req.params;
     if (!clientId) return failure(res, "clientId is required", 400);
+    const client = await Client.findById(clientId).select("_id manager").lean();
+    if (!client) return failure(res, "Client not found", 404);
 
-    const draft = await ClientScheduleDraft.findOne({ clientId })
-      .populate("items.contentId", "title type contentType")
-      .populate("items.stages.assignedUser", "name avatar")
-      .lean();
-    if (!draft) return failure(res, "Schedule draft not found", 404);
-
-    const allowed = await canAccessDraft(req, clientId, draft);
+    let allowed = false;
+    if (req.user?.roleType === "admin") allowed = true;
+    else if (req.user?.roleType === "manager") allowed = String(client.manager) === String(req.user.id);
+    else if (req.user?.roleType === "user") {
+      const assigned = await ContentItem.exists({
+        client: clientId,
+        "workflowStages.assignedUser": req.user.id,
+      });
+      allowed = Boolean(assigned);
+    }
     if (!allowed) return failure(res, "Forbidden", 403);
 
+    const items = await ContentItem.find({ client: clientId })
+      .select("title type contentType clientPostingDate workflowStages")
+      .populate("workflowStages.assignedUser", "name avatar")
+      .sort({ clientPostingDate: 1 });
+
     const payload = {
-      clientId: draft.clientId,
-      items: (draft.items || []).map((item) => ({
-        contentId: item.contentId?._id || item.contentId,
-        title: item.contentId?.title || "",
-        type: item.type,
-        stages: (item.stages || []).map((s) => ({
-          name: s.name,
+      clientId,
+      items: (items || []).map((item) => ({
+        contentId: item._id,
+        title: item.title || "",
+        type: item.type || (item.contentType === "static_post" ? "post" : item.contentType),
+        stages: (item.workflowStages || []).map((s) => ({
+          name: s.stageName,
           role: s.role,
           assignedUser: s.assignedUser || null,
-          date: toYMD(s.date),
+          date: toYMD(s.dueDate),
           status: s.status,
         })),
-        postingDate: toYMD(item.postingDate),
-        isLocked: Boolean(item.isLocked),
+        postingDate: toYMD(item.clientPostingDate),
+        isLocked: true,
       })),
     };
 

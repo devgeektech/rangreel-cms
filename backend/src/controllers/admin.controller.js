@@ -392,7 +392,38 @@ const getAdminClients = async (req, res) => {
       .populate("package", "name")
       .sort({ createdAt: -1 });
 
-    return success(res, clients);
+    const clientIds = clients.map((c) => c._id);
+    const items = await ContentItem.find({ client: { $in: clientIds } })
+      .select("client title type contentType clientPostingDate workflowStages")
+      .sort({ clientPostingDate: 1 })
+      .lean();
+    const byClient = new Map();
+    for (const it of items) {
+      const key = String(it.client);
+      if (!byClient.has(key)) byClient.set(key, []);
+      byClient.get(key).push({
+        _id: it._id,
+        title: it.title,
+        type: it.type,
+        contentType: it.contentType,
+        postingDate: toYMD(it.clientPostingDate),
+        stages: (it.workflowStages || []).map((s) => ({
+          stageName: s.stageName,
+          dueDate: toYMD(s.dueDate),
+          role: s.role,
+          status: s.status,
+          assignedUser: s.assignedUser || null,
+        })),
+      });
+    }
+
+    const payload = clients.map((c) => {
+      const obj = c.toObject ? c.toObject() : c;
+      obj.contentItems = byClient.get(String(c._id)) || [];
+      return obj;
+    });
+
+    return success(res, payload);
   } catch (err) {
     return failure(res, "Failed to fetch clients", 500);
   }
