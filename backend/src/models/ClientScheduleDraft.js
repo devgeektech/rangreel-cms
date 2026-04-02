@@ -60,6 +60,11 @@ const DraftItemSchema = new mongoose.Schema(
       default: true,
       immutable: true,
     },
+    /** PROMPT 58: duration tasks derived from stages (optional; regenerated when absent). */
+    tasks: {
+      type: [mongoose.Schema.Types.Mixed],
+      default: undefined,
+    },
   },
   { _id: false }
 );

@@ -1,6 +1,7 @@
 const Client = require("../models/Client");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 const ContentItem = require("../models/ContentItem");
+const Leave = require("../models/Leave");
 const {
   getNextAvailableDate,
   suggestNextAvailableSlots,
@@ -9,6 +10,8 @@ const {
   validateStagesNotAfterPosting,
   isAfterDate,
 } = require("../services/stageBoundary.service");
+const { normalizeDraftItemToDurationTasks } = require("../services/taskNormalizer.service");
+const { scheduleStageDay, buildHolidaySetUTC } = require("../services/simpleCalendar.service");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -170,12 +173,27 @@ const updateInternalCalendarStage = async (req, res) => {
     const planType = String(contentItemForPlan?.planType || "normal").toLowerCase();
     const capacityDelta = planType === "urgent" ? 1 : 0;
 
+    // Prompt 71: manager-controlled leave integration.
+    // Fetch leave entries that overlap the search window so scheduler steps respect leave.
+    const leaveStart = requested;
+    const leaveEnd = addDaysUTC(requested, 365);
+    const leaveDocs = await Leave.find({
+      userId: assignedUser,
+      startDate: { $lte: leaveEnd },
+      endDate: { $gte: leaveStart },
+    }).lean();
+    const leaves = (leaveDocs || []).map((doc) => ({
+      userId: doc.userId,
+      from: doc.startDate,
+      to: doc.endDate,
+    }));
+
     const resolvedTargetDate = normalizeUTCDate(
       await getNextAvailableDate(
         targetStage.role,
         assignedUser,
         requested,
-        { capacityDelta }
+        { capacityDelta, leaves }
       )
     );
     // Prompt 74: manual drag/edit must not overload capacity.
@@ -185,12 +203,20 @@ const updateInternalCalendarStage = async (req, res) => {
         targetStage.role,
         assignedUser,
         requested,
-        { capacityDelta }
+        { capacityDelta, leaves }
       );
-      return res.status(200).json({
+      return res.status(409).json({
         success: false,
-        message: "Capacity exceeded",
-        suggestions,
+        error: "All users unavailable",
+        details: {
+          code: "CAPACITY_EXCEEDED",
+          stage: stageName,
+          role: targetStage.role,
+          assignedUser,
+          requestedDate: toYMD(requested),
+          resolvedDate: resolvedTargetDate ? toYMD(resolvedTargetDate) : "",
+          suggestions,
+        },
       });
     }
     targetStage.date = resolvedTargetDate;
@@ -210,6 +236,7 @@ const updateInternalCalendarStage = async (req, res) => {
       const next = normalizeUTCDate(
         await getNextAvailableDate(s.role, s.assignedUser, shiftedByDelta, {
           capacityDelta,
+          leaves,
         })
       );
       if (postingDate && next && next.getTime() > postingDate.getTime()) {
@@ -229,6 +256,22 @@ const updateInternalCalendarStage = async (req, res) => {
           "Selected date conflicts with locked posting date",
           400
         );
+      }
+    }
+
+    // Hard constraint: enforce strict stage sequence (Plan < Shoot < Edit < Approval < Post)
+    const STAGE_ORDER = ["Plan", "Shoot", "Edit", "Approval", "Post"];
+    const byName = new Map(
+      stages.map((s) => [String(s?.name || s?.stageName || ""), normalizeUTCDate(s?.date)])
+    );
+    for (let i = 0; i < STAGE_ORDER.length - 1; i++) {
+      const aName = STAGE_ORDER[i];
+      const bName = STAGE_ORDER[i + 1];
+      const aDate = byName.get(aName);
+      const bDate = byName.get(bName);
+      if (!aDate || !bDate) continue;
+      if (aDate.getTime() >= bDate.getTime()) {
+        return failure(res, "Task sequence would be violated by this drag", 409);
       }
     }
     const boundary = validateStagesNotAfterPosting(stages, postingDate);
@@ -253,6 +296,8 @@ const updateInternalCalendarStage = async (req, res) => {
     });
     await contentItem.save();
 
+    item.tasks = normalizeDraftItemToDurationTasks(item);
+    draft.markModified("items");
     await draft.save();
 
     const updatedItem = {
@@ -292,6 +337,9 @@ const submitInternalCalendar = async (req, res) => {
     const allowed = await canAccessDraft(req, clientId, draft);
     if (!allowed) return failure(res, "Forbidden", 403);
 
+    // PROMPT 82: global-only edits must fetch ALL ContentItems (all clients).
+    await ContentItem.find({}).select("_id").lean();
+
     const draftDoc = await ClientScheduleDraft.findOne({ clientId });
     if (!draftDoc) return failure(res, "Schedule draft not found", 404);
 
@@ -327,11 +375,10 @@ const submitInternalCalendar = async (req, res) => {
         boundaryError = "Stage date must not exceed posting date";
       }
 
+      it.tasks = normalizeDraftItemToDurationTasks(it);
       return it;
     });
     if (boundaryError) return failure(res, boundaryError, 400);
-
-    await draftDoc.save();
 
     // Persist workflow stage dates into ContentItem documents as the final step.
     const receivedContentIds = Array.from(receivedByContentId.keys()).filter(Boolean);
@@ -357,12 +404,102 @@ const submitInternalCalendar = async (req, res) => {
           return ws;
         });
 
+        const postingDate = normalizeUTCDate(contentItem.clientPostingDate);
+        if (!postingDate) {
+          contentBoundaryError = "Posting date is missing";
+          return;
+        }
+
+        const isManager =
+          String(req.user?.roleType || "").toLowerCase() === "manager" ||
+          String(req.user?.roleType || "").toLowerCase() === "admin";
+
+        const allowWeekend = isManager;
+        const allowFlexibleAdjustment = isManager;
+
+        const stageOrder = ["Plan", "Shoot", "Edit", "Approval"];
+        const editableStages = stageOrder
+          .map((stageName) =>
+            (contentItem.workflowStages || []).find((ws) => String(ws?.stageName) === stageName)
+          )
+          .filter(Boolean);
+
+        const dueTimes = (editableStages || [])
+          .map((s) => normalizeUTCDate(s.dueDate)?.getTime())
+          .filter((t) => typeof t === "number" && Number.isFinite(t));
+        const baseTime = dueTimes.length ? Math.min(...dueTimes) : postingDate.getTime();
+        const windowStart = addDaysUTC(new Date(baseTime), -120);
+        const windowEnd = addDaysUTC(postingDate, 365);
+
+        const holidaySet = await buildHolidaySetUTC(windowStart, windowEnd);
+
+        const assignedUserIds = Array.from(
+          new Set(
+            (editableStages || [])
+              .map((s) => s.assignedUser)
+              .filter(Boolean)
+              .map((u) => String(u))
+          )
+        );
+
+        const leavesDocs = assignedUserIds.length
+          ? await Leave.find({
+              userId: { $in: assignedUserIds },
+              startDate: { $lte: windowEnd },
+              endDate: { $gte: windowStart },
+            }).lean()
+          : [];
+
+        const leaves = (leavesDocs || []).map((doc) => ({
+          userId: doc.userId ? String(doc.userId._id || doc.userId) : "",
+          from: doc.startDate,
+          to: doc.endDate,
+          reason: doc.reason || "",
+        }));
+
+        const schedulingOpts = {
+          allowWeekend,
+          allowFlexibleAdjustment,
+          leaves,
+          excludeContentItemId: contentItem._id,
+        };
+
+        // PROMPT 82: resubmission must run global scheduler and persist resolved dates.
+        let prevResolved = null;
+        for (const stageName of stageOrder) {
+          const ws = (contentItem.workflowStages || []).find((x) => String(x?.stageName) === stageName);
+          if (!ws) continue;
+
+          let requested = normalizeUTCDate(ws.dueDate);
+          if (!requested) continue;
+
+          if (prevResolved && requested.getTime() <= prevResolved.getTime()) {
+            requested = addDaysUTC(prevResolved, 1);
+          }
+
+          const resolved = await scheduleStageDay(
+            ws.role,
+            ws.assignedUser,
+            requested,
+            holidaySet,
+            schedulingOpts
+          );
+
+          if (postingDate && resolved.getTime() >= postingDate.getTime()) {
+            contentBoundaryError = "Cannot maintain post date";
+            return;
+          }
+
+          ws.dueDate = resolved;
+          prevResolved = resolved;
+        }
+
         const boundary = validateStagesNotAfterPosting(
           (contentItem.workflowStages || []).map((ws) => ({
             stageName: ws.stageName,
             dueDate: ws.dueDate,
           })),
-          contentItem.clientPostingDate
+          postingDate
         );
         if (!boundary.ok) {
           contentBoundaryError = "Stage date must not exceed posting date";
@@ -370,9 +507,26 @@ const submitInternalCalendar = async (req, res) => {
         }
 
         await contentItem.save();
+
+        // Keep the draft items in sync with resolved dates.
+        const draftItem = (draftDoc.items || []).find(
+          (it) => String(it?.contentId) === String(contentId)
+        );
+        if (draftItem) {
+          draftItem.stages = (draftItem.stages || []).map((s) => {
+            if (String(s?.name) === "Post") return s;
+            const ws = (contentItem.workflowStages || []).find((x) => String(x?.stageName) === String(s?.name));
+            if (!ws) return s;
+            return { ...s, date: ws.dueDate, status: s.status };
+          });
+          draftItem.tasks = normalizeDraftItemToDurationTasks(draftItem);
+        }
       })
     );
     if (contentBoundaryError) return failure(res, contentBoundaryError, 400);
+
+    draftDoc.markModified("items");
+    await draftDoc.save();
 
     return res.status(200).json({ success: true });
   } catch (err) {

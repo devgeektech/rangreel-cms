@@ -258,22 +258,50 @@ export const api = {
     }),
 
   // Manager calendars
-  getClientCalendar: (id, month) =>
-    requestJson(`/manager/clients/${id}/client-calendar?month=${encodeURIComponent(month)}`, {
-      method: "GET",
-    }),
-  getTeamCalendar: (id, month) =>
-    requestJson(`/manager/clients/${id}/team-calendar?month=${encodeURIComponent(month)}`, {
-      method: "GET",
-    }),
   getManagerGlobalCalendar: (month) =>
-    requestJson(`/manager/clients/global-calendar?month=${encodeURIComponent(month)}`, {
+    requestJson(`/manager/global-calendar?month=${encodeURIComponent(month)}`, {
+      method: "GET",
+    }),
+
+  /** PROMPT 72 — Final manager view (multi-day tasks + leave highlights). */
+  getManagerGlobalCalendarFinal: (month) =>
+    requestJson(`/manager/global-calendar?month=${encodeURIComponent(month)}`, {
       method: "GET",
     }),
 
   // Manager reads (packages/users for client creation)
   getManagerPackages: () => requestJson("/manager/packages", { method: "GET" }),
   getTeamUsers: () => requestJson("/manager/team-users", { method: "GET" }),
+
+  /** PROMPT 67 — Manager drag with full scheduler (replacement, buffer, duration, weekend). */
+  managerDragTask: (body) =>
+    requestJson("/manager/drag-task", {
+      method: "PATCH",
+      body,
+    }),
+
+  /** PROMPT 74 — Manager add leave with scheduling-conflict simulation. */
+  addManagerLeave: (body) =>
+    requestJson("/manager/leave", {
+      method: "POST",
+      body,
+    }),
+
+  /** PROMPT 75 — Get leave for UI/calendar display (optional ?userId=). */
+  getManagerLeave: (userId) =>
+    requestJson(
+      `/manager/leave${userId ? `?userId=${encodeURIComponent(userId)}` : ""}`,
+      { method: "GET" }
+    ),
+
+  /** PROMPT 95 — Public holidays for calendar shading. */
+  getHoliday: () => requestJson("/holiday", { method: "GET" }),
+
+  /** PROMPT 76 — Delete leave entry. */
+  deleteManagerLeave: (leaveId) =>
+    requestJson(`/manager/leave/${encodeURIComponent(leaveId)}`, {
+      method: "DELETE",
+    }),
 
   // Manager stage actions
   reshuffleStage: (itemId, stageId, body) =>
@@ -286,27 +314,11 @@ export const api = {
       method: "PATCH",
       body,
     }),
-  patchContentItemStages: (itemId, body) =>
-    requestJson(`/content-items/${encodeURIComponent(itemId)}/stages`, {
-      method: "PATCH",
-      body,
-    }),
 
   // Internal calendar (Prompt 69/70)
   getInternalCalendar: (clientId) =>
     requestJson(`/internal-calendar/${encodeURIComponent(clientId)}`, {
       method: "GET",
-    }),
-  updateInternalCalendarStage: (body) =>
-    requestJson("/internal-calendar/update", {
-      method: "PATCH",
-      body,
-    }),
-
-  submitInternalCalendar: (clientId, body) =>
-    requestJson(`/internal-calendar/${encodeURIComponent(clientId)}/submit`, {
-      method: "POST",
-      body,
     }),
 
   /** Smart scheduling: capacity warnings only (does not block saves). */

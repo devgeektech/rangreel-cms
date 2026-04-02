@@ -6,6 +6,7 @@ import { CalendarDays, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import EmptyState from "@/components/shared/EmptyState";
@@ -32,9 +33,8 @@ export default function ManagerInternalCalendarPage() {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState(null);
   const [roleCapMap, setRoleCapMap] = useState({});
-  const [calendarState, setCalendarState] = useState(null);
-  const [customizing, setCustomizing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [weekendMode, setWeekendMode] = useState(true);
+  const [debugMeta, setDebugMeta] = useState(null);
 
   const load = useCallback(async () => {
     if (!clientId) return;
@@ -43,11 +43,9 @@ export default function ManagerInternalCalendarPage() {
       const res = await api.getInternalCalendar(clientId);
       const next = res?.data || res || null;
       setDraft(next);
-      setCalendarState(next);
     } catch (err) {
       toast.error(err.message || "Failed to load internal calendar");
       setDraft(null);
-      setCalendarState(null);
     } finally {
       setLoading(false);
     }
@@ -80,28 +78,20 @@ export default function ManagerInternalCalendarPage() {
     };
   }, []);
 
-  const submitCalendar = async () => {
-    if (!clientId || !calendarState?.items) return;
-    try {
-      setSubmitting(true);
-      await api.submitInternalCalendar(clientId, { items: calendarState.items });
-      toast.success("Schedule saved");
-      setCustomizing(false);
-      await load();
-    } catch (err) {
-      toast.error(err?.message || "Failed to save schedule");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const moveStage = async ({ contentId, nextStages }) => {
-    await api.patchContentItemStages(contentId, {
-      stages: (nextStages || []).map((s) => ({
-        stageName: s.name,
-        dueDate: s.date,
-      })),
+  const moveStage = async ({ contentId, stageName, newDateYmd, allowWeekend }) => {
+    const res = await api.managerDragTask({
+      contentId,
+      stageName,
+      newDate: newDateYmd,
+      allowWeekend,
     });
+    setDebugMeta(res?.data?.scheduling || null);
+    const nextCalendar = res?.data?.calendar || null;
+    if (nextCalendar && Array.isArray(nextCalendar.items)) {
+      setDraft(nextCalendar);
+      return;
+    }
+    await load();
   };
 
   return (
@@ -110,24 +100,10 @@ export default function ManagerInternalCalendarPage() {
         <div>
           <h2 className="text-2xl font-semibold">Internal calendar</h2>
           <p className="text-sm text-muted-foreground">
-            Auto schedule is read-only. Use “Customize Schedule” to edit stages (warnings only), then submit to persist.
+            Edits are applied only via global scheduler (`/api/manager/drag-task`). No per-client local save flow.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {customizing ? (
-            <>
-              <Button type="button" variant="outline" onClick={() => { setCustomizing(false); load(); }} disabled={submitting}>
-                Cancel
-              </Button>
-              <Button type="button" onClick={submitCalendar} disabled={submitting}>
-                {submitting ? "Saving..." : "Submit schedule"}
-              </Button>
-            </>
-          ) : (
-            <Button type="button" onClick={() => setCustomizing(true)} disabled={submitting}>
-              Customize Schedule
-            </Button>
-          )}
           <Button type="button" variant="outline" onClick={() => router.back()}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back
@@ -159,22 +135,58 @@ export default function ManagerInternalCalendarPage() {
               description="No internal calendar schedule found for this client yet."
             />
           ) : (
-            <div className={submitting ? "pointer-events-none opacity-75 transition" : ""}>
-              <ContentCalendarDnd
-                key={clientId}
-                clientId={clientId}
-                draft={calendarState || draft}
-                onCalendarStateChange={setCalendarState}
-                onStageMove={moveStage}
-                roleCapMap={roleCapMap}
-                saving={submitting}
-                canEdit={customizing}
-                isCustomizationMode={false}
-                allowPostCreationEdit
-                lockPostStage
-                controlledDraft
-              />
-            </div>
+            <ContentCalendarDnd
+              key={clientId}
+              clientId={clientId}
+              draft={draft}
+              onStageMove={moveStage}
+              roleCapMap={roleCapMap}
+              saving={loading}
+              canEdit
+              isCustomizationMode={false}
+              allowPostCreationEdit
+              lockPostStage
+              weekendMode={weekendMode}
+              onToggleWeekend={setWeekendMode}
+            />
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Scheduler Debug Panel</CardTitle>
+          <CardDescription>Last drag decision details from backend scheduler.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          {!debugMeta ? (
+            <p className="text-muted-foreground">No drag action yet.</p>
+          ) : (
+            <>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Original duration</span>
+                <span>{debugMeta.originalDurationDays || 1} day(s)</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Final duration</span>
+                <span>{debugMeta.finalDurationDays || 1} day(s)</span>
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <Badge variant={debugMeta.durationAdjusted ? "default" : "outline"}>
+                  extended: {debugMeta.durationAdjusted ? "yes" : "no"}
+                </Badge>
+                <Badge variant={debugMeta.borrowed ? "default" : "outline"}>
+                  borrowed: {debugMeta.borrowed ? "yes" : "no"}
+                </Badge>
+                <Badge variant={debugMeta.replacementApplied ? "default" : "outline"}>
+                  replaced: {debugMeta.replacementApplied ? "yes" : "no"}
+                </Badge>
+              </div>
+              <div className="pt-1">
+                <p className="text-xs text-muted-foreground">Reason</p>
+                <p>{debugMeta.reason || "-"}</p>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -185,7 +197,7 @@ export default function ManagerInternalCalendarPage() {
           <CardDescription>Read-only posting dates per content item.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
-          {((calendarState || draft)?.items || []).map((item) => (
+          {(draft?.items || []).map((item) => (
             <div key={String(item.contentId)} className="flex items-center justify-between rounded border p-2">
               <span className="font-medium capitalize">{item.type}</span>
               <span className="text-muted-foreground">{prettyDate(item.postingDate)}</span>

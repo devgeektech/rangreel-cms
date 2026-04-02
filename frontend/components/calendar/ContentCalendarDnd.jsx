@@ -88,6 +88,20 @@ function shiftMonthStr(monthStr, delta) {
   return toMonthStringUTC(d.getUTCFullYear(), d.getUTCMonth());
 }
 
+function isWeekendYmd(ymd) {
+  const d = new Date(`${ymd}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return false;
+  const day = d.getUTCDay();
+  return day === 0 || day === 6;
+}
+
+function addDaysYmd(ymd, days) {
+  const d = new Date(`${ymd}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return ymd;
+  d.setUTCDate(d.getUTCDate() + days);
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
 function formatMonthLabel(monthStr) {
   const { year, monthIndex } = parseMonthStr(monthStr);
   const d = new Date(Date.UTC(year, monthIndex, 1));
@@ -154,6 +168,8 @@ function DayCell({
   warningSeverity = "none",
   invalidDrop,
   invalidReason,
+  validDrop,
+  previewHint,
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: ymd ? `day-${ymd}` : `pad-${padKey}`,
@@ -165,7 +181,7 @@ function DayCell({
     return <div className="min-h-[88px] rounded-md border border-transparent bg-muted/20" />;
   }
 
-  const titleParts = [loadStyle?.title, overloadDetail, invalidReason].filter(Boolean);
+  const titleParts = [loadStyle?.title, overloadDetail, invalidReason, previewHint].filter(Boolean);
   const combinedTitle = titleParts.join(" — ");
 
   return (
@@ -178,6 +194,7 @@ function DayCell({
           (warningSeverity === "overloaded"
             ? "border-red-600/70 bg-red-500/15 ring-1 ring-red-500/40"
             : "border-blue-600/70 bg-blue-500/15 ring-1 ring-blue-500/40"),
+        validDrop && "border-emerald-600/80 bg-emerald-500/20 ring-2 ring-emerald-500/50",
         invalidDrop && "border-red-600/80 bg-red-500/20 ring-2 ring-red-500/60",
         isOver && "ring-2 ring-primary ring-offset-1"
       )}
@@ -371,6 +388,8 @@ export default function ContentCalendarDnd({
   isCustomizationMode = false,
   allowPostCreationEdit = false,
   lockPostStage = false,
+  weekendMode = true,
+  onToggleWeekend,
 }) {
   const defaultMonth = useMemo(() => {
     const items = draft?.items || [];
@@ -525,8 +544,10 @@ export default function ContentCalendarDnd({
 
   const [activeDragId, setActiveDragId] = useState(null);
   const [invalidDropYmd, setInvalidDropYmd] = useState("");
+  const [validDropYmd, setValidDropYmd] = useState("");
   const [dropError, setDropError] = useState("");
   const [invalidDropReason, setInvalidDropReason] = useState("");
+  const [previewHint, setPreviewHint] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsEntry, setDetailsEntry] = useState(null);
   const activeEntry = useMemo(
@@ -537,6 +558,29 @@ export default function ContentCalendarDnd({
     if (!detailsEntry) return null;
     return (schedule?.items || []).find((it) => String(it.contentId) === String(detailsEntry.contentId)) || null;
   }, [detailsEntry, schedule]);
+  const detailStage = useMemo(() => {
+    if (!detailsEntry || !detailsItem) return null;
+    return (detailsItem?.stages || []).find((s) => String(s?.name) === String(detailsEntry.stageName)) || null;
+  }, [detailsEntry, detailsItem]);
+  const detailWarnings = useMemo(() => {
+    if (!detailsEntry) return [];
+    const dayWarn = conflictByDay?.[detailsEntry.dateYmd] || [];
+    return dayWarn.filter(
+      (w) =>
+        String(w.role || "") === String(detailsEntry.role || "") &&
+        String(w.userId || "") === String(detailsEntry.assignedUserId || "")
+    );
+  }, [detailsEntry, conflictByDay]);
+  const detailSuggestions = useMemo(() => {
+    if (!detailsEntry) return [];
+    const out = [];
+    if (detailWarnings.length > 0) out.push("Try replacing assignee for this stage.");
+    if (detailsEntry.stageName === "Edit" || detailsEntry.stageName === "Shoot") {
+      out.push("Try extending duration by moving this stage +1 day.");
+    }
+    if (!weekendMode) out.push("Weekend mode is OFF. Turning it ON may unlock dates.");
+    return out;
+  }, [detailsEntry, detailWarnings, weekendMode]);
 
   const resolveUserName = useCallback(
     (assignedUser) => {
@@ -552,6 +596,40 @@ export default function ContentCalendarDnd({
     setDetailsEntry(entry);
     setDetailsOpen(true);
   }, []);
+  const handleReplaceUser = useCallback(async () => {
+    if (!detailsEntry || !onStageMove) return;
+    try {
+      // Trigger backend replacement logic on current date.
+      await onStageMove({
+        contentId: detailsEntry.contentId,
+        stageName: detailsEntry.stageName,
+        newDateYmd: detailsEntry.dateYmd,
+        previousYmd: detailsEntry.dateYmd,
+        allowWeekend: weekendMode,
+      });
+      toast.success("Replacement attempt completed");
+      setDetailsOpen(false);
+    } catch (err) {
+      toast.error(err?.message || "Replace user failed");
+    }
+  }, [detailsEntry, onStageMove, weekendMode]);
+  const handleExtendDuration = useCallback(async () => {
+    if (!detailsEntry || !onStageMove) return;
+    const nextYmd = addDaysYmd(detailsEntry.dateYmd, 1);
+    try {
+      await onStageMove({
+        contentId: detailsEntry.contentId,
+        stageName: detailsEntry.stageName,
+        newDateYmd: nextYmd,
+        previousYmd: detailsEntry.dateYmd,
+        allowWeekend: weekendMode,
+      });
+      toast.success("Duration extension attempt completed");
+      setDetailsOpen(false);
+    } catch (err) {
+      toast.error(err?.message || "Extend duration failed");
+    }
+  }, [detailsEntry, onStageMove, weekendMode]);
 
   const postingDateByContentId = useMemo(() => {
     const map = new Map();
@@ -586,11 +664,16 @@ export default function ContentCalendarDnd({
     const newYmd = overId.slice(4);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(newYmd)) return;
     if (newYmd === data.dateYmd) return;
+    if (!weekendMode && isWeekendYmd(newYmd)) {
+      const msg = "Weekend dates are blocked";
+      setDropError(msg);
+      toast.error(msg);
+      return;
+    }
 
-    const prev = schedule;
     const moved = isCustomizationMode
-      ? applyCustomizationDrag(prev, data.contentId, data.stageName, newYmd)
-      : applyManagerEditDrag(prev, data.contentId, data.stageName, newYmd);
+      ? applyCustomizationDrag(schedule, data.contentId, data.stageName, newYmd)
+      : applyManagerEditDrag(schedule, data.contentId, data.stageName, newYmd);
     if (moved.blocked) {
       const msg = moved.reason || "Invalid phase move";
       setDropError(msg);
@@ -598,14 +681,6 @@ export default function ContentCalendarDnd({
       return;
     }
     setDropError("");
-    const optimistic = moved.draft;
-
-    if (controlledDraft) {
-      onCalendarStateChange?.(optimistic);
-    } else {
-      setLocalDraft(optimistic);
-      onCalendarStateChange?.(optimistic);
-    }
 
     if (!onStageMove) return;
 
@@ -614,15 +689,19 @@ export default function ContentCalendarDnd({
         contentId: data.contentId,
         stageName: data.stageName,
         newDateYmd: newYmd,
+        allowWeekend: weekendMode,
         previousYmd: data.dateYmd,
         nextStages:
-          optimistic?.items?.find((it) => String(it.contentId) === String(data.contentId))?.stages || [],
+          moved?.draft?.items?.find((it) => String(it.contentId) === String(data.contentId))?.stages || [],
       });
     } catch (err) {
-      if (controlledDraft) onCalendarStateChange?.(prev);
-      else setLocalDraft(prev);
-      onCalendarStateChange?.(prev);
-      setDropError(err?.message || "Failed to move stage");
+      const reasons = err?.data?.details?.reasons;
+      const message =
+        Array.isArray(reasons) && reasons.length
+          ? `Cannot move\n\nReason:\n- ${reasons.join("\n- ")}`
+          : err?.message || "Failed to move stage";
+      setDropError(message);
+      toast.error(message);
     }
   };
 
@@ -630,25 +709,40 @@ export default function ContentCalendarDnd({
     setActiveDragId(String(active.id));
     setDropError("");
     setInvalidDropYmd("");
+    setValidDropYmd("");
     setInvalidDropReason("");
+    setPreviewHint("");
   };
 
   const handleDragOver = ({ active, over }) => {
     if (!over) {
       setInvalidDropYmd("");
+      setValidDropYmd("");
       setInvalidDropReason("");
+      setPreviewHint("");
       return;
     }
     const overId = String(over.id || "");
     if (!overId.startsWith("day-")) {
       setInvalidDropYmd("");
+      setValidDropYmd("");
       setInvalidDropReason("");
+      setPreviewHint("");
       return;
     }
     const ymd = overId.slice(4);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
       setInvalidDropYmd("");
+      setValidDropYmd("");
       setInvalidDropReason("");
+      setPreviewHint("");
+      return;
+    }
+    if (!weekendMode && isWeekendYmd(ymd)) {
+      setInvalidDropYmd(ymd);
+      setValidDropYmd("");
+      setInvalidDropReason("Weekend dates are blocked");
+      setPreviewHint("");
       return;
     }
     const data = active?.data?.current;
@@ -662,15 +756,43 @@ export default function ContentCalendarDnd({
       isAfterYmd(ymd, postingYmd)
     ) {
       setInvalidDropYmd(ymd);
+      setValidDropYmd("");
       setInvalidDropReason(
         isCustomizationMode
           ? "Phase cannot reach or exceed posting date. Move Post instead."
           : "Cannot move beyond posting date"
       );
+      setPreviewHint("");
       return;
     }
+    const candidate = isCustomizationMode
+      ? applyCustomizationDrag(schedule, contentId, stageName, ymd)
+      : applyManagerEditDrag(schedule, contentId, stageName, ymd);
+    if (candidate?.blocked) {
+      setInvalidDropYmd(ymd);
+      setValidDropYmd("");
+      setInvalidDropReason(candidate.reason || "Blocked");
+      setPreviewHint("");
+      return;
+    }
+
+    const day = new Date(`${ymd}T00:00:00.000Z`).getUTCDay();
+    const hints = [];
+    if (day === 0 || day === 6) hints.push("May use weekend");
+    const role = String(data?.role || "").toLowerCase();
+    if (
+      role === "videographer" ||
+      role === "videoeditor" ||
+      role === "manager" ||
+      role === "graphicdesigner"
+    ) {
+      hints.push("May extend duration");
+    }
+
     setInvalidDropYmd("");
     setInvalidDropReason("");
+    setValidDropYmd(ymd);
+    setPreviewHint(hints.join(" · "));
   };
 
   return (
@@ -683,6 +805,16 @@ export default function ContentCalendarDnd({
           <span className="min-w-[10rem] text-center text-sm font-semibold">{formatMonthLabel(viewMonth)}</span>
           <Button type="button" variant="outline" size="sm" onClick={() => setMonth(shiftMonthStr(viewMonth, 1))}>
             Next
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant={weekendMode ? "default" : "outline"}
+            onClick={() => onToggleWeekend?.(!weekendMode)}
+          >
+            Weekend Mode: {weekendMode ? "ON" : "OFF"}
           </Button>
         </div>
         <div className="flex flex-wrap gap-1">
@@ -747,7 +879,9 @@ export default function ContentCalendarDnd({
         onDragCancel={() => {
           setActiveDragId(null);
           setInvalidDropYmd("");
+          setValidDropYmd("");
           setInvalidDropReason("");
+          setPreviewHint("");
         }}
         onDragEnd={handleDragEnd}
       >
@@ -780,6 +914,8 @@ export default function ContentCalendarDnd({
                   warningSeverity={overloadedByWarnings ? "overloaded" : dayWarnings.length ? "warning" : "none"}
                   invalidDrop={ymd === invalidDropYmd}
                   invalidReason={ymd === invalidDropYmd ? invalidDropReason : ""}
+                  validDrop={ymd === validDropYmd}
+                  previewHint={ymd === validDropYmd ? previewHint : ""}
                 >
                   {list.map((entry) => (
                     <StageChip
@@ -819,8 +955,20 @@ export default function ContentCalendarDnd({
           {detailsEntry ? (
             <div className="space-y-2 text-sm">
               <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Client</span>
+                <span className="font-medium">{detailsItem?.clientName || detailsItem?.title || "-"}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Role</span>
+                <span className="font-medium">{detailsEntry.role || "-"}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">Due date</span>
                 <span className="font-medium">{detailsEntry.dateYmd}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-muted-foreground">Duration</span>
+                <span className="font-medium">1 day</span>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <span className="text-muted-foreground">Assigned to</span>
@@ -829,6 +977,38 @@ export default function ContentCalendarDnd({
                     detailsItem?.stages?.find((s) => s?.name === detailsEntry.stageName)?.assignedUser
                   )}
                 </span>
+              </div>
+              <div className="rounded-md border p-2">
+                <p className="text-xs font-semibold text-muted-foreground">Assigned users per day</p>
+                <p className="mt-1 text-xs">
+                  {detailsEntry.dateYmd}: {resolveUserName(detailStage?.assignedUser)}
+                </p>
+              </div>
+              <div className="rounded-md border p-2">
+                <p className="text-xs font-semibold text-muted-foreground">Conflicts</p>
+                {detailWarnings.length === 0 ? (
+                  <p className="mt-1 text-xs text-muted-foreground">No conflicts</p>
+                ) : (
+                  <ul className="mt-1 space-y-1 text-xs">
+                    {detailWarnings.map((w, i) => (
+                      <li key={`${w.role}-${i}`} className="text-destructive">
+                        {w.message || "Capacity/conflict warning"}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="rounded-md border p-2">
+                <p className="text-xs font-semibold text-muted-foreground">Suggestions</p>
+                {detailSuggestions.length === 0 ? (
+                  <p className="mt-1 text-xs text-muted-foreground">No suggestions</p>
+                ) : (
+                  <ul className="mt-1 space-y-1 text-xs">
+                    {detailSuggestions.map((s, i) => (
+                      <li key={i}>{s}</li>
+                    ))}
+                  </ul>
+                )}
               </div>
               {detailsItem?.postingDate ? (
                 <div className="flex items-center justify-between gap-3">
@@ -839,7 +1019,14 @@ export default function ContentCalendarDnd({
             </div>
           ) : null}
 
-          <DialogFooter showCloseButton />
+          <DialogFooter showCloseButton>
+            <Button type="button" variant="outline" onClick={handleReplaceUser} disabled={!detailsEntry || saving}>
+              Replace user
+            </Button>
+            <Button type="button" onClick={handleExtendDuration} disabled={!detailsEntry || saving}>
+              Extend duration
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

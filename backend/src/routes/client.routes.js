@@ -12,8 +12,6 @@ router.use(auth, roleGuard("manager"));
 router.post("/", clientController.createClient);
 router.get("/", clientController.getClients);
 router.get("/global-calendar", clientController.getManagerGlobalCalendar);
-router.get("/:id/client-calendar", clientController.getClientCalendar);
-router.get("/:id/team-calendar", clientController.getTeamCalendar);
 router.post(
   "/:id/brief-assets",
   (req, res, next) => {

@@ -54,7 +54,7 @@ export default function ManagerDashboardPage() {
   const currentMonth = new Date().toISOString().slice(0, 7);
   const [loading, setLoading] = useState(true);
   const [clients, setClients] = useState([]);
-  const [calendarGroups, setCalendarGroups] = useState([]);
+  const [calendarTasks, setCalendarTasks] = useState([]);
   const [actionLoading, setActionLoading] = useState(false);
 
   const load = async () => {
@@ -62,10 +62,16 @@ export default function ManagerDashboardPage() {
       setLoading(true);
       const [clientsRes, calendarRes] = await Promise.all([
         api.getMyClients(),
-        api.getManagerGlobalCalendar(currentMonth),
+        api.getManagerGlobalCalendarFinal(currentMonth),
       ]);
       setClients(clientsRes?.data || []);
-      setCalendarGroups(calendarRes?.data?.groups || calendarRes?.groups || []);
+      setCalendarTasks(
+        calendarRes?.data?.updatedTasks ||
+          calendarRes?.updatedTasks ||
+          calendarRes?.data?.tasks ||
+          calendarRes?.tasks ||
+          []
+      );
     } catch (error) {
       toast.error(error.message || "Failed to load manager dashboard");
     } finally {
@@ -78,59 +84,54 @@ export default function ManagerDashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentMonth]);
 
-  const items = useMemo(() => {
-    const flat = [];
-    (calendarGroups || []).forEach((g) => {
-      (g.items || []).forEach((it) => flat.push(it));
-    });
-    return flat;
-  }, [calendarGroups]);
+  const tasks = useMemo(() => calendarTasks || [], [calendarTasks]);
 
   const stats = useMemo(() => {
     const totalClients = clients.length;
-    const activeContent = items.filter((x) => String(x.overallStatus || "").toLowerCase() !== "posted").length;
-    const postedCount = items.filter((x) => String(x.overallStatus || "").toLowerCase() === "posted").length;
-    const pendingApprovals = items.flatMap((item) =>
-      (item.workflowStages || []).filter((stage) => isApprovalStagePending(stage))
-    ).length;
-    const totalItems = items.length;
+    const uniqueContent = new Set(tasks.map((t) => String(t.contentItemId || "")).filter(Boolean));
+    const postedCount = tasks.filter((t) => String(t.stageName || "").toLowerCase() === "post").length;
+    const pendingApprovals = tasks.filter((t) => {
+      const name = String(t.stageName || "").toLowerCase();
+      const status = String(t.status || "").toLowerCase();
+      return name === "approval" && status !== "approved" && status !== "rejected";
+    }).length;
+    const totalItems = uniqueContent.size;
+    const activeContent = Math.max(totalItems - postedCount, 0);
     const completionRate = totalItems ? Math.round((postedCount / totalItems) * 100) : 0;
     return { totalClients, activeContent, pendingApprovals, completionRate, postedCount, totalItems };
-  }, [clients.length, items]);
+  }, [clients.length, tasks]);
 
   const pendingApprovalStages = useMemo(() => {
     const list = [];
-    (items || []).forEach((item) => {
-      const clientBrand = item.client?.brandName || item.client?.clientName || "";
-      (item.workflowStages || []).forEach((stage) => {
-        if (isApprovalStagePending(stage)) {
-          list.push({
-            itemId: item._id,
-            stageId: stage._id,
-            title: item.title,
-            clientBrand,
-            dueDate: stage.dueDate,
-            status: stage.status,
-          });
-        }
-      });
+    (tasks || []).forEach((task) => {
+      const name = String(task.stageName || "").toLowerCase();
+      const status = String(task.status || "").toLowerCase();
+      if (name === "approval" && status !== "approved" && status !== "rejected") {
+        list.push({
+          itemId: task.contentItemId,
+          stageId: task.stageId || null,
+          title: task.title || "Untitled",
+          clientBrand: task.clientName || "",
+          dueDate: (task.dates || []).slice(-1)[0],
+          status: task.status,
+        });
+      }
     });
     list.sort((a, b) => new Date(a.dueDate) - new Date(b.dueDate));
     return list;
-  }, [items]);
+  }, [tasks]);
 
   const overbooking = useMemo(() => {
     const todayStart = getTodayStartUTC().getTime();
     const counts = new Map(); // dayKey|userId -> number
 
-    for (const item of items || []) {
-      for (const stage of item.workflowStages || []) {
-        if (!stage?.assignedUser || !stage?.dueDate) continue;
-        const status = String(stage.status || "").toLowerCase();
+    for (const task of tasks || []) {
+      const userId = (task.assignedUsers || [])[0];
+      for (const dayKey of task.dates || []) {
+        if (!userId || !dayKey) continue;
+        const status = String(task.status || "").toLowerCase();
         if (status === "submitted" || status === "posted") continue;
-        const dayKey = toYMDUTC(stage.dueDate);
-        const userId = String(stage.assignedUser);
-        const key = `${dayKey}|${userId}`;
+        const key = `${dayKey}|${String(userId)}`;
         counts.set(key, (counts.get(key) || 0) + 1);
       }
     }
@@ -146,7 +147,7 @@ export default function ManagerDashboardPage() {
     }
 
     return biggest;
-  }, [items]);
+  }, [tasks]);
 
   const todayStart = useMemo(() => getTodayStartUTC().getTime(), []);
   const isStageOverdue = (dueDate, status) => {
@@ -160,6 +161,10 @@ export default function ManagerDashboardPage() {
   const refresh = async () => load();
 
   const onStageAction = async (stage, nextStatus) => {
+    if (!stage?.itemId || !stage?.stageId) {
+      toast.error("Cannot update this stage from calendar data");
+      return;
+    }
     try {
       setActionLoading(true);
       await api.updateStageStatus(stage.itemId, stage.stageId, {

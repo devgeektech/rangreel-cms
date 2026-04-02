@@ -1,10 +1,39 @@
 const Client = require("../models/Client");
 const ContentItem = require("../models/ContentItem");
 const PublicHoliday = require("../models/PublicHoliday");
+const Leave = require("../models/Leave");
 const {
   getNextAvailableDate,
+  countActiveStagesOnDay,
+  resolveRoleCapacity,
   MAX_SEARCH_DAYS: CAPACITY_MAX_SEARCH_DAYS,
 } = require("./capacityAvailability.service");
+const TeamCapacity = require("../models/TeamCapacity");
+const { getAvailableUsers } = require("./availability.service");
+const { ROLE_RULES } = require("../config/roleRules");
+const { tryBorrowOneDayFromNextStage } = require("./durationBorrowing.service");
+const { buildAssignedUsersPerDayFromSchedule } = require("./taskNormalizer.service");
+const { buildSortedWorkUnitsClientGeneration } = require("./schedulerPriority.service");
+
+/** workflowStages[].role → ROLE_RULES key (Prompt 62). */
+const WORKFLOW_ROLE_TO_RULE_KEY = {
+  strategist: "strategist",
+  videographer: "shoot",
+  videoEditor: "editor",
+  manager: "manager",
+  postingExecutive: "post",
+};
+
+function getDurationExtensionMeta(workflowRole) {
+  const key = WORKFLOW_ROLE_TO_RULE_KEY[workflowRole];
+  if (!key || !ROLE_RULES[key]) {
+    return { flexible: false, maxDays: 1 };
+  }
+  const r = ROLE_RULES[key];
+  const minD = Math.max(1, Number(r.minDays) || 1);
+  const maxD = Math.max(minD, Number(r.maxDays) || minD);
+  return { flexible: !!r.flexible, maxDays: maxD };
+}
 
 // Prompt 34: force date storage as pure UTC midnight.
 function createUTCDate(date) {
@@ -54,7 +83,12 @@ const buildHolidaySetUTC = async (startDate, endDate) => {
   return set;
 };
 
-const nextValidWorkdayUTC = (date, holidaySet) => {
+/**
+ * PROMPT 65: Next schedulable UTC calendar day (holidays always skipped).
+ * `allowWeekend` default false — Saturday/Sunday are skipped; if true, weekends are allowed when no weekday is used for that slot.
+ */
+const nextValidWorkdayUTC = (date, holidaySet, options = {}) => {
+  const allowWeekend = options.allowWeekend === true;
   let d = createUTCDate(date);
   if (!d) return null;
   const holidays = holidaySet instanceof Set ? holidaySet : new Set();
@@ -62,8 +96,15 @@ const nextValidWorkdayUTC = (date, holidaySet) => {
   for (let i = 0; i < 370; i++) {
     const key = ymdUTC(d);
     const isHoliday = key && holidays.has(key);
-    if (!isWeekendUTC(d) && !isHoliday) return d;
-    d = addDaysUTC(d, 1);
+    if (isHoliday) {
+      d = addDaysUTC(d, 1);
+      continue;
+    }
+    if (!allowWeekend && isWeekendUTC(d)) {
+      d = addDaysUTC(d, 1);
+      continue;
+    }
+    return d;
   }
 
   return d;
@@ -107,17 +148,23 @@ const getTeamForContentType = (team, type) => {
  * Next valid workday for role/user at or after fromDate, respecting global capacity + weekends/holidays.
  * Prompt 51: bounded alignment loop; warn and return best workday instead of throwing.
  */
-async function scheduleStageDay(role, userId, fromDate, holidaySet) {
-  let anchor = createUTCDate(nextValidWorkdayUTC(fromDate, holidaySet));
+async function scheduleStageDay(role, userId, fromDate, holidaySet, schedulingOptions = {}) {
+  const dayOpts = { allowWeekend: schedulingOptions.allowWeekend === true };
+  const flexCapDelta = schedulingOptions.allowFlexibleAdjustment === true ? 1 : 0;
+  let anchor = createUTCDate(nextValidWorkdayUTC(fromDate, holidaySet, dayOpts));
   if (!anchor) throw new Error("Invalid anchor date");
   if (!userId) return anchor;
 
   const maxAlign = Math.min(370, CAPACITY_MAX_SEARCH_DAYS + 5);
 
   for (let iter = 0; iter < maxAlign; iter++) {
-    const raw = await getNextAvailableDate(role, userId, anchor);
+    const raw = await getNextAvailableDate(role, userId, anchor, {
+      capacityDelta: flexCapDelta,
+      excludeContentItemId: schedulingOptions.excludeContentItemId,
+      leaves: schedulingOptions.leaves,
+    });
     const d = createUTCDate(raw);
-    const aligned = createUTCDate(nextValidWorkdayUTC(d, holidaySet));
+    const aligned = createUTCDate(nextValidWorkdayUTC(d, holidaySet, dayOpts));
     if (!aligned) {
       console.warn("[simpleCalendar] scheduleStageDay: could not align workday, using anchor", {
         role,
@@ -134,22 +181,372 @@ async function scheduleStageDay(role, userId, fromDate, holidaySet) {
     userId: String(userId),
     maxAlign,
   });
-  return createUTCDate(nextValidWorkdayUTC(anchor, holidaySet)) || anchor;
+  return createUTCDate(nextValidWorkdayUTC(anchor, holidaySet, dayOpts)) || anchor;
+}
+
+function isSameUtcDay(dueDate, dayStartUTC) {
+  const d = dueDate instanceof Date ? dueDate : new Date(dueDate);
+  if (Number.isNaN(d.getTime())) return false;
+  const dayEnd = addDaysUTC(dayStartUTC, 1);
+  return d >= dayStartUTC && d < dayEnd;
 }
 
 /**
- * Prompt 48: book n sequential calendar-backed capacity slots (e.g. shoot window).
- * After each slot, next search starts the following calendar day (per spec).
+ * DB workload plus in-buffer synthetic rows for the same UTC day (Prompt 61).
  */
-async function fillMultiDaySlots(role, userId, startFrom, nDays, holidaySet) {
-  const dates = [];
-  let cursor = startFrom;
-  for (let k = 0; k < nDays; k++) {
-    const nextDate = await scheduleStageDay(role, userId, cursor, holidaySet);
-    dates.push(nextDate);
-    cursor = addDaysUTC(nextDate, 1);
+async function countStagesForUserDay(
+  workflowRole,
+  userId,
+  workday,
+  pendingSynthetic,
+  countOptions = {}
+) {
+  const uid = userId?._id || userId;
+  if (!uid) return 0;
+  const db = await countActiveStagesOnDay(workflowRole, uid, workday, countOptions);
+  const dayStart = createUTCDate(workday);
+  if (!dayStart) return db;
+  let extra = 0;
+  for (const row of pendingSynthetic || []) {
+    if (String(row.assignedUser?._id || row.assignedUser) !== String(uid)) continue;
+    if (row.role !== workflowRole) continue;
+    if (isSameUtcDay(row.dueDate, dayStart)) extra += 1;
   }
-  return dates;
+  return db + extra;
+}
+
+/**
+ * Prompt 61: primary first; if over capacity, pick another user from getAvailableUsers who fits that day.
+ */
+async function pickAssigneeForBufferDay({
+  workflowRole,
+  primaryUserId,
+  workday,
+  threshold,
+  pendingSynthetic,
+  leaves,
+  excludeContentItemId,
+}) {
+  const countOpts = excludeContentItemId ? { excludeContentItemId } : {};
+  const tryCapacity = async (uid) => {
+    if (!uid) return null;
+    const n = await countStagesForUserDay(
+      workflowRole,
+      uid,
+      workday,
+      pendingSynthetic,
+      countOpts
+    );
+    return n < threshold ? uid : null;
+  };
+
+  // Hard constraint: enforce reel-user cap (and other availability rules) even for the primary user.
+  let candidates = [];
+  try {
+    candidates = await getAvailableUsers(workflowRole, workday, pendingSynthetic, leaves);
+  } catch {
+    candidates = [];
+  }
+
+  const withCapacity = [];
+  for (const u of candidates) {
+    const uid = u._id || u;
+    const picked = await tryCapacity(uid);
+    if (picked) withCapacity.push(picked);
+  }
+
+  if (withCapacity.length === 0) return null;
+
+  const primaryStr = primaryUserId ? String(primaryUserId._id || primaryUserId) : null;
+  if (primaryStr) {
+    const primaryPick = withCapacity.find((id) => String(id._id || id) === primaryStr);
+    if (primaryPick) return primaryPick;
+  }
+
+  return withCapacity[0];
+}
+
+/**
+ * PROMPT 64 — Prefer a different available user than the previous day when capacity allows (A → B → A pattern).
+ */
+async function pickAssigneeForSplitDay({
+  workflowRole,
+  primaryUserId,
+  workday,
+  threshold,
+  pendingSynthetic,
+  leaves,
+  previousAssigneeId,
+  excludeContentItemId,
+}) {
+  const countOpts = excludeContentItemId ? { excludeContentItemId } : {};
+  const tryCapacity = async (uid) => {
+    if (!uid) return null;
+    const n = await countStagesForUserDay(
+      workflowRole,
+      uid,
+      workday,
+      pendingSynthetic,
+      countOpts
+    );
+    return n < threshold ? uid : null;
+  };
+
+  let candidates = [];
+  try {
+    candidates = await getAvailableUsers(workflowRole, workday, pendingSynthetic, leaves);
+  } catch {
+    candidates = [];
+  }
+
+  const withCapacity = [];
+  for (const u of candidates) {
+    const uid = u._id || u;
+    const ok = await tryCapacity(uid);
+    if (ok) withCapacity.push(uid);
+  }
+
+  if (withCapacity.length === 0) {
+    return pickAssigneeForBufferDay({
+      workflowRole,
+      primaryUserId,
+      workday,
+      threshold,
+      pendingSynthetic,
+      leaves,
+      excludeContentItemId,
+    });
+  }
+
+  if (withCapacity.length === 1) {
+    return withCapacity[0];
+  }
+
+  const prevStr =
+    previousAssigneeId != null ? String(previousAssigneeId._id || previousAssigneeId) : null;
+  const primaryStr = primaryUserId ? String(primaryUserId._id || primaryUserId) : null;
+
+  if (!prevStr && primaryStr) {
+    const primaryPick = withCapacity.find((id) => String(id) === primaryStr);
+    if (primaryPick) return primaryPick;
+  }
+
+  if (prevStr) {
+    const different = withCapacity.find((id) => String(id) !== prevStr);
+    if (different) return different;
+  }
+
+  if (primaryStr) {
+    const primaryPick = withCapacity.find((id) => String(id) === primaryStr);
+    if (primaryPick) return primaryPick;
+  }
+
+  return withCapacity[0];
+}
+
+function warnIfSubstitutes(roleLabel, primaryId, assignees) {
+  if (!primaryId || !assignees?.length) return;
+  const uniq = new Set();
+  for (const a of assignees) {
+    if (a && String(a) !== String(primaryId)) uniq.add(String(a));
+  }
+  if (uniq.size > 0) {
+    console.warn(
+      `[scheduler] Prompt 61: ${roleLabel} substitute(s) on buffer day(s) — primary ${String(
+        primaryId
+      )}, also assigned: ${[...uniq].join(", ")}`
+    );
+  }
+}
+
+/**
+ * Prompt 60 / 61 / 62: buffer utilization — walk workday-by-workday; try primary, else getAvailableUsers.
+ * Prompt 62: if no replacement and ROLE_RULES.flexible, extend duration target (+1 day) up to maxDays.
+ * Pending synthetic reel rows keep in-buffer capacity consistent. Only fails when zero days booked.
+ *
+ * @returns {{ dates: Date[], assignees: Array<null|object>, partial: boolean, failed: boolean, durationDays: number, initialDurationDays: number, extensionSteps: number }}
+ */
+async function fillMultiDaySlotsWithBuffer(
+  role,
+  userId,
+  startFrom,
+  requestedDays,
+  holidaySet,
+  options = {}
+) {
+  let currentTarget = requestedDays;
+  let maxIterations =
+    options.maxIterations ?? Math.max(requestedDays * 90, 180);
+  const capacityDelta = Number.isFinite(options.capacityDelta)
+    ? Math.max(0, options.capacityDelta)
+    : 0;
+  const leaves = options.leaves || [];
+  const seedTasks = options.seedTasks || [];
+  // CASE 10: multi-resource split is not allowed.
+  const splitAcrossUsers = false;
+  const allowWeekend = options.allowWeekend === true;
+  const allowFlexibleAdjustment = options.allowFlexibleAdjustment === true;
+  const contentTypeForTasks = options.contentType || "reel";
+  const flexThresholdBoost = allowFlexibleAdjustment ? 1 : 0;
+
+  const capDoc = await TeamCapacity.findOne({ role }).select("dailyCapacity").lean();
+  const threshold = resolveRoleCapacity(capDoc) + capacityDelta + flexThresholdBoost;
+
+  const dates = [];
+  const assignees = [];
+  const pendingSynthetic = [...seedTasks];
+  let extensionSteps = 0;
+
+  let probe = createUTCDate(startFrom);
+  if (!probe) {
+    return {
+      dates: [],
+      assignees: [],
+      assignedUsersPerDay: {},
+      partial: false,
+      failed: true,
+      durationDays: requestedDays,
+      initialDurationDays: requestedDays,
+      extensionSteps: 0,
+    };
+  }
+
+  let iterations = 0;
+  while (dates.length < currentTarget && iterations < maxIterations) {
+    iterations += 1;
+    const workday = createUTCDate(
+      nextValidWorkdayUTC(probe, holidaySet, { allowWeekend })
+    );
+    if (!workday) break;
+
+    if (!userId) {
+      dates.push(workday);
+      assignees.push(null);
+      probe = addDaysUTC(workday, 1);
+      continue;
+    }
+
+    const assignee = splitAcrossUsers
+      ? await pickAssigneeForSplitDay({
+          workflowRole: role,
+          primaryUserId: userId,
+          workday,
+          threshold,
+          pendingSynthetic,
+          leaves,
+          previousAssigneeId: assignees.length ? assignees[assignees.length - 1] : null,
+          excludeContentItemId: options.excludeContentItemId,
+        })
+      : await pickAssigneeForBufferDay({
+          workflowRole: role,
+          primaryUserId: userId,
+          workday,
+          threshold,
+          pendingSynthetic,
+          leaves,
+          excludeContentItemId: options.excludeContentItemId,
+        });
+
+    if (assignee) {
+      dates.push(workday);
+      assignees.push(assignee);
+      pendingSynthetic.push({
+        role,
+        assignedUser: assignee,
+        dueDate: workday,
+        status: "assigned",
+        contentType: contentTypeForTasks,
+      });
+    } else {
+      const meta = getDurationExtensionMeta(role);
+      if (meta.flexible && currentTarget < meta.maxDays) {
+        const borrowFn = options.tryBorrowFromNextStage;
+        if (typeof borrowFn === "function") {
+          const br = borrowFn();
+          if (br && br.ok === true) {
+            currentTarget += 1;
+            extensionSteps += 1;
+            maxIterations += 60;
+            console.warn(
+              `[scheduler] Prompt 62/63: extended ${role} target to ${currentTarget} days (borrowed 1d from ${br.nextRole})`
+            );
+          } else if (allowFlexibleAdjustment) {
+            currentTarget += 1;
+            extensionSteps += 1;
+            maxIterations += 60;
+            console.warn(
+              `[scheduler] Prompt 66: extended ${role} target to ${currentTarget} days (flexible adjustment; borrow was ${br?.reason || "unavailable"})`
+            );
+          } else {
+            console.warn(
+              `[scheduler] Prompt 63: extension reverted — borrow denied (${br?.reason || "unknown"})`
+            );
+          }
+        } else if (allowFlexibleAdjustment) {
+          currentTarget += 1;
+          extensionSteps += 1;
+          maxIterations += 60;
+          console.warn(
+            `[scheduler] Prompt 66: extended ${role} target to ${currentTarget} days (flexible adjustment; no borrow hook)`
+          );
+        }
+      }
+    }
+    probe = addDaysUTC(workday, 1);
+  }
+
+  const failed = dates.length === 0;
+  const partial = !failed && dates.length < currentTarget;
+  const assignedUsersPerDay =
+    dates.length > 0 && assignees.length === dates.length
+      ? buildAssignedUsersPerDayFromSchedule(dates, assignees)
+      : {};
+  return {
+    dates,
+    assignees,
+    assignedUsersPerDay,
+    partial,
+    failed,
+    durationDays: currentTarget,
+    initialDurationDays: requestedDays,
+    extensionSteps,
+  };
+}
+
+/**
+ * Prompt 48 / 60 / 61: multi-day window (e.g. shoot = 3). Partial schedules allowed;
+ * throws only when no day could be booked. Set `options.includeAssignees: true` to get `{ dates, assignees }`.
+ */
+async function fillMultiDaySlots(role, userId, startFrom, nDays, holidaySet, options = {}) {
+  const result = await fillMultiDaySlotsWithBuffer(
+    role,
+    userId,
+    startFrom,
+    nDays,
+    holidaySet,
+    options
+  );
+  if (result.failed) {
+    throw new Error(
+      `[scheduler] No available ${role} days in scan window (Prompt 60: all candidate days unavailable)`
+    );
+  }
+  if (result.partial) {
+    console.warn(
+      `[scheduler] Partial ${role} buffer: scheduled ${result.dates.length}/${result.durationDays ?? nDays} days (Prompt 60)`
+    );
+  }
+  if (options.includeAssignees) {
+    return {
+      dates: result.dates,
+      assignees: result.assignees,
+      assignedUsersPerDay: result.assignedUsersPerDay,
+      durationDays: result.durationDays,
+      initialDurationDays: result.initialDurationDays,
+      extensionSteps: result.extensionSteps,
+    };
+  }
+  return result.dates;
 }
 
 /**
@@ -157,8 +554,14 @@ async function fillMultiDaySlots(role, userId, startFrom, nDays, holidaySet) {
  * Skips public holidays/weekends on assignable days; respects TeamCapacity across all clients.
  *
  * @param {object|string} client - Client document or client id
+ * @param {{ allowWeekend?: boolean; allowFlexibleAdjustment?: boolean }} [options] — PROMPT 65/66: `allowWeekend` uses Sat/Sun when true; `allowFlexibleAdjustment` relaxes capacity/extension (manager override).
  */
-async function generateClientReels(client) {
+async function generateClientReels(client, options = {}) {
+  let schedulingOpts = {
+    allowWeekend: options.allowWeekend === true,
+    allowFlexibleAdjustment: options.allowFlexibleAdjustment === true,
+    leaves: Array.isArray(options.leaves) ? options.leaves : [],
+  };
   const clientId = client?._id || client;
   if (!clientId) return { insertedCount: 0, endDate: null };
 
@@ -206,6 +609,18 @@ async function generateClientReels(client) {
   const estimateEnd = addDaysUTC(baseStartDate, totalCount * 40 + 180);
   const holidaySet = await buildHolidaySetUTC(baseStartDate, estimateEnd);
 
+  if (!Array.isArray(options.leaves)) {
+    const leaveDocs = await Leave.find({
+      startDate: { $lte: estimateEnd },
+      endDate: { $gte: baseStartDate },
+    }).lean();
+    schedulingOpts.leaves = (leaveDocs || []).map((doc) => ({
+      userId: doc.userId,
+      from: doc.startDate,
+      to: doc.endDate,
+    }));
+  }
+
   const team = populatedClient.team || {};
   const reelTeam = getTeamForContentType(team, "reel");
   const postTeam = getTeamForContentType(team, "post");
@@ -251,20 +666,34 @@ async function generateClientReels(client) {
     }
   };
 
-  for (let i = 1; i <= reelsCount; i++) {
+  /** PROMPT 68: urgent first, then earliest stagger anchor (proxy for earliest post), then normal — interleaves content types. */
+  const workUnits = buildSortedWorkUnitsClientGeneration(
+    baseStartDate,
+    reelsCount,
+    postsCount,
+    carouselsCount,
+    addDaysUTC
+  );
+
+  for (const unit of workUnits) {
+    if (unit.kind === "reel") {
+    const i = unit.index;
     const isUrgent = i <= 2;
     // Prompt 55: urgent reels start tighter; normal reels keep wider stagger.
     const staggerOffset = isUrgent ? (i - 1) * 1 : (i - 1) * 2;
     const reelStartSeed = addDaysUTC(baseStartDate, staggerOffset);
     // Prompt 57/58 (critical): fixed per-reel anchor from stagger. Never mutated globally.
-    const reelStartDate = createUTCDate(nextValidWorkdayUTC(reelStartSeed, holidaySet));
+    const reelStartDate = createUTCDate(
+      nextValidWorkdayUTC(reelStartSeed, holidaySet, schedulingOpts)
+    );
     // Stage execution dates are capacity-based and flow from previous stage outputs.
     // Only stage dates shift; the reel anchor remains locked.
     const planDue = await scheduleStageDay(
       "strategist",
       strategistId,
       reelStartDate,
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
 
     let shootDue;
@@ -272,80 +701,123 @@ async function generateClientReels(client) {
     let approvalDue;
     let postDue;
 
+    const bufferOpts = {
+      includeAssignees: true,
+      capacityDelta: isUrgent ? 1 : 0,
+      allowWeekend: schedulingOpts.allowWeekend,
+      allowFlexibleAdjustment: !isUrgent && schedulingOpts.allowFlexibleAdjustment,
+      leaves: schedulingOpts.leaves,
+      splitAcrossUsers: false,
+    };
+
+    /** PROMPT 63: mutable planned durations; borrow reduces next stage when extending. */
+    const reelDurationPlan = {
+      strategist: 1,
+      videographer: isUrgent ? 1 : 3,
+      videoEditor: isUrgent ? 1 : 2,
+      manager: isUrgent ? 1 : 3,
+      postingExecutive: 1,
+    };
+    const borrowReel = (currentRole) => () => {
+      // CASE 7: urgent plan has no borrowing.
+      if (isUrgent) return { ok: false, reason: "urgent_no_borrowing" };
+      return tryBorrowOneDayFromNextStage(currentRole, reelDurationPlan, "reel");
+    };
+
     if (isUrgent) {
       const shootStart = addDaysUTC(planDue, 1);
-      const shootDates = await fillMultiDaySlots(
+      const shootOut = await fillMultiDaySlots(
         "videographer",
         videographerId,
         shootStart,
-        1,
-        holidaySet
+        reelDurationPlan.videographer,
+        holidaySet,
+        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videographer") }
       );
-      shootDue = shootDates[0];
+      warnIfSubstitutes("Shoot", videographerId, shootOut.assignees);
+      shootDue = shootOut.dates[0];
 
       const editStart = addDaysUTC(shootDue, 1);
-      const editDates = await fillMultiDaySlots(
+      const editOut = await fillMultiDaySlots(
         "videoEditor",
         videoEditorId,
         editStart,
-        1,
-        holidaySet
+        reelDurationPlan.videoEditor,
+        holidaySet,
+        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videoEditor") }
       );
-      editDue = editDates[0];
+      warnIfSubstitutes("Edit", videoEditorId, editOut.assignees);
+      editDue = editOut.dates[0];
 
       const approvalStart = editDue;
       // Prompt 44: urgent — first manager slot on or after edit day (same day if capacity allows).
-      approvalDue = await scheduleStageDay("manager", managerId, approvalStart, holidaySet);
-
-      const postStart = addDaysUTC(approvalDue, 1);
-      const postDates = await fillMultiDaySlots(
-        "postingExecutive",
-        postingExecutiveId,
-        postStart,
-        1,
-        holidaySet
-      );
-      postDue = postDates[0];
-    } else {
-      const shootStart = addDaysUTC(planDue, 1);
-      const shootDates = await fillMultiDaySlots(
-        "videographer",
-        videographerId,
-        shootStart,
-        3,
-        holidaySet
-      );
-      shootDue = shootDates[shootDates.length - 1];
-
-      const editStart = addDaysUTC(shootDue, 1);
-      const editDates = await fillMultiDaySlots(
-        "videoEditor",
-        videoEditorId,
-        editStart,
-        2,
-        holidaySet
-      );
-      editDue = editDates[editDates.length - 1];
-
-      const approvalStart = addDaysUTC(editDue, 1);
-      const approvalDates = await fillMultiDaySlots(
+      approvalDue = await scheduleStageDay(
         "manager",
         managerId,
         approvalStart,
-        3,
-        holidaySet
+        holidaySet,
+        schedulingOpts
       );
-      approvalDue = approvalDates[approvalDates.length - 1];
 
       const postStart = addDaysUTC(approvalDue, 1);
-      const postDates = await fillMultiDaySlots(
+      const postOut = await fillMultiDaySlots(
         "postingExecutive",
         postingExecutiveId,
         postStart,
-        1,
-        holidaySet
+        reelDurationPlan.postingExecutive,
+        holidaySet,
+        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("postingExecutive") }
       );
-      postDue = postDates[0];
+      warnIfSubstitutes("Post", postingExecutiveId, postOut.assignees);
+      postDue = postOut.dates[0];
+    } else {
+      const shootStart = addDaysUTC(planDue, 1);
+      const shootOut = await fillMultiDaySlots(
+        "videographer",
+        videographerId,
+        shootStart,
+        reelDurationPlan.videographer,
+        holidaySet,
+        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videographer") }
+      );
+      warnIfSubstitutes("Shoot", videographerId, shootOut.assignees);
+      shootDue = shootOut.dates[shootOut.dates.length - 1];
+
+      const editStart = addDaysUTC(shootDue, 1);
+      const editOut = await fillMultiDaySlots(
+        "videoEditor",
+        videoEditorId,
+        editStart,
+        reelDurationPlan.videoEditor,
+        holidaySet,
+        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videoEditor") }
+      );
+      warnIfSubstitutes("Edit", videoEditorId, editOut.assignees);
+      editDue = editOut.dates[editOut.dates.length - 1];
+
+      const approvalStart = addDaysUTC(editDue, 1);
+      const approvalOut = await fillMultiDaySlots(
+        "manager",
+        managerId,
+        approvalStart,
+        reelDurationPlan.manager,
+        holidaySet,
+        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("manager") }
+      );
+      warnIfSubstitutes("Approval", managerId, approvalOut.assignees);
+      approvalDue = approvalOut.dates[approvalOut.dates.length - 1];
+
+      const postStart = addDaysUTC(approvalDue, 1);
+      const postOut = await fillMultiDaySlots(
+        "postingExecutive",
+        postingExecutiveId,
+        postStart,
+        reelDurationPlan.postingExecutive,
+        holidaySet,
+        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("postingExecutive") }
+      );
+      warnIfSubstitutes("Post", postingExecutiveId, postOut.assignees);
+      postDue = postOut.dates[0];
     }
 
     // Prompt 56: avoid client-calendar clustering by spreading post days.
@@ -356,19 +828,12 @@ async function generateClientReels(client) {
         "postingExecutive",
         postingExecutiveId,
         addDaysUTC(postDue, 1),
-        holidaySet
+        holidaySet,
+        schedulingOpts
       );
       postingKey = ymdUTC(postDue);
     }
     if (postingKey) usedReelPostingDayKeys.add(postingKey);
-
-    // Prompt 60: verify staggered parallel anchors vs execution outcomes.
-    console.log({
-      reel: i,
-      reelStartDate: ymdUTC(reelStartDate),
-      planDate: ymdUTC(planDue),
-      postDate: ymdUTC(postDue),
-    });
 
     const postingDate = createUTCDate(postDue);
     keepLatestPosting(postingDate);
@@ -424,38 +889,42 @@ async function generateClientReels(client) {
       createdBy,
     });
     insertedCount += 1;
-  }
-
-  // Prompt 64: posts follow strategist -> design -> approval -> post (capacity-aware).
-  for (let i = 1; i <= postsCount; i++) {
+    } else if (unit.kind === "post") {
+    const i = unit.index;
     const staggerOffset = (i - 1) * 2;
     const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
-    const itemStartDate = createUTCDate(nextValidWorkdayUTC(itemStartSeed, holidaySet));
+    const itemStartDate = createUTCDate(
+      nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
+    );
 
     const planDue = await scheduleStageDay(
       "strategist",
       postStrategistId,
       itemStartDate,
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
     const designDue = await scheduleStageDay(
       "graphicDesigner",
       postDesignerId,
       addDaysUTC(planDue, 1),
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
     // same day as design OR next day, depending on capacity/workday.
     const approvalDue = await scheduleStageDay(
       "manager",
       postManagerId,
       designDue,
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
     let postDue = await scheduleStageDay(
       "postingExecutive",
       postPostingExecutiveId,
       addDaysUTC(approvalDue, 1),
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
 
     let postingKey = ymdUTC(postDue);
@@ -464,7 +933,8 @@ async function generateClientReels(client) {
         "postingExecutive",
         postPostingExecutiveId,
         addDaysUTC(postDue, 1),
-        holidaySet
+        holidaySet,
+        schedulingOpts
       );
       postingKey = ymdUTC(postDue);
     }
@@ -515,37 +985,41 @@ async function generateClientReels(client) {
       createdBy,
     });
     insertedCount += 1;
-  }
-
-  // Prompt 64: carousel follows the same post workflow with carousel team assignees.
-  for (let i = 1; i <= carouselsCount; i++) {
+    } else {
+    const i = unit.index;
     const staggerOffset = (i - 1) * 2;
     const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
-    const itemStartDate = createUTCDate(nextValidWorkdayUTC(itemStartSeed, holidaySet));
+    const itemStartDate = createUTCDate(
+      nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
+    );
 
     const planDue = await scheduleStageDay(
       "strategist",
       carouselStrategistId,
       itemStartDate,
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
     const designDue = await scheduleStageDay(
       "graphicDesigner",
       carouselDesignerId,
       addDaysUTC(planDue, 1),
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
     const approvalDue = await scheduleStageDay(
       "manager",
       carouselManagerId,
       designDue,
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
     let postDue = await scheduleStageDay(
       "postingExecutive",
       carouselPostingExecutiveId,
       addDaysUTC(approvalDue, 1),
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
 
     let postingKey = ymdUTC(postDue);
@@ -554,7 +1028,8 @@ async function generateClientReels(client) {
         "postingExecutive",
         carouselPostingExecutiveId,
         addDaysUTC(postDue, 1),
-        holidaySet
+        holidaySet,
+        schedulingOpts
       );
       postingKey = ymdUTC(postDue);
     }
@@ -605,6 +1080,7 @@ async function generateClientReels(client) {
       createdBy,
     });
     insertedCount += 1;
+    }
   }
 
   if (lastPostingDate) {
@@ -622,4 +1098,13 @@ async function generateClientReels(client) {
 
 module.exports = {
   generateClientReels,
+  fillMultiDaySlots,
+  fillMultiDaySlotsWithBuffer,
+  scheduleStageDay,
+  nextValidWorkdayUTC,
+  buildHolidaySetUTC,
+  pickAssigneeForBufferDay,
+  pickAssigneeForSplitDay,
+  countStagesForUserDay,
+  getDurationExtensionMeta,
 };
