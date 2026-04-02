@@ -7,6 +7,8 @@ const {
   generateWorkflowStagesFromPostingDate,
   BACKWARD_OFFSETS,
 } = require("./workflowFromPostingDate.service");
+const { normalizeDraftItemToDurationTasks } = require("./taskNormalizer.service");
+const { buildSortedWorkUnitsDraft } = require("./schedulerPriority.service");
 
 // Prompt 34: force date storage as pure UTC midnight.
 function createUTCDate(date) {
@@ -52,7 +54,9 @@ const buildHolidaySetUTC = async (startDate, endDate) => {
   return set;
 };
 
-const nextValidWorkdayUTC = (date, holidaySet) => {
+/** PROMPT 65: `allowWeekend` default false — weekends skipped unless true. */
+const nextValidWorkdayUTC = (date, holidaySet, options = {}) => {
+  const allowWeekend = options.allowWeekend === true;
   let d = createUTCDate(date);
   if (!d) return null;
   const holidays = holidaySet instanceof Set ? holidaySet : new Set();
@@ -60,8 +64,15 @@ const nextValidWorkdayUTC = (date, holidaySet) => {
   for (let i = 0; i < 370; i++) {
     const key = ymdUTC(d);
     const isHoliday = key && holidays.has(key);
-    if (!isWeekendUTC(d) && !isHoliday) return d;
-    d = addDaysUTC(d, 1);
+    if (isHoliday) {
+      d = addDaysUTC(d, 1);
+      continue;
+    }
+    if (!allowWeekend && isWeekendUTC(d)) {
+      d = addDaysUTC(d, 1);
+      continue;
+    }
+    return d;
   }
 
   return d;
@@ -71,23 +82,27 @@ const nextValidWorkdayUTC = (date, holidaySet) => {
  * Next valid workday for role/user at or after fromDate, respecting capacity + weekends/holidays.
  * Mirrors the implementation in `simpleCalendar.service.js` (subset needed for posting-day scheduling).
  */
-async function scheduleStageDay(role, userId, fromDate, holidaySet) {
-  let anchor = createUTCDate(nextValidWorkdayUTC(fromDate, holidaySet));
+async function scheduleStageDay(role, userId, fromDate, holidaySet, schedulingOptions = {}) {
+  const dayOpts = { allowWeekend: schedulingOptions.allowWeekend === true };
+  const flexCapDelta = schedulingOptions.allowFlexibleAdjustment === true ? 1 : 0;
+  let anchor = createUTCDate(nextValidWorkdayUTC(fromDate, holidaySet, dayOpts));
   if (!anchor) throw new Error("Invalid anchor date");
   if (!userId) return anchor;
 
   const maxAlign = Math.min(370, CAPACITY_MAX_SEARCH_DAYS + 5);
 
   for (let iter = 0; iter < maxAlign; iter++) {
-    const raw = await getNextAvailableDate(role, userId, anchor);
+    const raw = await getNextAvailableDate(role, userId, anchor, {
+      capacityDelta: flexCapDelta,
+    });
     const d = createUTCDate(raw);
-    const aligned = createUTCDate(nextValidWorkdayUTC(d, holidaySet));
+    const aligned = createUTCDate(nextValidWorkdayUTC(d, holidaySet, dayOpts));
     if (!aligned) return anchor;
     if (aligned.getTime() === d.getTime()) return d;
     anchor = aligned;
   }
 
-  return createUTCDate(nextValidWorkdayUTC(anchor, holidaySet)) || anchor;
+  return createUTCDate(nextValidWorkdayUTC(anchor, holidaySet, dayOpts)) || anchor;
 }
 
 const mapLegacyFlatTeamToTyped = (team) => {
@@ -156,7 +171,13 @@ async function generateCalendarDraft({
   startDate,
   team,
   contentEnabled = {},
+  allowWeekend = false,
+  allowFlexibleAdjustment = false,
 }) {
+  const schedulingOpts = {
+    allowWeekend: allowWeekend === true,
+    allowFlexibleAdjustment: allowFlexibleAdjustment === true,
+  };
   const reelsCount = contentEnabled.reels === false ? 0 : Number(packageCounts.noOfReels) || 0;
   const postsCount =
     contentEnabled.posts === false
@@ -211,10 +232,20 @@ async function generateCalendarDraft({
 
   const items = [];
 
-  // -----------------------------------
-  // Reels
-  // -----------------------------------
-  for (let i = 1; i <= reelsCount; i++) {
+  /** PROMPT 68 — same priority as `generateClientReels` (urgent → earliest posting cursor → normal). */
+  const draftWorkUnits = buildSortedWorkUnitsDraft(
+    baseStartDate,
+    reelsCount,
+    postsCount,
+    carouselsCount,
+    reelsMaxOffset,
+    postMaxOffset,
+    addDaysUTC
+  );
+
+  for (const unit of draftWorkUnits) {
+    if (unit.kind === "reel") {
+    const i = unit.index;
     const isUrgent = i <= 2;
     const staggerOffset = isUrgent ? (i - 1) * 1 : (i - 1) * 2;
     const postingExecutiveId = pickAssignedUserId(reelTeam, "postingExecutive");
@@ -224,7 +255,8 @@ async function generateCalendarDraft({
       "postingExecutive",
       postingExecutiveId,
       cursor,
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
 
     let postingKey = ymdUTC(postingDue);
@@ -233,7 +265,8 @@ async function generateCalendarDraft({
         "postingExecutive",
         postingExecutiveId,
         addDaysUTC(postingDue, 1),
-        holidaySet
+        holidaySet,
+        schedulingOpts
       );
       postingKey = ymdUTC(postingDue);
     }
@@ -253,7 +286,7 @@ async function generateCalendarDraft({
       status: "assigned",
     }));
 
-    items.push({
+    const reelItem = {
       contentId: `Reel #${i}`,
       title: `Reel #${i}`,
       type: "reel",
@@ -261,13 +294,13 @@ async function generateCalendarDraft({
       planType: isUrgent ? "urgent" : "normal",
       postingDate,
       stages: stagesFinal,
+    };
+    items.push({
+      ...reelItem,
+      tasks: normalizeDraftItemToDurationTasks(reelItem),
     });
-  }
-
-  // -----------------------------------
-  // Static Posts
-  // -----------------------------------
-  for (let i = 1; i <= postsCount; i++) {
+    } else if (unit.kind === "post") {
+    const i = unit.index;
     const staggerOffset = (i - 1) * 2;
     const postingExecutiveId = pickAssignedUserId(postTeam, "postingExecutive");
 
@@ -276,7 +309,8 @@ async function generateCalendarDraft({
       "postingExecutive",
       postingExecutiveId,
       cursor,
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
 
     let postingKey = ymdUTC(postingDue);
@@ -285,7 +319,8 @@ async function generateCalendarDraft({
         "postingExecutive",
         postingExecutiveId,
         addDaysUTC(postingDue, 1),
-        holidaySet
+        holidaySet,
+        schedulingOpts
       );
       postingKey = ymdUTC(postingDue);
     }
@@ -305,7 +340,7 @@ async function generateCalendarDraft({
       status: "assigned",
     }));
 
-    items.push({
+    const postItem = {
       contentId: `Post #${i}`,
       title: `Post #${i}`,
       type: "post",
@@ -313,13 +348,13 @@ async function generateCalendarDraft({
       planType: "normal",
       postingDate,
       stages: stagesFinal,
+    };
+    items.push({
+      ...postItem,
+      tasks: normalizeDraftItemToDurationTasks(postItem),
     });
-  }
-
-  // -----------------------------------
-  // Carousel
-  // -----------------------------------
-  for (let i = 1; i <= carouselsCount; i++) {
+    } else {
+    const i = unit.index;
     const staggerOffset = (i - 1) * 2;
     const postingExecutiveId = pickAssignedUserId(carouselTeam, "postingExecutive");
 
@@ -328,7 +363,8 @@ async function generateCalendarDraft({
       "postingExecutive",
       postingExecutiveId,
       cursor,
-      holidaySet
+      holidaySet,
+      schedulingOpts
     );
 
     let postingKey = ymdUTC(postingDue);
@@ -337,7 +373,8 @@ async function generateCalendarDraft({
         "postingExecutive",
         postingExecutiveId,
         addDaysUTC(postingDue, 1),
-        holidaySet
+        holidaySet,
+        schedulingOpts
       );
       postingKey = ymdUTC(postingDue);
     }
@@ -357,7 +394,7 @@ async function generateCalendarDraft({
       status: "assigned",
     }));
 
-    items.push({
+    const carouselItem = {
       contentId: `Carousel #${i}`,
       title: `Carousel #${i}`,
       type: "carousel",
@@ -365,7 +402,12 @@ async function generateCalendarDraft({
       planType: "normal",
       postingDate,
       stages: stagesFinal,
+    };
+    items.push({
+      ...carouselItem,
+      tasks: normalizeDraftItemToDurationTasks(carouselItem),
     });
+    }
   }
 
   const endDate = lastPostingDate ? ymdUTC(lastPostingDate) : null;

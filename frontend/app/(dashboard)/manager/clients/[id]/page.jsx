@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import {
   Calendar,
   ChevronLeft,
@@ -152,7 +152,6 @@ function statusBadge(status) {
 
 export default function ManagerClientDetailPage() {
   const params = useParams();
-  const router = useRouter();
   const id = params?.id;
 
   const [loading, setLoading] = useState(true);
@@ -167,8 +166,6 @@ export default function ManagerClientDetailPage() {
   const [openGoogleReviews, setOpenGoogleReviews] = useState(false);
   const [googleAchievedDraft, setGoogleAchievedDraft] = useState("");
   const [googleReviewsSaving, setGoogleReviewsSaving] = useState(false);
-  const [openReelDetail, setOpenReelDetail] = useState(false);
-  const [selectedContentId, setSelectedContentId] = useState(null);
   const [moreBriefFiles, setMoreBriefFiles] = useState({
     brandKit: [],
     socialCredentials: [],
@@ -215,26 +212,60 @@ export default function ManagerClientDetailPage() {
     }
   };
 
-  const loadClientCalendar = async () => {
+  const loadGlobalCalendars = async () => {
     try {
       setClientCalendarLoading(true);
-      const res = await api.getClientCalendar(id, month);
-      setClientCalendar(res?.data || []);
+      setTeamCalendarLoading(true);
+      const res = await api.getManagerGlobalCalendarFinal(month);
+      const tasks =
+        res?.data?.updatedTasks ||
+        res?.updatedTasks ||
+        res?.data?.tasks ||
+        res?.tasks ||
+        [];
+      const filtered = tasks.filter((task) => String(task?.clientId || "") === String(id));
+
+      const postingByContent = new Map();
+      filtered.forEach((task) => {
+        if (String(task?.stageName || "") !== "Post") return;
+        const postDate = (task?.dates || [])[0];
+        if (!postDate) return;
+        postingByContent.set(String(task.contentItemId), {
+          postingDate: postDate,
+          title: task.title,
+          planType: task.planType || "normal",
+        });
+      });
+      setClientCalendar(
+        [...postingByContent.values()].sort((a, b) => new Date(a.postingDate) - new Date(b.postingDate))
+      );
+
+      const byContent = new Map();
+      for (const task of filtered) {
+        const key = String(task.contentItemId || "");
+        if (!key) continue;
+        const item = byContent.get(key) || {
+          contentItemId: key,
+          title: task.title || "Untitled",
+          planType: task.planType || "normal",
+          stages: [],
+        };
+        const dueDate = (task.dates || []).slice(-1)[0] || null;
+        item.stages.push({
+          stageId: task.stageId || `${key}-${task.stageName}`,
+          stageName: task.stageName,
+          role: task.role,
+          assignedUser: (task.assignedUsers || [])[0] || null,
+          dueDate,
+          status: task.status,
+        });
+        byContent.set(key, item);
+      }
+      setTeamCalendar([...byContent.values()]);
     } catch (error) {
-      toast.error(error.message || "Failed to load client calendar");
+      toast.error(error.message || "Failed to load global calendar");
     } finally {
       setClientCalendarLoading(false);
-    }
-  };
-
-  const loadTeamCalendar = async () => {
-    try {
-      setTeamCalendarLoading(true);
-      const res = await api.getTeamCalendar(id, month);
-      setTeamCalendar(res?.data || []);
-    } catch (error) {
-      toast.error(error.message || "Failed to load team calendar");
-    } finally {
       setTeamCalendarLoading(false);
     }
   };
@@ -247,8 +278,7 @@ export default function ManagerClientDetailPage() {
 
   useEffect(() => {
     if (!id) return;
-    loadClientCalendar();
-    loadTeamCalendar();
+    loadGlobalCalendars();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, month]);
 
@@ -870,13 +900,6 @@ export default function ManagerClientDetailPage() {
               >
                 Team Calendar
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => router.push(`/manager/internal-calendar/${id}`)}
-              >
-                Internal Calendar
-              </Button>
             </div>
           </div>
 
@@ -947,7 +970,7 @@ export default function ManagerClientDetailPage() {
               <CardHeader>
                 <CardTitle>Team calendar</CardTitle>
                 <CardDescription>
-                  Stage view with assignees and status. Red border = Urgent plan reel.
+                  Stage view with assignees and status. Read-only and synced from global schedule. Red border = Urgent plan reel.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -977,26 +1000,11 @@ export default function ManagerClientDetailPage() {
                                 return (
                                   <div
                                     key={`${entry.itemTitle}-${entry.stageName}-${entry.dueDate}`}
-                                    className={`rounded-lg border bg-card px-2 py-2 cursor-pointer hover:bg-muted/30 ${
+                                    className={`rounded-lg border bg-card px-2 py-2 ${
                                       urgent
                                         ? "border-red-500/50 bg-red-500/5"
                                         : "border-border"
                                     }`}
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => {
-                                      if (!entry.contentItemId) return;
-                                      setSelectedContentId(entry.contentItemId);
-                                      setOpenReelDetail(true);
-                                    }}
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter" || e.key === " ") {
-                                        e.preventDefault();
-                                        if (!entry.contentItemId) return;
-                                        setSelectedContentId(entry.contentItemId);
-                                        setOpenReelDetail(true);
-                                      }
-                                    }}
                                   >
                                     <div className="flex items-start justify-between gap-2">
                                       <div className="min-w-0 text-left">
@@ -1065,18 +1073,6 @@ export default function ManagerClientDetailPage() {
             </DialogContent>
           </Dialog>
 
-          <ReelDetailDialog
-            open={openReelDetail}
-            onOpenChange={(v) => {
-              setOpenReelDetail(v);
-              if (!v) setSelectedContentId(null);
-            }}
-            contentId={selectedContentId}
-            viewerRole="manager"
-            onDidMutate={async () => {
-              await loadTeamCalendar();
-            }}
-          />
         </>
       ) : (
         <Card>

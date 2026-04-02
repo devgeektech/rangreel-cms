@@ -237,20 +237,28 @@ const toDraftType = (item) => {
   return "reel";
 };
 
+const { normalizeDraftItemToDurationTasks } = require("../services/taskNormalizer.service");
+
 const toDraftItems = (contentItems) => {
-  return (contentItems || []).map((item) => ({
-    contentId: item._id,
-    type: toDraftType(item),
-    stages: (item.workflowStages || []).map((stage) => ({
-      name: stage.stageName,
-      role: stage.role,
-      assignedUser: stage.assignedUser,
-      date: stage.dueDate,
-      status: stage.status || "assigned",
-    })),
-    postingDate: item.clientPostingDate,
-    isLocked: true,
-  }));
+  return (contentItems || []).map((item) => {
+    const draftItem = {
+      contentId: item._id,
+      type: toDraftType(item),
+      stages: (item.workflowStages || []).map((stage) => ({
+        name: stage.stageName,
+        role: stage.role,
+        assignedUser: stage.assignedUser,
+        date: stage.dueDate,
+        status: stage.status || "assigned",
+      })),
+      postingDate: item.clientPostingDate,
+      isLocked: true,
+    };
+    return {
+      ...draftItem,
+      tasks: normalizeDraftItemToDurationTasks(draftItem),
+    };
+  });
 };
 
 const createClient = async (req, res) => {
@@ -368,13 +376,17 @@ const createClient = async (req, res) => {
             const normalizedStages = normalizeCustomStageRows(row.stages || []);
             validateStages(normalizedStages);
             validatePhaseOrderByName(normalizedStages);
-            return {
+            const item = {
               contentId: row.contentItemId || row.contentId || `custom-${idx + 1}`,
               type: row.type,
               title: row.title || row.contentItemId || `Item ${idx + 1}`,
               postingDate: row.postingDate,
               isLocked: true,
               stages: normalizedStages,
+            };
+            return {
+              ...item,
+              tasks: normalizeDraftItemToDurationTasks(item),
             };
           });
           draftToPersist = { items: builtItems };
@@ -389,7 +401,9 @@ const createClient = async (req, res) => {
             const normalizedStages = normalizeCustomStageRows(row.stages);
             validateStages(normalizedStages);
             validatePhaseOrderByName(normalizedStages);
-            nextItems[idx] = { ...nextItems[idx], stages: normalizedStages };
+            const merged = { ...nextItems[idx], stages: normalizedStages };
+            merged.tasks = normalizeDraftItemToDurationTasks(merged);
+            nextItems[idx] = merged;
           }
           draftToPersist = { ...draftToPersist, items: nextItems };
         }
@@ -405,7 +419,12 @@ const createClient = async (req, res) => {
       }
     } else {
       // Prompt 16: only run the new simple calendar service.
-      await generateClientReels(client);
+      // Prompt 66: manager requests enable weekend + flexible scheduler overrides.
+      const isManager = req.user?.roleType === "manager";
+      await generateClientReels(client, {
+        allowWeekend: isManager,
+        allowFlexibleAdjustment: isManager,
+      });
     }
 
     // Prompt 68: keep an editable draft copy in sync with generated ContentItems.

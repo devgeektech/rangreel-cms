@@ -2,6 +2,13 @@ const ContentItem = require("../models/ContentItem");
 // const PublicHoliday = require("../models/PublicHoliday"); // Prompt 20 safe cleanup: keep model, stop using in runtime flow.
 const Client = require("../models/Client");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
+const Leave = require("../models/Leave");
+const {
+  scheduleStageDay,
+  buildHolidaySetUTC,
+} = require("../services/simpleCalendar.service");
+const { validateStagesNotAfterPosting } = require("../services/stageBoundary.service");
+const { normalizeDraftItemToDurationTasks } = require("../services/taskNormalizer.service");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -33,6 +40,29 @@ const addDaysUTC = (d, days) => {
   next.setUTCDate(next.getUTCDate() + days);
   return next;
 };
+
+const USER_EDITABLE_STAGES = new Set(["Plan", "Shoot", "Edit", "Approval"]);
+
+async function fetchLeavesForUsers(userIds, startDate, endDate) {
+  const ids = (userIds || []).filter(Boolean).map((x) => String(x));
+  if (ids.length === 0) return [];
+  const leavesDocs = await Leave.find({
+    userId: { $in: ids },
+    startDate: { $lte: endDate },
+    endDate: { $gte: startDate },
+  }).lean();
+
+  return (leavesDocs || []).map((doc) => ({
+    userId: doc.userId && doc.userId._id ? String(doc.userId._id) : String(doc.userId),
+    from: doc.startDate,
+    to: doc.endDate,
+    reason: doc.reason || "",
+  }));
+}
+
+function toStageDateList(stages) {
+  return (stages || []).map((s) => ({ stageName: s.stageName, dueDate: s.dueDate }));
+}
 
 const canReadContentItem = async (req, contentItem) => {
   // Prompt 30: all authenticated roles can VIEW reel details.
@@ -113,6 +143,15 @@ const reshuffleStage = async (req, res) => {
     const stageIndex = getStageIndexById(contentItem.workflowStages, stageId);
     if (stageIndex === -1) return failure(res, "Stage not found", 404);
 
+    // PROMPT 82: global-only edits must fetch ALL ContentItems.
+    await ContentItem.find({}).select("_id").lean();
+
+    const targetStage = contentItem.workflowStages[stageIndex];
+    const targetStageName = String(targetStage?.stageName || "");
+    if (targetStageName === "Post") {
+      return failure(res, "Posting date cannot be changed", 400);
+    }
+
     // Manager reshuffle must be constrained by client ownership.
     const client = await Client.findOne({
       _id: contentItem.client,
@@ -151,9 +190,120 @@ const reshuffleStage = async (req, res) => {
       }
     }
 
-    // Update only stage.dueDate. Never touch clientPostingDate.
-    contentItem.workflowStages[stageIndex].dueDate = normalizedDueDate;
+    // PROMPT 82: run global scheduler for this stage and shift following editable stages.
+    const postStage = (contentItem.workflowStages || []).find(
+      (s) => String(s?.stageName || "") === "Post"
+    );
+    const postingDate = postStage?.dueDate ? normalizeUtcMidnight(postStage.dueDate) : null;
+
+    const schedulingLeaves = await fetchLeavesForUsers(
+      (contentItem.workflowStages || [])
+        .filter((s) => USER_EDITABLE_STAGES.has(String(s?.stageName || "")) && s?.assignedUser)
+        .map((s) => s.assignedUser),
+      addDaysUTC(normalizedDueDate, -120),
+      addDaysUTC(normalizedDueDate, 365)
+    );
+
+    const holidaySet = await buildHolidaySetUTC(
+      addDaysUTC(normalizedDueDate, -120),
+      postingDate ? addDaysUTC(postingDate, 365) : addDaysUTC(normalizedDueDate, 365)
+    );
+
+    const schedulingOpts = {
+      allowWeekend: true,
+      allowFlexibleAdjustment: true,
+      leaves: schedulingLeaves,
+      excludeContentItemId: contentItem._id,
+    };
+
+    const oldTargetDate = normalizeUtcMidnight(targetStage?.dueDate);
+    const resolvedTarget = await scheduleStageDay(
+      targetStage.role,
+      targetStage.assignedUser,
+      normalizedDueDate,
+      holidaySet,
+      schedulingOpts
+    );
+    if (!resolvedTarget) return failure(res, "Failed to resolve scheduled date", 409);
+
+    if (postingDate && resolvedTarget.getTime() >= postingDate.getTime()) {
+      return failure(res, "Cannot maintain post date", 409);
+    }
+
+    contentItem.workflowStages[stageIndex].dueDate = resolvedTarget;
+
+    const deltaMs = oldTargetDate
+      ? resolvedTarget.getTime() - oldTargetDate.getTime()
+      : 0;
+
+    for (let i = stageIndex + 1; i < contentItem.workflowStages.length; i++) {
+      const s = contentItem.workflowStages[i];
+      const name = String(s?.stageName || "");
+      if (!USER_EDITABLE_STAGES.has(name)) break; // stop at Post
+      if (!s?.assignedUser) continue;
+
+      const oldNextDate =
+        normalizeUtcMidnight(s.dueDate) ||
+        addDaysUTC(resolvedTarget, i - stageIndex);
+      let anchor = normalizeUtcMidnight(
+        addDaysUTC(oldNextDate, Math.round(deltaMs / 86400000))
+      );
+      if (!anchor) anchor = addDaysUTC(resolvedTarget, i - stageIndex);
+
+      if (postingDate && anchor.getTime() >= postingDate.getTime()) {
+        return failure(res, "Cannot maintain post date", 409);
+      }
+
+      const nextDue = await scheduleStageDay(
+        s.role,
+        s.assignedUser,
+        anchor,
+        holidaySet,
+        schedulingOpts
+      );
+      if (postingDate && nextDue.getTime() >= postingDate.getTime()) {
+        return failure(res, "Cannot maintain post date", 409);
+      }
+
+      s.dueDate = nextDue;
+    }
+
+    // Final hard check: no stage can move beyond Post; keep strict order.
+    validateStrictStageOrder(
+      contentItem.workflowStages.map((ws) => ({
+        stageName: ws.stageName,
+        dueDate: ws.dueDate,
+      }))
+    );
+    const boundary = validateStagesNotAfterPosting(
+      contentItem.workflowStages,
+      postingDate
+    );
+    if (!boundary.ok) {
+      return failure(res, "Cannot maintain post date", 409);
+    }
+
     await contentItem.save();
+
+    // Keep editable draft copy in sync (timeline UI uses ClientScheduleDraft).
+    const draft = await ClientScheduleDraft.findOne({ "items.contentId": contentItem._id });
+    if (draft) {
+      const draftItem = (draft.items || []).find(
+        (it) => String(it.contentId) === String(contentItem._id)
+      );
+      if (draftItem) {
+        draftItem.stages = (draftItem.stages || []).map((s) => {
+          const ws = (contentItem.workflowStages || []).find(
+            (x) => String(x.stageName || "") === String(s.name || "")
+          );
+          if (!ws) return s;
+          if (String(s.name || "") === "Post") return s;
+          return { ...s, date: ws.dueDate, status: s.status || "assigned" };
+        });
+        draftItem.tasks = normalizeDraftItemToDurationTasks(draftItem);
+        await draft.save();
+      }
+    }
 
     return success(res, {
       itemId: contentItem._id,
@@ -314,6 +464,9 @@ const patchContentItemStages = async (req, res) => {
       return failure(res, "stages is required", 400);
     }
 
+    // PROMPT 82: global-only edits must fetch ALL ContentItems.
+    await ContentItem.find({}).select("_id").lean();
+
     const contentItem = await ContentItem.findById(id);
     if (!contentItem) return failure(res, "ContentItem not found", 404);
 
@@ -323,6 +476,12 @@ const patchContentItemStages = async (req, res) => {
     const incomingByName = new Map(
       stages.map((s) => [String(s?.stageName || s?.name || ""), normalizeUtcMidnight(s?.dueDate || s?.date)])
     );
+
+    const postStage = (contentItem.workflowStages || []).find(
+      (s) => String(s?.stageName || "") === "Post"
+    );
+    const postingDate = postStage?.dueDate ? normalizeUtcMidnight(postStage.dueDate) : null;
+    if (!postingDate) return failure(res, "Cannot maintain post date", 409);
 
     const postExisting = (contentItem.workflowStages || []).find(
       (s) => String(s?.stageName || "") === "Post"
@@ -335,37 +494,131 @@ const patchContentItemStages = async (req, res) => {
       }
     }
 
-    const nextWorkflowStages = (contentItem.workflowStages || []).map((ws) => {
-      const key = String(ws.stageName || "");
-      const incomingDate = incomingByName.get(key);
-      if (!incomingDate || key === "Post") return ws;
-      ws.dueDate = incomingDate;
-      return ws;
-    });
+    const stageOrderIndex = {
+      Plan: 0,
+      Shoot: 1,
+      Edit: 2,
+      Approval: 3,
+      Post: 4,
+    };
 
-    validateStrictStageOrder(
-      nextWorkflowStages.map((ws) => ({ stageName: ws.stageName, dueDate: ws.dueDate }))
+    // Compute earliest changed editable stage.
+    const oldDueByName = new Map(
+      (contentItem.workflowStages || []).map((ws) => [String(ws.stageName || ""), normalizeUtcMidnight(ws.dueDate)])
     );
 
-    contentItem.workflowStages = nextWorkflowStages;
+    let targetStageName = null;
+    for (const name of ["Plan", "Shoot", "Edit", "Approval"]) {
+      if (!incomingByName.has(name)) continue;
+      const oldD = oldDueByName.get(name);
+      const newD = incomingByName.get(name);
+      if (!oldD || !newD) continue;
+      if (oldD.getTime() !== newD.getTime()) {
+        targetStageName = name;
+        break;
+      }
+    }
+
+    if (!targetStageName) {
+      // Nothing editable changed.
+      return success(res, { itemId: contentItem._id });
+    }
+
+    const oldTarget = oldDueByName.get(targetStageName);
+    const newTarget = incomingByName.get(targetStageName);
+    if (!oldTarget || !newTarget) return failure(res, "Invalid stage dates", 400);
+
+    const deltaDays = Math.round((newTarget.getTime() - oldTarget.getTime()) / 86400000);
+
+    const windowStart = addDaysUTC(oldTarget, -120);
+    const windowEnd = addDaysUTC(postingDate, 365);
+    const holidaySet = await buildHolidaySetUTC(windowStart, windowEnd);
+
+    const assignedUsers = (contentItem.workflowStages || [])
+      .filter((s) => USER_EDITABLE_STAGES.has(String(s?.stageName || "")) && s?.assignedUser)
+      .map((s) => s.assignedUser);
+
+    const leaves = await fetchLeavesForUsers(assignedUsers, windowStart, windowEnd);
+
+    const schedulingOpts = {
+      allowWeekend: true,
+      allowFlexibleAdjustment: true,
+      leaves,
+      excludeContentItemId: contentItem._id,
+    };
+
+    // Reschedule only from target stage forward.
+    let prevResolvedDue = null;
+    const startIdx = stageOrderIndex[targetStageName];
+    for (let i = 0; i < (contentItem.workflowStages || []).length; i++) {
+      const ws = contentItem.workflowStages[i];
+      const name = String(ws.stageName || "");
+      if (!USER_EDITABLE_STAGES.has(name)) continue;
+
+      const order = stageOrderIndex[name];
+      if (order < startIdx) continue;
+      if (!ws?.assignedUser) continue;
+
+      const baseOldDue = oldDueByName.get(name);
+      const incomingDate = incomingByName.get(name);
+
+      // Prefer incoming anchor for target stage; for other stages use delta shift when incoming not provided.
+      let anchor = incomingDate
+        ? incomingDate
+        : baseOldDue
+        ? addDaysUTC(baseOldDue, deltaDays)
+        : normalizeUtcMidnight(ws.dueDate);
+
+      if (!anchor) continue;
+      if (prevResolvedDue && anchor.getTime() <= prevResolvedDue.getTime()) {
+        anchor = addDaysUTC(prevResolvedDue, 1);
+      }
+
+      const resolved = await scheduleStageDay(
+        ws.role,
+        ws.assignedUser,
+        anchor,
+        holidaySet,
+        schedulingOpts
+      );
+
+      if (postingDate && resolved.getTime() >= postingDate.getTime()) {
+        return failure(res, "Cannot maintain post date", 409);
+      }
+
+      ws.dueDate = resolved;
+      prevResolvedDue = resolved;
+    }
+
+    validateStrictStageOrder(
+      contentItem.workflowStages.map((ws) => ({
+        stageName: ws.stageName,
+        dueDate: ws.dueDate,
+      }))
+    );
+
+    const boundary = validateStagesNotAfterPosting(contentItem.workflowStages, postingDate);
+    if (!boundary.ok) {
+      return failure(res, "Cannot maintain post date", 409);
+    }
+
+    // Persist.
     await contentItem.save();
 
+    // Keep editable draft copy in sync.
     const draft = await ClientScheduleDraft.findOne({ "items.contentId": contentItem._id });
     if (draft) {
       const item = (draft.items || []).find((it) => String(it.contentId) === String(contentItem._id));
       if (item) {
         item.stages = (item.stages || []).map((s) => {
           const key = String(s.name || "");
-          const incomingDate = incomingByName.get(key);
-          if (!incomingDate || key === "Post") return s;
-          s.date = incomingDate;
-          return s;
+          const ws = (contentItem.workflowStages || []).find((x) => String(x.stageName || "") === key);
+          if (!ws || key === "Post") return s;
+          return { ...s, date: ws.dueDate, status: s.status || "assigned" };
         });
-        validateStrictStageOrder(
-          (item.stages || []).map((s) => ({ stageName: s.name, dueDate: s.date }))
-        );
+        item.tasks = normalizeDraftItemToDurationTasks(item);
+        await draft.save();
       }
-      await draft.save();
     }
 
     return success(res, { itemId: contentItem._id });

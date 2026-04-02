@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const ContentItem = require("../models/ContentItem");
 const TeamCapacity = require("../models/TeamCapacity");
+const { isUserOnLeaveForDay } = require("./availability.service");
 
 /** Prompt 51: max forward search; prevents infinite loops when permanently overloaded. */
 const MAX_SEARCH_DAYS = 365;
@@ -52,15 +53,18 @@ function resolveRoleCapacity(capDoc) {
  * Prompt 49: scans ALL content items — no clientId filter — so one editor on five clients still shares one daily cap.
  * Only stages with status !== "completed" are counted.
  */
-async function countActiveStagesOnDay(role, userId, dayStartUTC) {
+async function countActiveStagesOnDay(role, userId, dayStartUTC, options = {}) {
   const uid = toObjectId(userId);
   if (!uid) {
     throw new Error("Invalid assignedUser");
   }
   const dayEnd = addDaysUTC(dayStartUTC, 1);
+  const excludeId = options.excludeContentItemId
+    ? toObjectId(options.excludeContentItemId)
+    : null;
 
   const [row] = await ContentItem.aggregate([
-    { $match: {} },
+    { $match: excludeId ? { _id: { $ne: excludeId } } : {} },
     { $unwind: "$workflowStages" },
     {
       $match: {
@@ -99,11 +103,18 @@ async function getNextAvailableDate(role, assignedUser, startDate, options = {})
     ? options.capacityDelta
     : 0;
   const threshold = roleCapacity + Math.max(0, capacityDelta);
+  const leaves = Array.isArray(options?.leaves) ? options.leaves : [];
 
   let d = startOfDayUTC(startDate);
 
   for (let i = 0; i < MAX_SEARCH_DAYS; i++) {
-    const count = await countActiveStagesOnDay(role, assignedUser, d);
+    if (leaves.length > 0 && isUserOnLeaveForDay(assignedUser, d, leaves)) {
+      d = addDaysUTC(d, 1);
+      continue;
+    }
+    const count = await countActiveStagesOnDay(role, assignedUser, d, {
+      excludeContentItemId: options.excludeContentItemId,
+    });
     if (count < threshold) {
       return d;
     }
@@ -151,17 +162,27 @@ async function suggestNextAvailableSlots(role, userId, requestedDate, options = 
     ? options.capacityDelta
     : 0;
   const threshold = roleCapacity + Math.max(0, capacityDelta);
+  const leaves = Array.isArray(options?.leaves) ? options.leaves : [];
   const requested = startOfDayUTC(requestedDate);
 
-  const requestedCount = await countActiveStagesOnDay(role, uid, requested);
-  if (requestedCount < threshold) {
-    return [toYMDUTC(requested)];
+  if (!(leaves.length > 0 && isUserOnLeaveForDay(uid, requested, leaves))) {
+    const requestedCount = await countActiveStagesOnDay(role, uid, requested, {
+      excludeContentItemId: options.excludeContentItemId,
+    });
+    if (requestedCount < threshold) {
+      return [toYMDUTC(requested)];
+    }
   }
 
   const candidates = [];
   for (let i = 1; i <= 7; i++) {
     const nextDate = addDaysUTC(requested, i);
-    const count = await countActiveStagesOnDay(role, uid, nextDate);
+    if (leaves.length > 0 && isUserOnLeaveForDay(uid, nextDate, leaves)) {
+      continue;
+    }
+    const count = await countActiveStagesOnDay(role, uid, nextDate, {
+      excludeContentItemId: options.excludeContentItemId,
+    });
     if (count < threshold) {
       candidates.push({ date: nextDate, count, offset: i });
     }
@@ -180,6 +201,7 @@ module.exports = {
   getNextAvailableDate,
   suggestNextAvailableSlots,
   countActiveStagesOnDay,
+  resolveRoleCapacity,
   MAX_SEARCH_DAYS,
   DEFAULT_DAILY_CAPACITY,
 };
