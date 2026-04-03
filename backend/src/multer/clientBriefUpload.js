@@ -17,6 +17,7 @@ const BRIEF_UPLOAD_FIELDS = [
     slug: "social-credentials",
   },
   { field: "other", arrayKey: "otherBriefFiles", slug: "other" },
+  { field: "agreement", arrayKey: "agreementFiles", slug: "agreement" },
 ];
 
 const fieldToMeta = Object.fromEntries(BRIEF_UPLOAD_FIELDS.map((m) => [m.field, m]));

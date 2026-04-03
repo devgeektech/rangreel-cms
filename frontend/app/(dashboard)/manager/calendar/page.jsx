@@ -94,14 +94,14 @@ function normalizeRoleKey(value) {
 }
 
 const CLIENT_COLOR_PALETTE = [
-  { bg: "rgba(59,130,246,0.2)", border: "rgba(59,130,246,0.7)", text: "#dbeafe" },
-  { bg: "rgba(16,185,129,0.2)", border: "rgba(16,185,129,0.7)", text: "#d1fae5" },
-  { bg: "rgba(244,114,182,0.2)", border: "rgba(244,114,182,0.7)", text: "#fce7f3" },
-  { bg: "rgba(250,204,21,0.2)", border: "rgba(250,204,21,0.7)", text: "#fef9c3" },
-  { bg: "rgba(168,85,247,0.2)", border: "rgba(168,85,247,0.7)", text: "#f3e8ff" },
-  { bg: "rgba(34,211,238,0.2)", border: "rgba(34,211,238,0.7)", text: "#cffafe" },
-  { bg: "rgba(251,146,60,0.2)", border: "rgba(251,146,60,0.7)", text: "#ffedd5" },
-  { bg: "rgba(129,140,248,0.2)", border: "rgba(129,140,248,0.7)", text: "#e0e7ff" },
+  { bg: "rgba(59,130,246,0.10)", border: "rgba(59,130,246,0.55)" },
+  { bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.55)" },
+  { bg: "rgba(244,114,182,0.10)", border: "rgba(244,114,182,0.55)" },
+  { bg: "rgba(250,204,21,0.10)", border: "rgba(234,179,8,0.60)" },
+  { bg: "rgba(168,85,247,0.10)", border: "rgba(168,85,247,0.55)" },
+  { bg: "rgba(34,211,238,0.10)", border: "rgba(34,211,238,0.55)" },
+  { bg: "rgba(251,146,60,0.10)", border: "rgba(249,115,22,0.55)" },
+  { bg: "rgba(129,140,248,0.10)", border: "rgba(129,140,248,0.55)" },
 ];
 
 function hashClientKey(input) {
@@ -731,7 +731,6 @@ export default function ManagerGlobalCalendarPage() {
                               const normalStyle = {
                                 backgroundColor: clientColor.bg,
                                 borderColor: clientColor.border,
-                                color: clientColor.text,
                               };
 
                               return (
@@ -753,7 +752,7 @@ export default function ManagerGlobalCalendarPage() {
                                   className={`border px-2 py-1.5 text-xs leading-snug shadow-sm ${
                                     hasConflict
                                       ? "border-red-600/80 bg-red-500/10 text-red-700 dark:text-red-200"
-                                      : ""
+                                      : "text-foreground dark:text-slate-100"
                                   } ${isStart ? "rounded-l" : "rounded-l-none"} ${isEnd ? "rounded-r" : "rounded-r-none"} ${
                                     onLeave || isHoliday || isFull ? "cursor-not-allowed opacity-80" : ""
                                   } ${dragBusy ? "opacity-70" : ""} cursor-pointer`}
@@ -783,7 +782,7 @@ export default function ManagerGlobalCalendarPage() {
                                           className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
                                             urgent
                                               ? "bg-red-600/80 text-white"
-                                              : "bg-slate-600/70 text-slate-100"
+                                              : "border border-border bg-background/80 text-foreground"
                                           }`}
                                         >
                                           {planType}
