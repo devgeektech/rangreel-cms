@@ -12,7 +12,10 @@ const TeamCapacity = require("../models/TeamCapacity");
 const { getAvailableUsers } = require("./availability.service");
 const { ROLE_RULES } = require("../config/roleRules");
 const { tryBorrowOneDayFromNextStage } = require("./durationBorrowing.service");
-const { buildAssignedUsersPerDayFromSchedule } = require("./taskNormalizer.service");
+const {
+  buildAssignedUsersPerDayFromSchedule,
+  normalizeDraftItemToDurationTasks,
+} = require("./taskNormalizer.service");
 const { buildSortedWorkUnitsClientGeneration } = require("./schedulerPriority.service");
 
 /** workflowStages[].role → ROLE_RULES key (Prompt 62). */
@@ -36,10 +39,26 @@ function getDurationExtensionMeta(workflowRole) {
 }
 
 // Prompt 34: force date storage as pure UTC midnight.
+// YYYY-MM-DD must be parsed as UTC calendar date (local getDate() breaks ISO date strings in US TZs).
 function createUTCDate(date) {
-  const d = date instanceof Date ? date : new Date(date);
+  if (date instanceof Date) {
+    if (Number.isNaN(date.getTime())) return null;
+    return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  }
+  if (typeof date === "string") {
+    const t = date.trim();
+    const m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      const y = Number(m[1]);
+      const mo = Number(m[2]);
+      const day = Number(m[3]);
+      if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(day)) return null;
+      return new Date(Date.UTC(y, mo - 1, day));
+    }
+  }
+  const d = new Date(date);
   if (Number.isNaN(d.getTime())) return null;
-  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
 
 const addDaysUTC = (date, days) => {
@@ -550,10 +569,461 @@ async function fillMultiDaySlots(role, userId, startFrom, nDays, holidaySet, opt
 }
 
 /**
+ * Core reel pipeline dates — shared by `generateClientReels` and `generateCalendarDraft` so preview matches DB.
+ * Forward from stagger anchor: urgent reels = one effective business day per stage (strategist → … → post).
+ */
+async function computeReelStageDatesForGeneration({
+  i,
+  isUrgent,
+  baseStartDate,
+  holidaySet,
+  schedulingOpts,
+  strategistId,
+  videographerId,
+  videoEditorId,
+  managerId,
+  postingExecutiveId,
+  usedReelPostingDayKeys,
+}) {
+  const staggerOffset = isUrgent ? (i - 1) * 1 : (i - 1) * 2;
+  const reelStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+  const reelStartDate = createUTCDate(
+    nextValidWorkdayUTC(reelStartSeed, holidaySet, schedulingOpts)
+  );
+  const planDue = await scheduleStageDay(
+    "strategist",
+    strategistId,
+    reelStartDate,
+    holidaySet,
+    schedulingOpts
+  );
+
+  let shootDue;
+  let editDue;
+  let approvalDue;
+  let postDue;
+
+  const bufferOpts = {
+    includeAssignees: true,
+    capacityDelta: isUrgent ? 1 : 0,
+    allowWeekend: schedulingOpts.allowWeekend,
+    allowFlexibleAdjustment: !isUrgent && schedulingOpts.allowFlexibleAdjustment,
+    leaves: schedulingOpts.leaves,
+    splitAcrossUsers: false,
+  };
+
+  const reelDurationPlan = {
+    strategist: 1,
+    videographer: isUrgent ? 1 : 3,
+    videoEditor: isUrgent ? 1 : 2,
+    manager: isUrgent ? 1 : 3,
+    postingExecutive: 1,
+  };
+  const borrowReel = (currentRole) => () => {
+    if (isUrgent) return { ok: false, reason: "urgent_no_borrowing" };
+    return tryBorrowOneDayFromNextStage(currentRole, reelDurationPlan, "reel");
+  };
+
+  if (isUrgent) {
+    const shootStart = addDaysUTC(planDue, 1);
+    const shootOut = await fillMultiDaySlots(
+      "videographer",
+      videographerId,
+      shootStart,
+      reelDurationPlan.videographer,
+      holidaySet,
+      { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videographer") }
+    );
+    warnIfSubstitutes("Shoot", videographerId, shootOut.assignees);
+    shootDue = shootOut.dates[0];
+
+    const editStart = addDaysUTC(shootDue, 1);
+    const editOut = await fillMultiDaySlots(
+      "videoEditor",
+      videoEditorId,
+      editStart,
+      reelDurationPlan.videoEditor,
+      holidaySet,
+      { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videoEditor") }
+    );
+    warnIfSubstitutes("Edit", videoEditorId, editOut.assignees);
+    editDue = editOut.dates[0];
+
+    const approvalStart = editDue;
+    approvalDue = await scheduleStageDay(
+      "manager",
+      managerId,
+      approvalStart,
+      holidaySet,
+      schedulingOpts
+    );
+
+    const postStart = addDaysUTC(approvalDue, 1);
+    const postOut = await fillMultiDaySlots(
+      "postingExecutive",
+      postingExecutiveId,
+      postStart,
+      reelDurationPlan.postingExecutive,
+      holidaySet,
+      { ...bufferOpts, tryBorrowFromNextStage: borrowReel("postingExecutive") }
+    );
+    warnIfSubstitutes("Post", postingExecutiveId, postOut.assignees);
+    postDue = postOut.dates[0];
+  } else {
+    const shootStart = addDaysUTC(planDue, 1);
+    const shootOut = await fillMultiDaySlots(
+      "videographer",
+      videographerId,
+      shootStart,
+      reelDurationPlan.videographer,
+      holidaySet,
+      { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videographer") }
+    );
+    warnIfSubstitutes("Shoot", videographerId, shootOut.assignees);
+    shootDue = shootOut.dates[shootOut.dates.length - 1];
+
+    const editStart = addDaysUTC(shootDue, 1);
+    const editOut = await fillMultiDaySlots(
+      "videoEditor",
+      videoEditorId,
+      editStart,
+      reelDurationPlan.videoEditor,
+      holidaySet,
+      { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videoEditor") }
+    );
+    warnIfSubstitutes("Edit", videoEditorId, editOut.assignees);
+    editDue = editOut.dates[editOut.dates.length - 1];
+
+    const approvalStart = addDaysUTC(editDue, 1);
+    const approvalOut = await fillMultiDaySlots(
+      "manager",
+      managerId,
+      approvalStart,
+      reelDurationPlan.manager,
+      holidaySet,
+      { ...bufferOpts, tryBorrowFromNextStage: borrowReel("manager") }
+    );
+    warnIfSubstitutes("Approval", managerId, approvalOut.assignees);
+    approvalDue = approvalOut.dates[approvalOut.dates.length - 1];
+
+    const postStart = addDaysUTC(approvalDue, 1);
+    const postOut = await fillMultiDaySlots(
+      "postingExecutive",
+      postingExecutiveId,
+      postStart,
+      reelDurationPlan.postingExecutive,
+      holidaySet,
+      { ...bufferOpts, tryBorrowFromNextStage: borrowReel("postingExecutive") }
+    );
+    warnIfSubstitutes("Post", postingExecutiveId, postOut.assignees);
+    postDue = postOut.dates[0];
+  }
+
+  let postingKey = ymdUTC(postDue);
+  while (postingKey && usedReelPostingDayKeys.has(postingKey)) {
+    postDue = await scheduleStageDay(
+      "postingExecutive",
+      postingExecutiveId,
+      addDaysUTC(postDue, 1),
+      holidaySet,
+      schedulingOpts
+    );
+    postingKey = ymdUTC(postDue);
+  }
+  if (postingKey) usedReelPostingDayKeys.add(postingKey);
+
+  return { planDue, shootDue, editDue, approvalDue, postDue };
+}
+
+async function buildReelItemForCalendarDraft({
+  i,
+  isUrgent,
+  baseStartDate,
+  holidaySet,
+  schedulingOpts,
+  reelTeam,
+  usedReelPostingDayKeys,
+}) {
+  const strategistId = reelTeam.strategist?._id || reelTeam.strategist;
+  const videographerId = reelTeam.videographer?._id || reelTeam.videographer;
+  const videoEditorId = reelTeam.videoEditor?._id || reelTeam.videoEditor;
+  const managerId = reelTeam.manager?._id || reelTeam.manager;
+  const postingExecutiveId = reelTeam.postingExecutive?._id || reelTeam.postingExecutive;
+
+  const { planDue, shootDue, editDue, approvalDue, postDue } = await computeReelStageDatesForGeneration({
+    i,
+    isUrgent,
+    baseStartDate,
+    holidaySet,
+    schedulingOpts,
+    strategistId,
+    videographerId,
+    videoEditorId,
+    managerId,
+    postingExecutiveId,
+    usedReelPostingDayKeys,
+  });
+
+  const postingDate = ymdUTC(postDue);
+  const reelItem = {
+    contentId: `Reel #${i}`,
+    title: `Reel #${i}`,
+    type: "reel",
+    plan: isUrgent ? "urgent" : "normal",
+    planType: isUrgent ? "urgent" : "normal",
+    postingDate,
+    stages: [
+      {
+        name: "Plan",
+        role: "strategist",
+        assignedUser: strategistId || undefined,
+        date: ymdUTC(planDue),
+        status: "assigned",
+      },
+      {
+        name: "Shoot",
+        role: "videographer",
+        assignedUser: videographerId || undefined,
+        date: ymdUTC(shootDue),
+        status: "assigned",
+      },
+      {
+        name: "Edit",
+        role: "videoEditor",
+        assignedUser: videoEditorId || undefined,
+        date: ymdUTC(editDue),
+        status: "assigned",
+      },
+      {
+        name: "Approval",
+        role: "manager",
+        assignedUser: managerId || undefined,
+        date: ymdUTC(approvalDue),
+        status: "assigned",
+      },
+      {
+        name: "Post",
+        role: "postingExecutive",
+        assignedUser: postingExecutiveId || undefined,
+        date: ymdUTC(postDue),
+        status: "assigned",
+      },
+    ],
+  };
+  return { ...reelItem, tasks: normalizeDraftItemToDurationTasks(reelItem) };
+}
+
+async function buildPostItemForCalendarDraft({
+  i,
+  baseStartDate,
+  holidaySet,
+  schedulingOpts,
+  postTeam,
+  usedPostPostingDayKeys,
+}) {
+  const postStrategistId = postTeam.strategist?._id || postTeam.strategist;
+  const postDesignerId = postTeam.graphicDesigner?._id || postTeam.graphicDesigner;
+  const postManagerId = postTeam.manager?._id || postTeam.manager;
+  const postPostingExecutiveId = postTeam.postingExecutive?._id || postTeam.postingExecutive;
+
+  const staggerOffset = (i - 1) * 2;
+  const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+  const itemStartDate = createUTCDate(
+    nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
+  );
+
+  const planDue = await scheduleStageDay(
+    "strategist",
+    postStrategistId,
+    itemStartDate,
+    holidaySet,
+    schedulingOpts
+  );
+  const designDue = await scheduleStageDay(
+    "graphicDesigner",
+    postDesignerId,
+    addDaysUTC(planDue, 1),
+    holidaySet,
+    schedulingOpts
+  );
+  const approvalDue = await scheduleStageDay(
+    "manager",
+    postManagerId,
+    designDue,
+    holidaySet,
+    schedulingOpts
+  );
+  let postDue = await scheduleStageDay(
+    "postingExecutive",
+    postPostingExecutiveId,
+    addDaysUTC(approvalDue, 1),
+    holidaySet,
+    schedulingOpts
+  );
+
+  let postingKey = ymdUTC(postDue);
+  while (postingKey && usedPostPostingDayKeys.has(postingKey)) {
+    postDue = await scheduleStageDay(
+      "postingExecutive",
+      postPostingExecutiveId,
+      addDaysUTC(postDue, 1),
+      holidaySet,
+      schedulingOpts
+    );
+    postingKey = ymdUTC(postDue);
+  }
+  if (postingKey) usedPostPostingDayKeys.add(postingKey);
+
+  const postingDate = ymdUTC(postDue);
+  const postItem = {
+    contentId: `Post #${i}`,
+    title: `Post #${i}`,
+    type: "post",
+    plan: "normal",
+    planType: "normal",
+    postingDate,
+    stages: [
+      {
+        name: "Plan",
+        role: "strategist",
+        assignedUser: postStrategistId || undefined,
+        date: ymdUTC(planDue),
+        status: "assigned",
+      },
+      {
+        name: "Design",
+        role: "graphicDesigner",
+        assignedUser: postDesignerId || undefined,
+        date: ymdUTC(designDue),
+        status: "assigned",
+      },
+      {
+        name: "Approval",
+        role: "manager",
+        assignedUser: postManagerId || undefined,
+        date: ymdUTC(approvalDue),
+        status: "assigned",
+      },
+      {
+        name: "Post",
+        role: "postingExecutive",
+        assignedUser: postPostingExecutiveId || undefined,
+        date: ymdUTC(postDue),
+        status: "assigned",
+      },
+    ],
+  };
+  return { ...postItem, tasks: normalizeDraftItemToDurationTasks(postItem) };
+}
+
+async function buildCarouselItemForCalendarDraft({
+  i,
+  baseStartDate,
+  holidaySet,
+  schedulingOpts,
+  carouselTeam,
+  usedCarouselPostingDayKeys,
+}) {
+  const carouselStrategistId = carouselTeam.strategist?._id || carouselTeam.strategist;
+  const carouselDesignerId = carouselTeam.graphicDesigner?._id || carouselTeam.graphicDesigner;
+  const carouselManagerId = carouselTeam.manager?._id || carouselTeam.manager;
+  const carouselPostingExecutiveId = carouselTeam.postingExecutive?._id || carouselTeam.postingExecutive;
+
+  const staggerOffset = (i - 1) * 2;
+  const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+  const itemStartDate = createUTCDate(
+    nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
+  );
+
+  const planDue = await scheduleStageDay(
+    "strategist",
+    carouselStrategistId,
+    itemStartDate,
+    holidaySet,
+    schedulingOpts
+  );
+  const designDue = await scheduleStageDay(
+    "graphicDesigner",
+    carouselDesignerId,
+    addDaysUTC(planDue, 1),
+    holidaySet,
+    schedulingOpts
+  );
+  const approvalDue = await scheduleStageDay(
+    "manager",
+    carouselManagerId,
+    designDue,
+    holidaySet,
+    schedulingOpts
+  );
+  let postDue = await scheduleStageDay(
+    "postingExecutive",
+    carouselPostingExecutiveId,
+    addDaysUTC(approvalDue, 1),
+    holidaySet,
+    schedulingOpts
+  );
+
+  let postingKey = ymdUTC(postDue);
+  while (postingKey && usedCarouselPostingDayKeys.has(postingKey)) {
+    postDue = await scheduleStageDay(
+      "postingExecutive",
+      carouselPostingExecutiveId,
+      addDaysUTC(postDue, 1),
+      holidaySet,
+      schedulingOpts
+    );
+    postingKey = ymdUTC(postDue);
+  }
+  if (postingKey) usedCarouselPostingDayKeys.add(postingKey);
+
+  const postingDate = ymdUTC(postDue);
+  const carouselItem = {
+    contentId: `Carousel #${i}`,
+    title: `Carousel #${i}`,
+    type: "carousel",
+    plan: "normal",
+    planType: "normal",
+    postingDate,
+    stages: [
+      {
+        name: "Plan",
+        role: "strategist",
+        assignedUser: carouselStrategistId || undefined,
+        date: ymdUTC(planDue),
+        status: "assigned",
+      },
+      {
+        name: "Design",
+        role: "graphicDesigner",
+        assignedUser: carouselDesignerId || undefined,
+        date: ymdUTC(designDue),
+        status: "assigned",
+      },
+      {
+        name: "Approval",
+        role: "manager",
+        assignedUser: carouselManagerId || undefined,
+        date: ymdUTC(approvalDue),
+        status: "assigned",
+      },
+      {
+        name: "Post",
+        role: "postingExecutive",
+        assignedUser: carouselPostingExecutiveId || undefined,
+        date: ymdUTC(postDue),
+        status: "assigned",
+      },
+    ],
+  };
+  return { ...carouselItem, tasks: normalizeDraftItemToDurationTasks(carouselItem) };
+}
+
+/**
  * Sequential reel generation with capacity-aware dates (Prompt 48).
  * Skips public holidays/weekends on assignable days; respects TeamCapacity across all clients.
  *
- * @param {object|string} client - Client document or client id
+ * @param {object|string} client - client document or client id
  * @param {{ allowWeekend?: boolean; allowFlexibleAdjustment?: boolean }} [options] — PROMPT 65/66: `allowWeekend` uses Sat/Sun when true; `allowFlexibleAdjustment` relaxes capacity/extension (manager override).
  */
 async function generateClientReels(client, options = {}) {
@@ -679,161 +1149,25 @@ async function generateClientReels(client, options = {}) {
     if (unit.kind === "reel") {
     const i = unit.index;
     const isUrgent = i <= 2;
-    // Prompt 55: urgent reels start tighter; normal reels keep wider stagger.
-    const staggerOffset = isUrgent ? (i - 1) * 1 : (i - 1) * 2;
-    const reelStartSeed = addDaysUTC(baseStartDate, staggerOffset);
-    // Prompt 57/58 (critical): fixed per-reel anchor from stagger. Never mutated globally.
-    const reelStartDate = createUTCDate(
-      nextValidWorkdayUTC(reelStartSeed, holidaySet, schedulingOpts)
-    );
-    // Stage execution dates are capacity-based and flow from previous stage outputs.
-    // Only stage dates shift; the reel anchor remains locked.
-    const planDue = await scheduleStageDay(
-      "strategist",
-      strategistId,
-      reelStartDate,
+    const {
+      planDue,
+      shootDue,
+      editDue,
+      approvalDue,
+      postDue,
+    } = await computeReelStageDatesForGeneration({
+      i,
+      isUrgent,
+      baseStartDate,
       holidaySet,
-      schedulingOpts
-    );
-
-    let shootDue;
-    let editDue;
-    let approvalDue;
-    let postDue;
-
-    const bufferOpts = {
-      includeAssignees: true,
-      capacityDelta: isUrgent ? 1 : 0,
-      allowWeekend: schedulingOpts.allowWeekend,
-      allowFlexibleAdjustment: !isUrgent && schedulingOpts.allowFlexibleAdjustment,
-      leaves: schedulingOpts.leaves,
-      splitAcrossUsers: false,
-    };
-
-    /** PROMPT 63: mutable planned durations; borrow reduces next stage when extending. */
-    const reelDurationPlan = {
-      strategist: 1,
-      videographer: isUrgent ? 1 : 3,
-      videoEditor: isUrgent ? 1 : 2,
-      manager: isUrgent ? 1 : 3,
-      postingExecutive: 1,
-    };
-    const borrowReel = (currentRole) => () => {
-      // CASE 7: urgent plan has no borrowing.
-      if (isUrgent) return { ok: false, reason: "urgent_no_borrowing" };
-      return tryBorrowOneDayFromNextStage(currentRole, reelDurationPlan, "reel");
-    };
-
-    if (isUrgent) {
-      const shootStart = addDaysUTC(planDue, 1);
-      const shootOut = await fillMultiDaySlots(
-        "videographer",
-        videographerId,
-        shootStart,
-        reelDurationPlan.videographer,
-        holidaySet,
-        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videographer") }
-      );
-      warnIfSubstitutes("Shoot", videographerId, shootOut.assignees);
-      shootDue = shootOut.dates[0];
-
-      const editStart = addDaysUTC(shootDue, 1);
-      const editOut = await fillMultiDaySlots(
-        "videoEditor",
-        videoEditorId,
-        editStart,
-        reelDurationPlan.videoEditor,
-        holidaySet,
-        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videoEditor") }
-      );
-      warnIfSubstitutes("Edit", videoEditorId, editOut.assignees);
-      editDue = editOut.dates[0];
-
-      const approvalStart = editDue;
-      // Prompt 44: urgent — first manager slot on or after edit day (same day if capacity allows).
-      approvalDue = await scheduleStageDay(
-        "manager",
-        managerId,
-        approvalStart,
-        holidaySet,
-        schedulingOpts
-      );
-
-      const postStart = addDaysUTC(approvalDue, 1);
-      const postOut = await fillMultiDaySlots(
-        "postingExecutive",
-        postingExecutiveId,
-        postStart,
-        reelDurationPlan.postingExecutive,
-        holidaySet,
-        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("postingExecutive") }
-      );
-      warnIfSubstitutes("Post", postingExecutiveId, postOut.assignees);
-      postDue = postOut.dates[0];
-    } else {
-      const shootStart = addDaysUTC(planDue, 1);
-      const shootOut = await fillMultiDaySlots(
-        "videographer",
-        videographerId,
-        shootStart,
-        reelDurationPlan.videographer,
-        holidaySet,
-        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videographer") }
-      );
-      warnIfSubstitutes("Shoot", videographerId, shootOut.assignees);
-      shootDue = shootOut.dates[shootOut.dates.length - 1];
-
-      const editStart = addDaysUTC(shootDue, 1);
-      const editOut = await fillMultiDaySlots(
-        "videoEditor",
-        videoEditorId,
-        editStart,
-        reelDurationPlan.videoEditor,
-        holidaySet,
-        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("videoEditor") }
-      );
-      warnIfSubstitutes("Edit", videoEditorId, editOut.assignees);
-      editDue = editOut.dates[editOut.dates.length - 1];
-
-      const approvalStart = addDaysUTC(editDue, 1);
-      const approvalOut = await fillMultiDaySlots(
-        "manager",
-        managerId,
-        approvalStart,
-        reelDurationPlan.manager,
-        holidaySet,
-        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("manager") }
-      );
-      warnIfSubstitutes("Approval", managerId, approvalOut.assignees);
-      approvalDue = approvalOut.dates[approvalOut.dates.length - 1];
-
-      const postStart = addDaysUTC(approvalDue, 1);
-      const postOut = await fillMultiDaySlots(
-        "postingExecutive",
-        postingExecutiveId,
-        postStart,
-        reelDurationPlan.postingExecutive,
-        holidaySet,
-        { ...bufferOpts, tryBorrowFromNextStage: borrowReel("postingExecutive") }
-      );
-      warnIfSubstitutes("Post", postingExecutiveId, postOut.assignees);
-      postDue = postOut.dates[0];
-    }
-
-    // Prompt 56: avoid client-calendar clustering by spreading post days.
-    // If a day is already used by another reel of the same client batch, push forward.
-    let postingKey = ymdUTC(postDue);
-    while (postingKey && usedReelPostingDayKeys.has(postingKey)) {
-      postDue = await scheduleStageDay(
-        "postingExecutive",
-        postingExecutiveId,
-        addDaysUTC(postDue, 1),
-        holidaySet,
-        schedulingOpts
-      );
-      postingKey = ymdUTC(postDue);
-    }
-    if (postingKey) usedReelPostingDayKeys.add(postingKey);
+      schedulingOpts,
+      strategistId,
+      videographerId,
+      videoEditorId,
+      managerId,
+      postingExecutiveId,
+      usedReelPostingDayKeys,
+    });
 
     const postingDate = createUTCDate(postDue);
     keepLatestPosting(postingDate);
@@ -1098,6 +1432,10 @@ async function generateClientReels(client, options = {}) {
 
 module.exports = {
   generateClientReels,
+  computeReelStageDatesForGeneration,
+  buildReelItemForCalendarDraft,
+  buildPostItemForCalendarDraft,
+  buildCarouselItemForCalendarDraft,
   fillMultiDaySlots,
   fillMultiDaySlotsWithBuffer,
   scheduleStageDay,

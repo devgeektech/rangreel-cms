@@ -542,6 +542,10 @@ export default function NewClientPage() {
   const [calendarDraft, setCalendarDraft] = useState(null);
   const [customizingSchedule, setCustomizingSchedule] = useState(false);
   const [scheduleSubmitted, setScheduleSubmitted] = useState(false);
+  /** During customize: default to Post-only chips; user can switch to Plan / Shoot / … */
+  const [scheduleStageFilter, setScheduleStageFilter] = useState("Post");
+  /** Match server draft: weekdays only for new-client preview (toggle to experiment with weekends). */
+  const [previewWeekendMode, setPreviewWeekendMode] = useState(false);
   const [calendarDraftError, setCalendarDraftError] = useState("");
   const [briefFiles, setBriefFiles] = useState(emptyBriefFiles);
   const [currentUserId, setCurrentUserId] = useState(null);
@@ -659,6 +663,8 @@ export default function NewClientPage() {
           startDate: startDateWatch,
           team: teamPayload,
           contentEnabled: getContentEnabledFromPackage(pkgNow),
+          allowWeekend: false,
+          allowFlexibleAdjustment: false,
         });
 
         const payload = res?.data ?? res;
@@ -1931,6 +1937,11 @@ export default function NewClientPage() {
                     saving={false}
                     userById={userById}
                     onCalendarStateChange={(nextDraft) => setCalendarDraft(nextDraft)}
+                    weekendMode={previewWeekendMode}
+                    onToggleWeekend={setPreviewWeekendMode}
+                    stageFilter={scheduleStageFilter}
+                    onStageFilterChange={setScheduleStageFilter}
+                    showStageFilterBar
                   />
                 </>
               ) : (

@@ -56,17 +56,30 @@ function humanRole(role) {
   return r || "user";
 }
 
+// YYYY-MM-DD must be parsed as UTC calendar date (local getters break ISO strings in US TZs).
 function normalizeUTCDate(value) {
   if (!value) return null;
-  const d = value instanceof Date ? value : new Date(value);
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+  }
+  if (typeof value === "string") {
+    const m = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      const y = Number(m[1]);
+      const mo = Number(m[2]);
+      const day = Number(m[3]);
+      if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(day)) return null;
+      return new Date(Date.UTC(y, mo - 1, day));
+    }
+  }
+  const d = new Date(value);
   if (Number.isNaN(d.getTime())) return null;
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getMonth(), d.getDate()));
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
 
 function createUTCDate(date) {
-  const d = date instanceof Date ? date : new Date(date);
-  if (Number.isNaN(d.getTime())) return null;
-  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  return normalizeUTCDate(date);
 }
 
 function addDaysUTC(date, days) {

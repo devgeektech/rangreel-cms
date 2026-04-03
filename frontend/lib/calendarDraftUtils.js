@@ -172,10 +172,20 @@ export function applyCustomizationDrag(draft, contentId, stageName, newDateYmd) 
     }
   }
 
+  const postIdxForItem = nextStages.findIndex((s) => String(s.name) === "Post");
+  const postingFromPost =
+    postIdxForItem !== -1 ? String(nextStages[postIdxForItem]?.date || "").slice(0, 10) : "";
+
   const nextDraft = {
     ...draft,
     items: items.map((it) =>
-      String(it.contentId) === String(contentId) ? { ...it, stages: nextStages } : it
+      String(it.contentId) === String(contentId)
+        ? {
+            ...it,
+            stages: nextStages,
+            ...(postingFromPost ? { postingDate: postingFromPost } : {}),
+          }
+        : it
     ),
   };
 

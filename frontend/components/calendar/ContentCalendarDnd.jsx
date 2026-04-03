@@ -218,6 +218,7 @@ function DayCell({
 function StageChip({
   entry,
   filterType,
+  stageFilter = "all",
   saving,
   canEdit,
   isCustomizationMode,
@@ -241,6 +242,11 @@ function StageChip({
   if (filterType !== "all" && entry.contentType !== filterType) {
     return null;
   }
+
+  if (stageFilter !== "all" && entry.stageName !== stageFilter) {
+    return null;
+  }
+
 
   const hasWarnings = Array.isArray(warnings) && warnings.length > 0;
   const hasOverloadedWarning = hasWarnings
@@ -390,6 +396,11 @@ export default function ContentCalendarDnd({
   lockPostStage = false,
   weekendMode = true,
   onToggleWeekend,
+  /** 'all' | stage name — hide chips except this stage when not 'all' */
+  stageFilter = "all",
+  onStageFilterChange,
+  /** When true, show a second row of stage chips (e.g. Post-only default during customize). */
+  showStageFilterBar = false,
 }) {
   const defaultMonth = useMemo(() => {
     const items = draft?.items || [];
@@ -468,6 +479,13 @@ export default function ContentCalendarDnd({
       else setInnerFilter(f);
     },
     [onFilterChange]
+  );
+
+  const setStageFilter = useCallback(
+    (f) => {
+      onStageFilterChange?.(f);
+    },
+    [onStageFilterChange]
   );
 
   const { year, monthIndex } = parseMonthStr(viewMonth);
@@ -682,7 +700,13 @@ export default function ContentCalendarDnd({
     }
     setDropError("");
 
-    if (!onStageMove) return;
+    // Pre-creation / local-only draft: no API — commit computed draft to parent.
+    if (!onStageMove) {
+      if (typeof onCalendarStateChange === "function" && moved?.draft) {
+        onCalendarStateChange(moved.draft);
+      }
+      return;
+    }
 
     try {
       await onStageMove({
@@ -807,16 +831,18 @@ export default function ContentCalendarDnd({
             Next
           </Button>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant={weekendMode ? "default" : "outline"}
-            onClick={() => onToggleWeekend?.(!weekendMode)}
-          >
-            Weekend Mode: {weekendMode ? "ON" : "OFF"}
-          </Button>
-        </div>
+        {typeof onToggleWeekend === "function" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant={weekendMode ? "default" : "outline"}
+              onClick={() => onToggleWeekend(!weekendMode)}
+            >
+              Weekend Mode: {weekendMode ? "ON" : "OFF"}
+            </Button>
+          </div>
+        ) : null}
         <div className="flex flex-wrap gap-1">
           {[
             { key: "all", label: "All types" },
@@ -835,6 +861,30 @@ export default function ContentCalendarDnd({
             </Button>
           ))}
         </div>
+        {showStageFilterBar ? (
+          <div className="flex flex-wrap gap-1 border-l border-border pl-2">
+            <span className="self-center text-[10px] font-medium text-muted-foreground">Stages</span>
+            {[
+              { key: "Post", label: "Post" },
+              { key: "Plan", label: "Plan" },
+              { key: "Shoot", label: "Shoot" },
+              { key: "Edit", label: "Edit" },
+              { key: "Design", label: "Design" },
+              { key: "Approval", label: "Approval" },
+              { key: "all", label: "All stages" },
+            ].map(({ key, label }) => (
+              <Button
+                key={key}
+                type="button"
+                size="sm"
+                variant={stageFilter === key ? "default" : "outline"}
+                onClick={() => setStageFilter(key)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="flex flex-wrap gap-3 border-t border-b py-3">
@@ -922,6 +972,7 @@ export default function ContentCalendarDnd({
                       key={entry.id}
                       entry={entry}
                       filterType={filterType}
+                      stageFilter={stageFilter}
                       saving={saving}
                       canEdit={canEdit}
                       isCustomizationMode={isCustomizationMode}
