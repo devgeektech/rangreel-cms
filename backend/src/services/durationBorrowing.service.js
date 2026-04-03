@@ -7,9 +7,9 @@ const WORKFLOW_TO_RULE_KEY = {
   strategist: "strategist",
   videographer: "shoot",
   videoEditor: "editor",
+  graphicDesigner: "graphicDesigner",
   manager: "manager",
   postingExecutive: "post",
-  graphicDesigner: null,
 };
 
 /** Reel pipeline order (same as simple calendar generation). */

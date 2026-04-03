@@ -81,6 +81,37 @@ async function countActiveStagesOnDay(role, userId, dayStartUTC, options = {}) {
 }
 
 /**
+ * When scheduling a **normal** plan task, defer if a same user+role already has an **urgent**
+ * stage on that UTC day (multi-client priority: urgent wins the slot).
+ */
+async function hasUrgentStageBlockingNormal(role, userId, dayStartUTC, options = {}) {
+  const uid = toObjectId(userId);
+  if (!uid) return false;
+  const dayEnd = addDaysUTC(dayStartUTC, 1);
+  const excludeId = options.excludeContentItemId
+    ? toObjectId(options.excludeContentItemId)
+    : null;
+
+  const [row] = await ContentItem.aggregate([
+    { $match: excludeId ? { _id: { $ne: excludeId } } : {} },
+    { $match: { planType: "urgent" } },
+    { $unwind: "$workflowStages" },
+    {
+      $match: {
+        "workflowStages.role": role,
+        "workflowStages.assignedUser": uid,
+        "workflowStages.dueDate": { $gte: dayStartUTC, $lt: dayEnd },
+        "workflowStages.status": { $ne: "completed" },
+      },
+    },
+    { $limit: 1 },
+    { $count: "n" },
+  ]);
+
+  return (row?.n ?? 0) > 0;
+}
+
+/**
  * First UTC calendar day on or after startDate where active stage count for user+role is below capacity.
  * Counts workload from every client (multi-client safe).
  *
@@ -107,10 +138,21 @@ async function getNextAvailableDate(role, assignedUser, startDate, options = {})
 
   let d = startOfDayUTC(startDate);
 
+  const schedulingPlanType = String(options?.schedulingPlanType || "").toLowerCase();
+
   for (let i = 0; i < MAX_SEARCH_DAYS; i++) {
     if (leaves.length > 0 && isUserOnLeaveForDay(assignedUser, d, leaves)) {
       d = addDaysUTC(d, 1);
       continue;
+    }
+    if (schedulingPlanType === "normal") {
+      const blockedByUrgent = await hasUrgentStageBlockingNormal(role, assignedUser, d, {
+        excludeContentItemId: options.excludeContentItemId,
+      });
+      if (blockedByUrgent) {
+        d = addDaysUTC(d, 1);
+        continue;
+      }
     }
     const count = await countActiveStagesOnDay(role, assignedUser, d, {
       excludeContentItemId: options.excludeContentItemId,
@@ -163,27 +205,34 @@ async function suggestNextAvailableSlots(role, userId, requestedDate, options = 
     : 0;
   const threshold = roleCapacity + Math.max(0, capacityDelta);
   const leaves = Array.isArray(options?.leaves) ? options.leaves : [];
+  const schedulingPlanType = String(options?.schedulingPlanType || "").toLowerCase();
   const requested = startOfDayUTC(requestedDate);
 
-  if (!(leaves.length > 0 && isUserOnLeaveForDay(uid, requested, leaves))) {
-    const requestedCount = await countActiveStagesOnDay(role, uid, requested, {
+  const isDayOpen = async (workday) => {
+    if (leaves.length > 0 && isUserOnLeaveForDay(uid, workday, leaves)) return false;
+    if (schedulingPlanType === "normal") {
+      const blocked = await hasUrgentStageBlockingNormal(role, uid, workday, {
+        excludeContentItemId: options.excludeContentItemId,
+      });
+      if (blocked) return false;
+    }
+    const count = await countActiveStagesOnDay(role, uid, workday, {
       excludeContentItemId: options.excludeContentItemId,
     });
-    if (requestedCount < threshold) {
-      return [toYMDUTC(requested)];
-    }
+    return count < threshold;
+  };
+
+  if (await isDayOpen(requested)) {
+    return [toYMDUTC(requested)];
   }
 
   const candidates = [];
   for (let i = 1; i <= 7; i++) {
     const nextDate = addDaysUTC(requested, i);
-    if (leaves.length > 0 && isUserOnLeaveForDay(uid, nextDate, leaves)) {
-      continue;
-    }
-    const count = await countActiveStagesOnDay(role, uid, nextDate, {
-      excludeContentItemId: options.excludeContentItemId,
-    });
-    if (count < threshold) {
+    if (await isDayOpen(nextDate)) {
+      const count = await countActiveStagesOnDay(role, uid, nextDate, {
+        excludeContentItemId: options.excludeContentItemId,
+      });
       candidates.push({ date: nextDate, count, offset: i });
     }
   }
@@ -201,6 +250,7 @@ module.exports = {
   getNextAvailableDate,
   suggestNextAvailableSlots,
   countActiveStagesOnDay,
+  hasUrgentStageBlockingNormal,
   resolveRoleCapacity,
   MAX_SEARCH_DAYS,
   DEFAULT_DAILY_CAPACITY,

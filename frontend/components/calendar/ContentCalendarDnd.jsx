@@ -401,6 +401,8 @@ export default function ContentCalendarDnd({
   onStageFilterChange,
   /** When true, show a second row of stage chips (e.g. Post-only default during customize). */
   showStageFilterBar = false,
+  /** Pre-creation client customize: earliest allowed calendar day for any stage (YYYY-MM-DD). */
+  customizationMinStageDateYmd = "",
 }) {
   const defaultMonth = useMemo(() => {
     const items = draft?.items || [];
@@ -689,8 +691,12 @@ export default function ContentCalendarDnd({
       return;
     }
 
+    const customizationOpts =
+      isCustomizationMode && customizationMinStageDateYmd
+        ? { minStageDateYmd: String(customizationMinStageDateYmd).slice(0, 10) }
+        : {};
     const moved = isCustomizationMode
-      ? applyCustomizationDrag(schedule, data.contentId, data.stageName, newYmd)
+      ? applyCustomizationDrag(schedule, data.contentId, data.stageName, newYmd, customizationOpts)
       : applyManagerEditDrag(schedule, data.contentId, data.stageName, newYmd);
     if (moved.blocked) {
       const msg = moved.reason || "Invalid phase move";
@@ -789,8 +795,12 @@ export default function ContentCalendarDnd({
       setPreviewHint("");
       return;
     }
+    const customizationOptsOver =
+      isCustomizationMode && customizationMinStageDateYmd
+        ? { minStageDateYmd: String(customizationMinStageDateYmd).slice(0, 10) }
+        : {};
     const candidate = isCustomizationMode
-      ? applyCustomizationDrag(schedule, contentId, stageName, ymd)
+      ? applyCustomizationDrag(schedule, contentId, stageName, ymd, customizationOptsOver)
       : applyManagerEditDrag(schedule, contentId, stageName, ymd);
     if (candidate?.blocked) {
       setInvalidDropYmd(ymd);

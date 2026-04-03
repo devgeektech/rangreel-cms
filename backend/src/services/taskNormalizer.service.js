@@ -17,6 +17,7 @@ const WORKFLOW_ROLE_TO_RULE_KEY = {
   strategist: "strategist",
   videographer: "shoot",
   videoEditor: "editor",
+  graphicDesigner: "graphicDesigner",
   manager: "manager",
   postingExecutive: "post",
 };

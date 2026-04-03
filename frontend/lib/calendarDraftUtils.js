@@ -107,8 +107,9 @@ export { USER_EDITABLE_AFTER_DRAG };
  * - Dragging Plan/Post shifts ALL stages by offsetDays.
  * - Middle phases (Shoot/Edit/Approval) can move only between prev/next and before Post.
  * - Nothing can cross Post. Stage order must remain Plan < Shoot < Edit < Approval < Post.
+ * @param {{ minStageDateYmd?: string }} [options] - If set, every stage date must be on or after this day (YYYY-MM-DD).
  */
-export function applyCustomizationDrag(draft, contentId, stageName, newDateYmd) {
+export function applyCustomizationDrag(draft, contentId, stageName, newDateYmd, options = {}) {
   const items = draft?.items || [];
   const item = items.find((it) => String(it.contentId) === String(contentId));
   if (!item) return { draft, blocked: true, reason: "Content item not found" };
@@ -167,6 +168,21 @@ export function applyCustomizationDrag(draft, contentId, stageName, newDateYmd) 
           blocked: true,
           reason: "Phase cannot reach or exceed posting date. Move Post instead.",
           code: "after_post",
+        };
+      }
+    }
+  }
+
+  const minY = options?.minStageDateYmd ? String(options.minStageDateYmd).slice(0, 10) : "";
+  if (minY && /^\d{4}-\d{2}-\d{2}$/.test(minY)) {
+    for (const s of nextStages) {
+      const d = String(s?.date || "").slice(0, 10);
+      if (d && compareYmd(d, minY) < 0) {
+        return {
+          draft,
+          blocked: true,
+          reason: "Schedule cannot start before the client start date",
+          code: "before_start_date",
         };
       }
     }

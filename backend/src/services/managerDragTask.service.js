@@ -242,6 +242,7 @@ async function runManagerDragTask({
     allowFlexibleAdjustment,
     excludeContentItemId: contentId,
     leaves,
+    schedulingPlanType: isUrgent ? "urgent" : "normal",
   };
 
   const bufferBase = {
@@ -252,7 +253,7 @@ async function runManagerDragTask({
     excludeContentItemId: contentId,
     contentType: contentTypeForTasks,
     leaves,
-    splitAcrossUsers: false,
+    splitAcrossUsers: !isUrgent,
   };
 
   const reelDurationPlan = {
@@ -264,8 +265,8 @@ async function runManagerDragTask({
   };
   const postDurationPlan = {
     strategist: 1,
-    graphicDesigner: isUrgent ? 1 : 2,
-    manager: isUrgent ? 1 : 2,
+    graphicDesigner: 1,
+    manager: 4,
     postingExecutive: 1,
   };
 
@@ -293,7 +294,7 @@ async function runManagerDragTask({
     durationDays > 1 &&
     (isReel
       ? ["videographer", "videoEditor", "manager"].includes(role)
-      : role === "graphicDesigner");
+      : role === "graphicDesigner" || role === "manager");
 
   if (useBuffer) {
     schedulingMeta.bufferUsed = true;
@@ -532,24 +533,216 @@ async function runManagerDragTask({
   targetStage.date = resolvedTargetDate;
   targetStage.assignedUser = resolvedAssignee;
 
-  const deltaMs = oldTargetDate ? resolvedTargetDate.getTime() - oldTargetDate.getTime() : 0;
+  /**
+   * Normal reel: Shoot/Edit use multi-day windows. Blind calendar-delta on downstream stages
+   * breaks "Edit starts day after Shoot ends" and can push Edit/Approval onto/after posting date.
+   * Re-fill Edit → Approval forward from the new anchor instead.
+   */
+  const dayOptsChain = { allowWeekend: weekendEnabled };
+  const forwardChainNormalReelShoot =
+    isReel &&
+    !isUrgent &&
+    String(stageName) === "Shoot" &&
+    useBuffer &&
+    String(role || "").toLowerCase() === "videographer";
 
-  for (let i = stageIndex + 1; i < stages.length; i++) {
-    const s = stages[i];
-    if (!USER_EDITABLE_STAGES.has(String(s?.name))) break;
-    if (!s?.assignedUser) continue;
-    const oldNextDate = normalizeUTCDate(s.date) || addDaysUTC(resolvedTargetDate, i - stageIndex);
-    let shiftedByDelta = normalizeUTCDate(addDaysUTC(oldNextDate, Math.round(deltaMs / 86400000)));
-    if (postingDate && shiftedByDelta && shiftedByDelta.getTime() > postingDate.getTime()) {
-      shiftedByDelta = postingDate;
-    }
-    const next = normalizeUTCDate(
-      await scheduleStageDay(s.role, s.assignedUser, shiftedByDelta, holidaySet, schedulingOpts)
+  const forwardChainNormalReelEdit =
+    isReel &&
+    !isUrgent &&
+    String(stageName) === "Edit" &&
+    useBuffer &&
+    String(role || "").toLowerCase() === "videoeditor";
+
+  const tryBufferWeekendFallback = async (workflowRole, userId, startFrom, nDays, borrowRole) => {
+    let out = await fillMultiDaySlotsWithBuffer(
+      workflowRole,
+      userId,
+      startFrom,
+      nDays,
+      holidaySet,
+      {
+        ...bufferBase,
+        tryBorrowFromNextStage: borrowFor(borrowRole),
+      }
     );
-    if (postingDate && next && next.getTime() > postingDate.getTime()) {
-      s.date = postingDate;
-    } else {
-      s.date = next;
+    if ((out.failed || out.partial) && weekendEnabled) {
+      out = await fillMultiDaySlotsWithBuffer(
+        workflowRole,
+        userId,
+        startFrom,
+        nDays,
+        holidaySet,
+        {
+          ...bufferBase,
+          allowWeekend: true,
+          tryBorrowFromNextStage: borrowFor(borrowRole),
+        }
+      );
+    }
+    return out;
+  };
+
+  if (forwardChainNormalReelShoot) {
+    const shootEnd = resolvedTargetDate;
+    let chainCursor =
+      createUTCDate(nextValidWorkdayUTC(addDaysUTC(shootEnd, 1), holidaySet, dayOptsChain)) ||
+      addDaysUTC(shootEnd, 1);
+
+    const editSt = stages.find((s) => String(s?.name) === "Edit");
+    if (editSt?.assignedUser) {
+      if (postingDate && chainCursor.getTime() >= postingDate.getTime()) {
+        return {
+          ok: false,
+          status: 400,
+          error: "Cannot maintain post date",
+          details: { code: "POST_DATE_LOCKED", postingDate: toYMD(postingDate), reason: "edit_chain" },
+        };
+      }
+      const editOut = await tryBufferWeekendFallback(
+        "videoEditor",
+        editSt.assignedUser,
+        chainCursor,
+        reelDurationPlan.videoEditor,
+        "videoEditor"
+      );
+      if (editOut.failed || editOut.partial) {
+        return {
+          ok: false,
+          status: 409,
+          error: "Cannot reschedule edit after shoot — not enough working days before the posting date",
+          details: {
+            code: "REEL_CHAIN_EDIT_FAIL",
+            stage: "Edit",
+            buffer: {
+              failed: editOut.failed,
+              partial: editOut.partial,
+              durationDays: editOut.durationDays,
+            },
+          },
+        };
+      }
+      const editDates = editOut.dates || [];
+      const editLast = editDates[editDates.length - 1];
+      editSt.date = editLast;
+      const eas = editOut.assignees || [];
+      if (eas.length) {
+        const lastA = eas[eas.length - 1];
+        if (lastA) editSt.assignedUser = lastA;
+      }
+      chainCursor =
+        createUTCDate(nextValidWorkdayUTC(addDaysUTC(editLast, 1), holidaySet, dayOptsChain)) ||
+        addDaysUTC(editLast, 1);
+    }
+
+    const apprSt = stages.find((s) => String(s?.name) === "Approval");
+    if (apprSt?.assignedUser) {
+      if (postingDate && chainCursor.getTime() >= postingDate.getTime()) {
+        return {
+          ok: false,
+          status: 400,
+          error: "Cannot maintain post date",
+          details: { code: "POST_DATE_LOCKED", postingDate: toYMD(postingDate), reason: "approval_chain" },
+        };
+      }
+      const apprOut = await tryBufferWeekendFallback(
+        "manager",
+        apprSt.assignedUser,
+        chainCursor,
+        reelDurationPlan.manager,
+        "manager"
+      );
+      if (apprOut.failed || apprOut.partial) {
+        return {
+          ok: false,
+          status: 409,
+          error: "Cannot reschedule approval after edit — not enough working days before the posting date",
+          details: {
+            code: "REEL_CHAIN_APPROVAL_FAIL",
+            stage: "Approval",
+            buffer: {
+              failed: apprOut.failed,
+              partial: apprOut.partial,
+              durationDays: apprOut.durationDays,
+            },
+          },
+        };
+      }
+      const apprDates = apprOut.dates || [];
+      const apprLast = apprDates[apprDates.length - 1];
+      apprSt.date = apprLast;
+      const mas = apprOut.assignees || [];
+      if (mas.length) {
+        const lastM = mas[mas.length - 1];
+        if (lastM) apprSt.assignedUser = lastM;
+      }
+    }
+  } else if (forwardChainNormalReelEdit) {
+    const editEnd = resolvedTargetDate;
+    let chainCursor =
+      createUTCDate(nextValidWorkdayUTC(addDaysUTC(editEnd, 1), holidaySet, dayOptsChain)) ||
+      addDaysUTC(editEnd, 1);
+
+    const apprSt = stages.find((s) => String(s?.name) === "Approval");
+    if (apprSt?.assignedUser) {
+      if (postingDate && chainCursor.getTime() >= postingDate.getTime()) {
+        return {
+          ok: false,
+          status: 400,
+          error: "Cannot maintain post date",
+          details: { code: "POST_DATE_LOCKED", postingDate: toYMD(postingDate), reason: "approval_after_edit" },
+        };
+      }
+      const apprOut = await tryBufferWeekendFallback(
+        "manager",
+        apprSt.assignedUser,
+        chainCursor,
+        reelDurationPlan.manager,
+        "manager"
+      );
+      if (apprOut.failed || apprOut.partial) {
+        return {
+          ok: false,
+          status: 409,
+          error: "Cannot reschedule approval after edit — not enough working days before the posting date",
+          details: {
+            code: "REEL_CHAIN_APPROVAL_FAIL",
+            stage: "Approval",
+            buffer: {
+              failed: apprOut.failed,
+              partial: apprOut.partial,
+              durationDays: apprOut.durationDays,
+            },
+          },
+        };
+      }
+      const apprDates = apprOut.dates || [];
+      apprSt.date = apprDates[apprDates.length - 1];
+      const mas = apprOut.assignees || [];
+      if (mas.length) {
+        const lastM = mas[mas.length - 1];
+        if (lastM) apprSt.assignedUser = lastM;
+      }
+    }
+  } else {
+    const deltaMs = oldTargetDate ? resolvedTargetDate.getTime() - oldTargetDate.getTime() : 0;
+
+    for (let i = stageIndex + 1; i < stages.length; i++) {
+      const s = stages[i];
+      if (!USER_EDITABLE_STAGES.has(String(s?.name))) break;
+      if (!s?.assignedUser) continue;
+      const oldNextDate = normalizeUTCDate(s.date) || addDaysUTC(resolvedTargetDate, i - stageIndex);
+      let shiftedByDelta = normalizeUTCDate(addDaysUTC(oldNextDate, Math.round(deltaMs / 86400000)));
+      if (postingDate && shiftedByDelta && shiftedByDelta.getTime() > postingDate.getTime()) {
+        shiftedByDelta = postingDate;
+      }
+      const next = normalizeUTCDate(
+        await scheduleStageDay(s.role, s.assignedUser, shiftedByDelta, holidaySet, schedulingOpts)
+      );
+      if (postingDate && next && next.getTime() > postingDate.getTime()) {
+        s.date = postingDate;
+      } else {
+        s.date = next;
+      }
     }
   }
 
@@ -582,12 +775,19 @@ async function runManagerDragTask({
   const byName = new Map(
     (stages || []).map((s) => [String(s?.name || s?.stageName || ""), normalizeUTCDate(s?.date)])
   );
+  const utcYmd = (t) => {
+    const x = normalizeUTCDate(t);
+    return x ? x.toISOString().slice(0, 10) : "";
+  };
   for (let i = 0; i < STAGE_ORDER.length - 1; i++) {
     const aName = STAGE_ORDER[i];
     const bName = STAGE_ORDER[i + 1];
     const aDate = byName.get(aName);
     const bDate = byName.get(bName);
     if (!aDate || !bDate) continue;
+    const yA = utcYmd(aDate);
+    const yB = utcYmd(bDate);
+    if (yA === yB && aName === "Edit" && bName === "Approval") continue;
     if (aDate.getTime() >= bDate.getTime()) {
       return {
         ok: false,
