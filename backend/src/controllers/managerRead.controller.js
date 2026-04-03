@@ -83,10 +83,78 @@ const failure = (res, error, statusCode = 400) =>
 
 const getPackages = async (req, res) => {
   try {
-    const packages = await Package.find({ isActive: true }).sort({ createdAt: -1 });
+    const uid = req.user.id;
+    const packages = await Package.find({
+      isActive: true,
+      $or: [{ createdBy: uid }, { createdByRole: "admin" }, { createdBy: null }],
+    })
+      .populate("createdBy", "name")
+      .sort({ createdAt: -1 })
+      .lean();
     return success(res, packages);
   } catch (err) {
     return failure(res, "Failed to fetch packages", 500);
+  }
+};
+
+/**
+ * POST /api/manager/packages — manager-created package (same shape as admin; scoped to creator in GET list).
+ */
+const createManagerPackage = async (req, res) => {
+  try {
+    const {
+      name,
+      noOfReels,
+      noOfStaticPosts,
+      noOfCarousels,
+      noOfGoogleReviews,
+      gmbPosting,
+      campaignManagement,
+    } = req.body || {};
+
+    const n = (v, fallback = 0) => {
+      const x = Number(v);
+      return Number.isFinite(x) ? Math.max(0, x) : fallback;
+    };
+
+    const nameStr = typeof name === "string" ? name.trim() : "";
+    if (!nameStr) {
+      return failure(res, "Package name is required", 400);
+    }
+
+    if (
+      noOfReels === undefined ||
+      noOfReels === null ||
+      noOfStaticPosts === undefined ||
+      noOfStaticPosts === null ||
+      noOfCarousels === undefined ||
+      noOfCarousels === null
+    ) {
+      return failure(res, "noOfReels, noOfStaticPosts, and noOfCarousels are required", 400);
+    }
+
+    const reels = n(noOfReels, 0);
+    const staticPosts = n(noOfStaticPosts, 0);
+    const carousels = n(noOfCarousels, 0);
+
+    const packageDoc = await Package.create({
+      name: nameStr,
+      noOfReels: reels,
+      noOfStaticPosts: staticPosts,
+      noOfPosts: 0,
+      noOfCarousels: carousels,
+      noOfGoogleReviews: n(noOfGoogleReviews, 0),
+      gmbPosting: Boolean(gmbPosting),
+      campaignManagement: Boolean(campaignManagement),
+      isActive: true,
+      createdBy: req.user.id,
+      createdByRole: req.user.roleType === "admin" ? "admin" : "manager",
+    });
+
+    const populated = await Package.findById(packageDoc._id).populate("createdBy", "name").lean();
+    return success(res, populated, 201);
+  } catch (err) {
+    return failure(res, err.message || "Failed to create package", 500);
   }
 };
 
@@ -279,6 +347,7 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
 
 module.exports = {
   getPackages,
+  createManagerPackage,
   getTeamUsers,
   getManagerGlobalCalendarFinal,
 };
