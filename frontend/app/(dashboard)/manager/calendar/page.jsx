@@ -436,12 +436,31 @@ export default function ManagerGlobalCalendarPage() {
       toast.error(msg);
       return;
     }
-    const currentDays = Object.keys(task?.assignedUsersPerDay || {});
+    const perDay =
+      task?.assignedUsersPerDay && typeof task.assignedUsersPerDay === "object"
+        ? task.assignedUsersPerDay
+        : {};
+    const currentDays = Object.keys(perDay);
+    const sameRoleAsRow =
+      normalizeRoleKey(task.role) === row.role && row.userId && row.userId !== "unassigned";
+
+    // Multi-day stages list every calendar day in `assignedUsersPerDay`. Blocking any matching
+    // `ymd` prevented reassigning that day to another user on the same role row (e.g. Shoot A → B).
     if (currentDays.includes(ymd)) {
-      const msg = "No change: task already assigned on this date";
-      setDropError(msg);
-      toast.error(msg);
-      return;
+      const assigneeForDay =
+        perDay[ymd] != null && perDay[ymd] !== "" ? String(perDay[ymd]) : "";
+      if (!sameRoleAsRow) {
+        const msg = "No change: task already assigned on this date";
+        setDropError(msg);
+        toast.error(msg);
+        return;
+      }
+      if (assigneeForDay && String(row.userId) === assigneeForDay) {
+        const msg = "No change: task already assigned on this date";
+        setDropError(msg);
+        toast.error(msg);
+        return;
+      }
     }
 
     try {
@@ -452,6 +471,8 @@ export default function ManagerGlobalCalendarPage() {
         stageName: task.stageName,
         newDate: ymd,
         allowWeekend: weekendMode,
+        fromGlobalCalendar: true,
+        ...(sameRoleAsRow ? { targetUserId: row.userId } : {}),
       });
       // Backend is source of truth: replace entire calendar state from API.
       await loadCalendar();
