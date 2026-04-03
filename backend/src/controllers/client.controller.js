@@ -80,6 +80,7 @@ const stripNonPatchableBriefKeys = (raw) => {
     brandKitFiles: _bk,
     socialCredentialsFiles: _sc,
     otherBriefFiles: _ob,
+    agreementFiles: _ag,
     ...rest
   } = raw;
   return rest;
@@ -586,7 +587,11 @@ const appendClientBriefAssets = async (req, res) => {
     }
 
     if (added === 0) {
-      return failure(res, "No files received. Use fields brandKit, socialCredentials, or other.", 400);
+      return failure(
+        res,
+        "No files received. Use fields brandKit, socialCredentials, other, or agreement.",
+        400
+      );
     }
 
     client.markModified("clientBrief");

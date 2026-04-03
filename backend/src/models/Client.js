@@ -62,6 +62,7 @@ const clientBriefSchema = new mongoose.Schema(
     brandKitFiles: { type: [briefAssetFileSchema], default: [] },
     socialCredentialsFiles: { type: [briefAssetFileSchema], default: [] },
     otherBriefFiles: { type: [briefAssetFileSchema], default: [] },
+    agreementFiles: { type: [briefAssetFileSchema], default: [] },
     /** Legacy: optional external links. Prefer brandKitFiles / other uploads. */
     driveBrandKitUrl: { type: String, default: "", trim: true },
     driveSocialCredentialsUrl: { type: String, default: "", trim: true },

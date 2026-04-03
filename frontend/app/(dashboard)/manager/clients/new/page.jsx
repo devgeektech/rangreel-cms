@@ -34,6 +34,98 @@ const stepLabels = ["Basic info", "Package & schedule", "Team"];
 
 const optionalStr = z.string().optional().default("");
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const TARGET_AUDIENCE_OPTIONS = [
+  "Under 10",
+  "10 – 15",
+  "16 – 20",
+  "21 – 25",
+  "26 – 30",
+  "31 – 40",
+  "41 – 50",
+  "51 – 60",
+  "60+",
+  "All ages",
+];
+
+const AGE_GROUP_OPTIONS = [
+  { value: "gen_alpha", label: "Gen Alpha (born 2013+)" },
+  { value: "gen_z", label: "Gen Z (born 1997–2012)" },
+  { value: "millennials", label: "Millennials (born 1981–1996)" },
+  { value: "gen_x", label: "Gen X (born 1965–1980)" },
+  { value: "baby_boomers", label: "Baby Boomers (born 1946–1964)" },
+  { value: "silent", label: "Silent Generation (born before 1946)" },
+  { value: "mixed", label: "Mixed / All age groups" },
+];
+
+const WEEKDAY_OPTIONS = [
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+  "Sunday",
+];
+
+const SOCIAL_HANDLE_PLACEHOLDERS = {
+  "socialHandles.instagram": "@username or instagram.com/…",
+  "socialHandles.facebook": "Page name or facebook.com/…",
+  "socialHandles.youtube": "Channel name or youtube.com/…",
+  "socialHandles.googleBusiness": "Business name or Maps URL",
+  "socialHandles.twitter": "@handle or x.com/…",
+  "socialHandles.linkedin": "Company or profile URL",
+  "socialHandles.pinterest": "@username or pinterest.com/…",
+  "socialHandles.other": "Link or handle",
+};
+
+function buildHalfHourTimeOptions() {
+  const out = [];
+  for (let h = 0; h < 24; h += 1) {
+    for (const m of [0, 30]) {
+      const hh = String(h).padStart(2, "0");
+      const mm = String(m).padStart(2, "0");
+      const value = `${hh}:${mm}`;
+      const d = new Date(Date.UTC(1970, 0, 1, h, m));
+      const label = d.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+        timeZone: "UTC",
+      });
+      out.push({ value, label });
+    }
+  }
+  return out;
+}
+
+const HALF_HOUR_TIME_OPTIONS = buildHalfHourTimeOptions();
+
+const bestPostingTimeShape = z
+  .object({
+    from: z.string().optional().default(""),
+    to: z.string().optional().default(""),
+  })
+  .superRefine((data, ctx) => {
+    const from = (data.from || "").trim();
+    const to = (data.to || "").trim();
+    if (!from && !to) return;
+    if (!from) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Select a start time", path: ["from"] });
+    }
+    if (!to) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Select an end time", path: ["to"] });
+    }
+    if (from && to && from >= to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "End time must be after start time",
+        path: ["to"],
+      });
+    }
+  });
+
 const clientBriefShape = z.object({
   usp: optionalStr,
   brandTone: z
@@ -41,7 +133,7 @@ const clientBriefShape = z.object({
     .optional()
     .default(""),
   brandToneOther: optionalStr,
-  targetAudience: optionalStr,
+  targetAudience: z.array(z.string()).optional().default([]),
   keyProductsServices: optionalStr,
   priorityFocus: optionalStr,
   festivalsToTarget: optionalStr,
@@ -50,7 +142,14 @@ const clientBriefShape = z.object({
   competitors: optionalStr,
   accountsYouLikeReason: optionalStr,
   mainGoal: z.enum(["awareness", "sales", "social_growth", ""]).optional().default(""),
-  ageGroup: optionalStr,
+  ageGroup: z
+    .string()
+    .optional()
+    .default("")
+    .refine(
+      (v) => !v || AGE_GROUP_OPTIONS.some((o) => o.value === v),
+      "Select a valid age group"
+    ),
   focusLocations: optionalStr,
   contentPreference: z
     .array(z.enum(["education", "promotional", "entertaining", "trend_based"]))
@@ -63,8 +162,8 @@ const clientBriefShape = z.object({
       modelsAvailable: z.boolean().optional().default(false),
     })
     .optional(),
-  preferredShootDaysTiming: optionalStr,
-  bestPostingTime: optionalStr,
+  preferredShootDaysTiming: z.array(z.string()).optional().default([]),
+  bestPostingTime: bestPostingTimeShape.optional().default({ from: "", to: "" }),
 });
 
 const socialHandlesShape = z.object({
@@ -74,7 +173,6 @@ const socialHandlesShape = z.object({
   googleBusiness: optionalStr,
   twitter: optionalStr,
   linkedin: optionalStr,
-  tiktok: optionalStr,
   pinterest: optionalStr,
   other: optionalStr,
 });
@@ -104,11 +202,42 @@ const filled = (s) => s != null && String(s).trim() !== "";
 function buildClientSchema(packagesList) {
   return z
     .object({
-      clientName: z.string().trim().min(1, "Client Name is required"),
-      brandName: z.string().trim().min(1, "Brand Name is required"),
-      contactNumber: optionalStr,
-      email: optionalStr,
-      website: optionalStr,
+      clientName: z
+        .string()
+        .trim()
+        .min(1, "Name is required")
+        .min(2, "Name must be at least 2 characters"),
+      brandName: z
+        .string()
+        .trim()
+        .min(1, "Brand name is required")
+        .min(2, "Brand name must be at least 2 characters"),
+      contactNumber: z
+        .string()
+        .trim()
+        .min(1, "Contact number is required")
+        .refine((val) => {
+          const digits = String(val).replace(/\D/g, "");
+          return digits.length === 10;
+        }, "Enter a valid 10-digit mobile number"),
+      email: z
+        .string()
+        .trim()
+        .min(1, "Email is required")
+        .regex(EMAIL_REGEX, "Enter a valid email address"),
+      website: z
+        .string()
+        .default("")
+        .refine((val) => {
+          const t = String(val || "").trim();
+          if (!t) return true;
+          try {
+            const u = new URL(t);
+            return u.protocol === "http:" || u.protocol === "https:";
+          } catch {
+            return false;
+          }
+        }, "Enter a valid website URL (include https://)"),
       socialHandles: socialHandlesShape,
       socialCredentialsNotes: optionalStr,
       clientBrief: clientBriefShape,
@@ -224,7 +353,7 @@ const defaultClientBrief = {
   usp: "",
   brandTone: "",
   brandToneOther: "",
-  targetAudience: "",
+  targetAudience: [],
   keyProductsServices: "",
   priorityFocus: "",
   festivalsToTarget: "",
@@ -241,8 +370,8 @@ const defaultClientBrief = {
     productsReadyForShoot: false,
     modelsAvailable: false,
   },
-  preferredShootDaysTiming: "",
-  bestPostingTime: "",
+  preferredShootDaysTiming: [],
+  bestPostingTime: { from: "", to: "" },
 };
 
 const defaultValues = {
@@ -258,7 +387,6 @@ const defaultValues = {
     googleBusiness: "",
     twitter: "",
     linkedin: "",
-    tiktok: "",
     pinterest: "",
     other: "",
   },
@@ -325,9 +453,12 @@ function BoolBadge({ value }) {
   );
 }
 
-const emptyBriefFiles = { brandKit: [], socialCredentials: [], other: [] };
+const MAX_BRIEF_FILE_BYTES = 50 * 1024 * 1024;
 
-function BriefFilePicker({ label, hint, files, onFilesAdded }) {
+const emptyBriefFiles = { brandKit: [], socialCredentials: [], other: [], agreement: [] };
+
+function BriefFilePicker({ label, hint, files, onFilesAdded, accept, validateFile }) {
+  const [localError, setLocalError] = useState("");
   return (
     <div className="space-y-1">
       <Label className="text-sm font-medium">{label}</Label>
@@ -335,13 +466,35 @@ function BriefFilePicker({ label, hint, files, onFilesAdded }) {
       <Input
         type="file"
         multiple
+        accept={accept}
         className="cursor-pointer text-sm file:mr-2"
         onChange={(e) => {
+          setLocalError("");
           const list = e.target.files;
-          if (list?.length) onFilesAdded(Array.from(list));
+          if (!list?.length) return;
+          const picked = Array.from(list);
+          const ok = [];
+          for (const f of picked) {
+            if (f.size > MAX_BRIEF_FILE_BYTES) {
+              setLocalError(`Each file must be 50MB or less (${f.name})`);
+              e.target.value = "";
+              return;
+            }
+            if (typeof validateFile === "function") {
+              const err = validateFile(f);
+              if (err) {
+                setLocalError(err);
+                e.target.value = "";
+                return;
+              }
+            }
+            ok.push(f);
+          }
+          if (ok.length) onFilesAdded(ok);
           e.target.value = "";
         }}
       />
+      {localError ? <p className="text-xs text-destructive">{localError}</p> : null}
       {files.length > 0 ? (
         <ul className="mt-1 max-h-28 overflow-y-auto rounded-md border border-border bg-muted/30 px-2 py-1 text-xs text-muted-foreground">
           {files.map((f, i) => (
@@ -380,6 +533,8 @@ export default function NewClientPage() {
   } = useForm({
     resolver: (...args) => zodResolver(buildClientSchema(packagesRef.current))(...args),
     defaultValues,
+    mode: "onBlur",
+    reValidateMode: "onBlur",
   });
 
   const selectedPackageId = watch("packageId");
@@ -607,8 +762,23 @@ export default function NewClientPage() {
 
   const next = async () => {
     if (step === 0) {
-      const ok = await trigger(["clientName", "brandName", "industry"]);
-      if (!ok) return;
+      const ok = await trigger([
+        "clientName",
+        "brandName",
+        "contactNumber",
+        "email",
+        "website",
+        "clientBrief",
+      ]);
+      if (!ok) {
+        setTimeout(() => {
+          const wrap = document.querySelector("[data-client-step='1']");
+          const err =
+            wrap?.querySelector(".text-destructive") || document.querySelector("form .text-destructive");
+          err?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 0);
+        return;
+      }
     }
 
     if (step === 1) {
@@ -626,10 +796,20 @@ export default function NewClientPage() {
 
     try {
       const brief = values.clientBrief || {};
+      const bt = brief.bestPostingTime || {};
+      const bestPostingTimeStr =
+        bt.from && bt.to ? `${String(bt.from).trim()}-${String(bt.to).trim()}` : "";
+      const targetAudienceStr = Array.isArray(brief.targetAudience)
+        ? brief.targetAudience.filter(Boolean).join(", ")
+        : String(brief.targetAudience || "");
+      const preferredShootStr = Array.isArray(brief.preferredShootDaysTiming)
+        ? brief.preferredShootDaysTiming.filter(Boolean).join(", ")
+        : String(brief.preferredShootDaysTiming || "");
+
       const payload = {
         clientName: values.clientName.trim(),
         brandName: values.brandName.trim(),
-        contactNumber: (values.contactNumber || "").trim(),
+        contactNumber: String(values.contactNumber || "").replace(/\D/g, ""),
         email: (values.email || "").trim(),
         website: (values.website || "").trim(),
         industry: values.industry || "",
@@ -642,13 +822,15 @@ export default function NewClientPage() {
           googleBusiness: (values.socialHandles?.googleBusiness || "").trim(),
           twitter: (values.socialHandles?.twitter || "").trim(),
           linkedin: (values.socialHandles?.linkedin || "").trim(),
-          tiktok: (values.socialHandles?.tiktok || "").trim(),
           pinterest: (values.socialHandles?.pinterest || "").trim(),
           other: (values.socialHandles?.other || "").trim(),
         },
         clientBrief: {
           ...defaultClientBrief,
           ...brief,
+          targetAudience: targetAudienceStr,
+          preferredShootDaysTiming: preferredShootStr,
+          bestPostingTime: bestPostingTimeStr,
           contentPreference: Array.isArray(brief.contentPreference) ? brief.contentPreference : [],
           shootAvailability: {
             ...defaultClientBrief.shootAvailability,
@@ -706,13 +888,17 @@ export default function NewClientPage() {
       const res = await api.createClient(payload);
       const clientId = res?.data?._id;
       const fileCount =
-        briefFiles.brandKit.length + briefFiles.socialCredentials.length + briefFiles.other.length;
+        briefFiles.brandKit.length +
+        briefFiles.socialCredentials.length +
+        briefFiles.other.length +
+        briefFiles.agreement.length;
       if (clientId && fileCount > 0) {
         try {
           const formData = new FormData();
           briefFiles.brandKit.forEach((f) => formData.append("brandKit", f));
           briefFiles.socialCredentials.forEach((f) => formData.append("socialCredentials", f));
           briefFiles.other.forEach((f) => formData.append("other", f));
+          briefFiles.agreement.forEach((f) => formData.append("agreement", f));
           await api.uploadClientBriefAssets(clientId, formData);
         } catch (uploadErr) {
           toast.error(
@@ -758,7 +944,7 @@ export default function NewClientPage() {
 
       <form className="space-y-5" onSubmit={handleSubmit(onSubmit)}>
         {step === 0 ? (
-          <div className="space-y-5">
+          <div className="space-y-5" data-client-step="1">
             <Card>
               <CardHeader>
                 <CardTitle>Client info</CardTitle>
@@ -768,46 +954,87 @@ export default function NewClientPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid gap-4 md:grid-cols-2">
-                <Field label="Name *" error={errors.clientName?.message}>
+                <Field label="Name" required error={errors.clientName?.message}>
                   <Controller
                     name="clientName"
                     control={control}
-                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                    render={({ field }) => (
+                      <Input
+                        {...field}
+                        onChange={(e) => field.onChange(e.target.value)}
+                        autoComplete="organization"
+                        placeholder="Legal name or account name as on contract"
+                      />
+                    )}
                   />
                 </Field>
-                <Field label="Brand name *" error={errors.brandName?.message}>
+                <Field label="Brand name" required error={errors.brandName?.message}>
                   <Controller
                     name="brandName"
                     control={control}
-                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                    render={({ field }) => (
+                      <Input
+                        {...field}
+                        onChange={(e) => field.onChange(e.target.value)}
+                        autoComplete="organization"
+                        placeholder="Public brand name (as shown on socials)"
+                      />
+                    )}
                   />
                 </Field>
-                <Field label="Contact number" error={errors.contactNumber?.message}>
+                <Field label="Contact number" required error={errors.contactNumber?.message}>
                   <Controller
                     name="contactNumber"
                     control={control}
-                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                    render={({ field }) => (
+                      <Input
+                        {...field}
+                        inputMode="numeric"
+                        placeholder="9876543210"
+                        onChange={(e) => field.onChange(e.target.value)}
+                      />
+                    )}
                   />
                 </Field>
-                <Field label="Email" error={errors.email?.message}>
+                <Field label="Email" required error={errors.email?.message}>
                   <Controller
                     name="email"
                     control={control}
-                    render={({ field }) => <Input type="email" value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                    render={({ field }) => (
+                      <Input
+                        {...field}
+                        type="email"
+                        onChange={(e) => field.onChange(e.target.value)}
+                        autoComplete="email"
+                        placeholder="name@company.com"
+                      />
+                    )}
                   />
                 </Field>
                 <Field label="Website" error={errors.website?.message}>
                   <Controller
                     name="website"
                     control={control}
-                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} placeholder="https://..." />}
+                    render={({ field }) => (
+                      <Input
+                        {...field}
+                        onChange={(e) => field.onChange(e.target.value)}
+                        placeholder="https://www.example.com"
+                      />
+                    )}
                   />
                 </Field>
                 <Field label="Industry" error={errors.industry?.message}>
                   <Controller
                     name="industry"
                     control={control}
-                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} placeholder="Optional" />}
+                    render={({ field }) => (
+                      <Input
+                        {...field}
+                        onChange={(e) => field.onChange(e.target.value)}
+                        placeholder="e.g. Retail, SaaS, Healthcare, F&B"
+                      />
+                    )}
                   />
                 </Field>
 
@@ -817,7 +1044,10 @@ export default function NewClientPage() {
                     name="socialCredentialsNotes"
                     control={control}
                     render={({ field }) => (
-                      <TextArea {...field} placeholder="Handles, passwords shared securely, agency access notes…" />
+                      <TextArea
+                        {...field}
+                        placeholder="Paste handles, agency logins, or where credentials are stored (Vault, 1Password, shared drive). Never paste raw passwords in email — note the secure channel here."
+                      />
                     )}
                   />
                 </div>
@@ -832,7 +1062,6 @@ export default function NewClientPage() {
                       ["socialHandles.googleBusiness", "Google Business"],
                       ["socialHandles.twitter", "X / Twitter"],
                       ["socialHandles.linkedin", "LinkedIn"],
-                      ["socialHandles.tiktok", "TikTok"],
                       ["socialHandles.pinterest", "Pinterest"],
                       ["socialHandles.other", "Other"],
                     ].map(([name, label]) => (
@@ -840,7 +1069,13 @@ export default function NewClientPage() {
                         <Controller
                           name={name}
                           control={control}
-                          render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                          render={({ field }) => (
+                            <Input
+                              {...field}
+                              onChange={(e) => field.onChange(e.target.value)}
+                              placeholder={SOCIAL_HANDLE_PLACEHOLDERS[name] || ""}
+                            />
+                          )}
                         />
                       </Field>
                     ))}
@@ -852,7 +1087,12 @@ export default function NewClientPage() {
                   <Controller
                     name="clientBrief.usp"
                     control={control}
-                    render={({ field }) => <TextArea {...field} />}
+                    render={({ field }) => (
+                      <TextArea
+                        {...field}
+                        placeholder="What makes this brand stand out? One or two short paragraphs."
+                      />
+                    )}
                   />
                 </div>
 
@@ -882,17 +1122,45 @@ export default function NewClientPage() {
                     <Controller
                       name="clientBrief.brandToneOther"
                       control={control}
-                      render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                      render={({ field }) => (
+                        <Input
+                          {...field}
+                          onChange={(e) => field.onChange(e.target.value)}
+                          placeholder="Describe the tone (e.g. playful, corporate, regional…)"
+                        />
+                      )}
                     />
                   </Field>
                 ) : null}
 
                 <div className="md:col-span-2">
-                  <Label className="mb-1">Who is your target audience?</Label>
+                  <Label className="mb-2 block">Who is your target audience?</Label>
+                  <p className="mb-2 text-xs text-muted-foreground">Select all age ranges that apply.</p>
                   <Controller
                     name="clientBrief.targetAudience"
                     control={control}
-                    render={({ field }) => <TextArea {...field} />}
+                    render={({ field }) => (
+                      <div className="flex flex-wrap gap-3">
+                        {TARGET_AUDIENCE_OPTIONS.map((opt) => {
+                          const set = new Set(field.value || []);
+                          const checked = set.has(opt);
+                          return (
+                            <label key={opt} className="flex items-center gap-2 text-sm">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(next) => {
+                                  const s = new Set(field.value || []);
+                                  if (next === true) s.add(opt);
+                                  else s.delete(opt);
+                                  field.onChange(Array.from(s));
+                                }}
+                              />
+                              {opt}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
                   />
                 </div>
 
@@ -901,7 +1169,12 @@ export default function NewClientPage() {
                   <Controller
                     name="clientBrief.keyProductsServices"
                     control={control}
-                    render={({ field }) => <TextArea {...field} />}
+                    render={({ field }) => (
+                      <TextArea
+                        {...field}
+                        placeholder="List main SKUs, services, or collections we should feature."
+                      />
+                    )}
                   />
                 </div>
 
@@ -910,7 +1183,12 @@ export default function NewClientPage() {
                   <Controller
                     name="clientBrief.priorityFocus"
                     control={control}
-                    render={({ field }) => <TextArea {...field} />}
+                    render={({ field }) => (
+                      <TextArea
+                        {...field}
+                        placeholder="e.g. New launch, clearance sale, app installs, store visits…"
+                      />
+                    )}
                   />
                 </div>
 
@@ -919,7 +1197,12 @@ export default function NewClientPage() {
                   <Controller
                     name="clientBrief.festivalsToTarget"
                     control={control}
-                    render={({ field }) => <TextArea {...field} />}
+                    render={({ field }) => (
+                      <TextArea
+                        {...field}
+                        placeholder="Diwali, Eid, Christmas, regional events — names and rough dates if known."
+                      />
+                    )}
                   />
                 </div>
 
@@ -930,7 +1213,7 @@ export default function NewClientPage() {
                     render={({ field }) => (
                       <Select value={field.value || undefined} onValueChange={(v) => field.onChange(v)}>
                         <SelectTrigger className="w-full">
-                          <SelectValue />
+                          <SelectValue placeholder="Primary content language" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="english">English</SelectItem>
@@ -946,7 +1229,13 @@ export default function NewClientPage() {
                     <Controller
                       name="clientBrief.languageOther"
                       control={control}
-                      render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                      render={({ field }) => (
+                        <Input
+                          {...field}
+                          onChange={(e) => field.onChange(e.target.value)}
+                          placeholder="e.g. Tamil, Marathi, Hinglish…"
+                        />
+                      )}
                     />
                   </Field>
                 ) : null}
@@ -956,7 +1245,9 @@ export default function NewClientPage() {
                   <Controller
                     name="clientBrief.competitors"
                     control={control}
-                    render={({ field }) => <TextArea {...field} />}
+                    render={({ field }) => (
+                      <TextArea {...field} placeholder="Brands or accounts you compete with (names + links if helpful)." />
+                    )}
                   />
                 </div>
 
@@ -965,7 +1256,12 @@ export default function NewClientPage() {
                   <Controller
                     name="clientBrief.accountsYouLikeReason"
                     control={control}
-                    render={({ field }) => <TextArea {...field} />}
+                    render={({ field }) => (
+                      <TextArea
+                        {...field}
+                        placeholder="Reference accounts, reels, or styles the client wants to emulate — and why."
+                      />
+                    )}
                   />
                 </div>
 
@@ -988,11 +1284,28 @@ export default function NewClientPage() {
                   />
                 </Field>
 
-                <Field label="Age group">
+                <Field label="Age group" error={errors.clientBrief?.ageGroup?.message}>
                   <Controller
                     name="clientBrief.ageGroup"
                     control={control}
-                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                    render={({ field }) => (
+                      <Select
+                        value={field.value ? field.value : "__none__"}
+                        onValueChange={(v) => field.onChange(v === "__none__" ? "" : v)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select age group (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">— None —</SelectItem>
+                          {AGE_GROUP_OPTIONS.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>
+                              {o.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                   />
                 </Field>
 
@@ -1001,7 +1314,12 @@ export default function NewClientPage() {
                   <Controller
                     name="clientBrief.focusLocations"
                     control={control}
-                    render={({ field }) => <TextArea {...field} />}
+                    render={({ field }) => (
+                      <TextArea
+                        {...field}
+                        placeholder="Cities, regions, or stores (e.g. Mumbai + Pune, or pan-India)."
+                      />
+                    )}
                   />
                 </div>
 
@@ -1063,20 +1381,83 @@ export default function NewClientPage() {
                   </div>
                 </div>
 
-                <Field label="Preferred shoot days / timing">
+                <div className="md:col-span-2">
+                  <Label className="mb-2 block">Preferred shoot days</Label>
+                  <p className="mb-2 text-xs text-muted-foreground">Select weekdays that work for shoots (optional).</p>
                   <Controller
                     name="clientBrief.preferredShootDaysTiming"
                     control={control}
-                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
+                    render={({ field }) => (
+                      <div className="flex flex-wrap gap-3">
+                        {WEEKDAY_OPTIONS.map((day) => {
+                          const set = new Set(field.value || []);
+                          const checked = set.has(day);
+                          return (
+                            <label key={day} className="flex items-center gap-2 text-sm">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(next) => {
+                                  const s = new Set(field.value || []);
+                                  if (next === true) s.add(day);
+                                  else s.delete(day);
+                                  field.onChange(Array.from(s));
+                                }}
+                              />
+                              {day}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
                   />
-                </Field>
-                <Field label="Best posting time (if any)">
-                  <Controller
-                    name="clientBrief.bestPostingTime"
-                    control={control}
-                    render={({ field }) => <Input value={field.value} onChange={(e) => field.onChange(e.target.value)} />}
-                  />
-                </Field>
+                </div>
+
+                <div className="md:col-span-2">
+                  <Label className="mb-2 block">Best posting time</Label>
+                  <p className="mb-2 text-xs text-muted-foreground">Optional — choose a typical window for posting.</p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="From" error={errors.clientBrief?.bestPostingTime?.from?.message}>
+                      <Controller
+                        name="clientBrief.bestPostingTime.from"
+                        control={control}
+                        render={({ field }) => (
+                          <Select value={field.value || undefined} onValueChange={(v) => field.onChange(v)}>
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="Start time" />
+                            </SelectTrigger>
+                            <SelectContent className="max-h-60">
+                              {HALF_HOUR_TIME_OPTIONS.map((opt) => (
+                                <SelectItem key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      />
+                    </Field>
+                    <Field label="To" error={errors.clientBrief?.bestPostingTime?.to?.message}>
+                      <Controller
+                        name="clientBrief.bestPostingTime.to"
+                        control={control}
+                        render={({ field }) => (
+                          <Select value={field.value || undefined} onValueChange={(v) => field.onChange(v)}>
+                            <SelectTrigger className="w-full">
+                              <SelectValue placeholder="End time" />
+                            </SelectTrigger>
+                            <SelectContent className="max-h-60">
+                              {HALF_HOUR_TIME_OPTIONS.map((opt) => (
+                                <SelectItem key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      />
+                    </Field>
+                  </div>
+                </div>
 
                 <div className="md:col-span-2 border-t border-border pt-4">
                   <p className="mb-2 text-sm font-medium">Onboarding files</p>
@@ -1111,6 +1492,24 @@ export default function NewClientPage() {
                         }
                       />
                     </div>
+                    <div className="sm:col-span-2">
+                      <BriefFilePicker
+                        label="Agreement"
+                        hint="Signed agreement or contract document (PDF, DOCX)"
+                        accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        files={briefFiles.agreement}
+                        onFilesAdded={(added) =>
+                          setBriefFiles((prev) => ({ ...prev, agreement: [...prev.agreement, ...added] }))
+                        }
+                        validateFile={(f) => {
+                          const name = (f.name || "").toLowerCase();
+                          if (!/\.(pdf|doc|docx)$/.test(name)) {
+                            return "Only PDF or Word documents (.pdf, .doc, .docx) are allowed";
+                          }
+                          return null;
+                        }}
+                      />
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -1130,11 +1529,16 @@ export default function NewClientPage() {
                     name="startDate"
                     control={control}
                     render={({ field }) => (
-                      <Input type="date" value={field.value} onChange={(e) => field.onChange(e.target.value)} />
+                      <Input
+                        type="date"
+                        value={field.value}
+                        onChange={(e) => field.onChange(e.target.value)}
+                        title="First month of the engagement (calendar uses the next working day from here)"
+                      />
                     )}
                   />
                 </Field>
-                <p className="text-xs text-muted-foreground">Calendar starts from next working day.</p>
+                <p className="text-xs text-muted-foreground">Pick the contract or campaign start — scheduling begins from the next working day.</p>
               </CardContent>
             </Card>
 
@@ -1510,10 +1914,13 @@ function TextArea({ className, ...props }) {
   );
 }
 
-function Field({ label, children, error }) {
+function Field({ label, children, error, required }) {
   return (
     <div className="space-y-1.5">
-      <Label>{label}</Label>
+      <Label>
+        {label}
+        {required ? <span className="text-red-500"> *</span> : null}
+      </Label>
       {children}
       {error ? <p className="text-xs text-destructive">{error}</p> : null}
     </div>
@@ -1562,7 +1969,7 @@ function TeamSelect({ label, name, control, options, error }) {
           return (
           <Select value={field.value || undefined} onValueChange={(value) => field.onChange(value)}>
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select a user">
+              <SelectValue placeholder="Select team member">
                 {selected?.name || (field.value ? "Selected user" : "")}
               </SelectValue>
             </SelectTrigger>
