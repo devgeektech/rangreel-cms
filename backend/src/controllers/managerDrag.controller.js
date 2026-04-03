@@ -6,13 +6,16 @@ const { runManagerDragTask } = require("../services/managerDragTask.service");
  */
 const dragTask = async (req, res) => {
   try {
-    const { contentId, stageName, newDate, allowWeekend } = req.body || {};
+    const { contentId, stageName, newDate, allowWeekend, fromGlobalCalendar, targetUserId } =
+      req.body || {};
     const result = await runManagerDragTask({
       managerUserId: req.user.id,
       contentId,
       stageName,
       newDate,
       allowWeekend,
+      fromGlobalCalendar: fromGlobalCalendar === true,
+      targetUserId,
     });
     if (!result.ok) {
       return res.status(result.status || 400).json({

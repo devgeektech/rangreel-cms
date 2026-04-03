@@ -13,6 +13,8 @@ const ROLE_KEY_TO_SLUG = {
   editor: "editor",
   manager: "manager",
   post: "posting",
+  /** DB Role slug is `designer` (seed); workflow stage role is `graphicDesigner`. */
+  graphicDesigner: "designer",
 };
 
 /**
@@ -24,6 +26,7 @@ const ROLE_KEY_TO_WORKFLOW_ROLE = {
   editor: "videoEditor",
   manager: "manager",
   post: "postingExecutive",
+  graphicDesigner: "graphicDesigner",
 };
 
 /** Accept workflow strings or rule keys when calling getAvailableUsers. */
@@ -37,6 +40,8 @@ const ROLE_INPUT_ALIASES = {
   post: "post",
   postingExecutive: "post",
   posting: "post",
+  graphicDesigner: "graphicDesigner",
+  designer: "graphicDesigner",
 };
 
 function startOfDayUTC(date) {
