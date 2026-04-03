@@ -97,7 +97,6 @@ const generateDraft = async (req, res) => {
       allowWeekend,
       allowFlexibleAdjustment,
     } = req.body || {};
-    const isManager = req.user?.roleType === "manager";
     if (!packageId) return failure(res, "packageId is required", 400);
     if (!startDate) return failure(res, "startDate is required", 400);
     if (!team) return failure(res, "team is required", 400);
@@ -116,8 +115,9 @@ const generateDraft = async (req, res) => {
       startDate,
       team,
       contentEnabled: contentEnabled || {},
-      allowWeekend: isManager || allowWeekend === true,
-      allowFlexibleAdjustment: isManager || allowFlexibleAdjustment === true,
+      /** Weekends only when client explicitly requests (e.g. global calendar toggle). New-client flow sends false. */
+      allowWeekend: allowWeekend === true,
+      allowFlexibleAdjustment: allowFlexibleAdjustment === true,
     });
 
     return success(res, draft);

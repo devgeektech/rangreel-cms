@@ -40,11 +40,23 @@ function normalizeContentType(type) {
  * from simpleCalendar forward generation without capacity snapping.
  */
 const BACKWARD_OFFSETS = {
+  /** Normal reel plan — multi-day Shoot / Edit / Approval spans (unchanged). */
   reel: [
     { stageName: "Plan", role: "strategist", daysBeforePost: 12 },
     { stageName: "Shoot", role: "videographer", daysBeforePost: 8 },
     { stageName: "Edit", role: "videoEditor", daysBeforePost: 4 },
     { stageName: "Approval", role: "manager", daysBeforePost: 1 },
+    { stageName: "Post", role: "postingExecutive", daysBeforePost: 0 },
+  ],
+  /**
+   * Urgent reel plan — one effective day per role; editor + manager share the same calendar day.
+   * (daysBeforePost: 4,3,2,2,0 → Plan, Shoot, Edit, Approval, Post)
+   */
+  reelUrgent: [
+    { stageName: "Plan", role: "strategist", daysBeforePost: 4 },
+    { stageName: "Shoot", role: "videographer", daysBeforePost: 3 },
+    { stageName: "Edit", role: "videoEditor", daysBeforePost: 2 },
+    { stageName: "Approval", role: "manager", daysBeforePost: 2 },
     { stageName: "Post", role: "postingExecutive", daysBeforePost: 0 },
   ],
   post: [
@@ -58,15 +70,22 @@ const BACKWARD_OFFSETS = {
 /**
  * @param {Date|string} postingDate - Posting day (UTC date)
  * @param {string} contentType - reel | post | carousel | static_post
+ * @param {{ planType?: "normal"|"urgent" }} [options] - For reels: urgent vs normal template
  * @returns {{ postingDate: string, contentType: string, stages: Array<{ stageName: string, role: string, date: string }> }}
  */
-function generateWorkflowStagesFromPostingDate(postingDate, contentType) {
+function generateWorkflowStagesFromPostingDate(postingDate, contentType, options = {}) {
   const post = normalizePostingDate(postingDate);
   if (!post) {
     throw new Error("Invalid postingDate");
   }
   const ctype = normalizeContentType(contentType);
-  const seq = ctype === "reel" ? BACKWARD_OFFSETS.reel : BACKWARD_OFFSETS.post;
+  const planType = options.planType === "urgent" ? "urgent" : "normal";
+  let seq;
+  if (ctype === "reel") {
+    seq = planType === "urgent" ? BACKWARD_OFFSETS.reelUrgent : BACKWARD_OFFSETS.reel;
+  } else {
+    seq = BACKWARD_OFFSETS.post;
+  }
 
   const stages = seq.map((row) => {
     const due = addDaysUTC(post, -row.daysBeforePost);

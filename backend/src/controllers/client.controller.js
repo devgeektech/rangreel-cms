@@ -87,10 +87,20 @@ const stripNonPatchableBriefKeys = (raw) => {
 };
 
 function validateStages(stages) {
+  const utcYmd = (v) => {
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toISOString().slice(0, 10);
+  };
   for (let i = 0; i < stages.length - 1; i++) {
     const a = stages[i]?.dueDate || stages[i]?.date;
     const b = stages[i + 1]?.dueDate || stages[i + 1]?.date;
-    if (new Date(a) >= new Date(b)) {
+    const da = new Date(a);
+    const db = new Date(b);
+    if (Number.isNaN(da.getTime()) || Number.isNaN(db.getTime())) continue;
+    // Same calendar day is valid (e.g. urgent Edit + Approval, or manager same-day as edit).
+    if (utcYmd(da) === utcYmd(db)) continue;
+    if (da > db) {
       throw new Error("Invalid stage order");
     }
   }
@@ -420,11 +430,10 @@ const createClient = async (req, res) => {
       }
     } else {
       // Prompt 16: only run the new simple calendar service.
-      // Prompt 66: manager requests enable weekend + flexible scheduler overrides.
-      const isManager = req.user?.roleType === "manager";
+      // New clients: weekdays + public holidays only (no Sat/Sun) unless a pre-built draft is supplied above.
       await generateClientReels(client, {
-        allowWeekend: isManager,
-        allowFlexibleAdjustment: isManager,
+        allowWeekend: false,
+        allowFlexibleAdjustment: false,
       });
     }
 
