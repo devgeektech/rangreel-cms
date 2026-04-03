@@ -23,6 +23,7 @@ const WORKFLOW_ROLE_TO_RULE_KEY = {
   strategist: "strategist",
   videographer: "shoot",
   videoEditor: "editor",
+  graphicDesigner: "graphicDesigner",
   manager: "manager",
   postingExecutive: "post",
 };
@@ -181,6 +182,7 @@ async function scheduleStageDay(role, userId, fromDate, holidaySet, schedulingOp
       capacityDelta: flexCapDelta,
       excludeContentItemId: schedulingOptions.excludeContentItemId,
       leaves: schedulingOptions.leaves,
+      schedulingPlanType: schedulingOptions.schedulingPlanType,
     });
     const d = createUTCDate(raw);
     const aligned = createUTCDate(nextValidWorkdayUTC(d, holidaySet, dayOpts));
@@ -401,8 +403,7 @@ async function fillMultiDaySlotsWithBuffer(
     : 0;
   const leaves = options.leaves || [];
   const seedTasks = options.seedTasks || [];
-  // CASE 10: multi-resource split is not allowed.
-  const splitAcrossUsers = false;
+  const splitAcrossUsers = options.splitAcrossUsers === true;
   const allowWeekend = options.allowWeekend === true;
   const allowFlexibleAdjustment = options.allowFlexibleAdjustment === true;
   const contentTypeForTasks = options.contentType || "reel";
@@ -585,6 +586,10 @@ async function computeReelStageDatesForGeneration({
   postingExecutiveId,
   usedReelPostingDayKeys,
 }) {
+  const reelSchedulingOpts = {
+    ...schedulingOpts,
+    schedulingPlanType: isUrgent ? "urgent" : "normal",
+  };
   const staggerOffset = isUrgent ? (i - 1) * 1 : (i - 1) * 2;
   const reelStartSeed = addDaysUTC(baseStartDate, staggerOffset);
   const reelStartDate = createUTCDate(
@@ -595,7 +600,7 @@ async function computeReelStageDatesForGeneration({
     strategistId,
     reelStartDate,
     holidaySet,
-    schedulingOpts
+    reelSchedulingOpts
   );
 
   let shootDue;
@@ -609,7 +614,7 @@ async function computeReelStageDatesForGeneration({
     allowWeekend: schedulingOpts.allowWeekend,
     allowFlexibleAdjustment: !isUrgent && schedulingOpts.allowFlexibleAdjustment,
     leaves: schedulingOpts.leaves,
-    splitAcrossUsers: false,
+    splitAcrossUsers: !isUrgent,
   };
 
   const reelDurationPlan = {
@@ -655,7 +660,7 @@ async function computeReelStageDatesForGeneration({
       managerId,
       approvalStart,
       holidaySet,
-      schedulingOpts
+      reelSchedulingOpts
     );
 
     const postStart = addDaysUTC(approvalDue, 1);
@@ -726,13 +731,114 @@ async function computeReelStageDatesForGeneration({
       postingExecutiveId,
       addDaysUTC(postDue, 1),
       holidaySet,
-      schedulingOpts
+      reelSchedulingOpts
     );
     postingKey = ymdUTC(postDue);
   }
   if (postingKey) usedReelPostingDayKeys.add(postingKey);
 
   return { planDue, shootDue, editDue, approvalDue, postDue };
+}
+
+/** Static post / carousel: 1 + 1 + 4 + 1 day windows (spec). */
+const POST_LIKE_DURATION_PLAN = {
+  strategist: 1,
+  graphicDesigner: 1,
+  manager: 4,
+  postingExecutive: 1,
+};
+
+async function computePostLikeStageDatesForGeneration({
+  itemStartDate,
+  holidaySet,
+  schedulingOpts,
+  strategistId,
+  designerId,
+  managerId,
+  postingExecutiveId,
+  usedPostingDayKeys,
+}) {
+  const postLikeOpts = { ...schedulingOpts, schedulingPlanType: "normal" };
+
+  const planDue = await scheduleStageDay(
+    "strategist",
+    strategistId,
+    itemStartDate,
+    holidaySet,
+    postLikeOpts
+  );
+
+  const borrowPost = (workflowRole) => () =>
+    tryBorrowOneDayFromNextStage(workflowRole, { ...POST_LIKE_DURATION_PLAN }, "post_like");
+
+  const designOut = await fillMultiDaySlots(
+    "graphicDesigner",
+    designerId,
+    addDaysUTC(planDue, 1),
+    POST_LIKE_DURATION_PLAN.graphicDesigner,
+    holidaySet,
+    {
+      includeAssignees: true,
+      capacityDelta: 0,
+      allowWeekend: postLikeOpts.allowWeekend,
+      allowFlexibleAdjustment: postLikeOpts.allowFlexibleAdjustment,
+      leaves: postLikeOpts.leaves,
+      splitAcrossUsers: true,
+      tryBorrowFromNextStage: borrowPost("graphicDesigner"),
+    }
+  );
+  const designLast = designOut.dates[designOut.dates.length - 1];
+
+  const managerOut = await fillMultiDaySlots(
+    "manager",
+    managerId,
+    addDaysUTC(designLast, 1),
+    POST_LIKE_DURATION_PLAN.manager,
+    holidaySet,
+    {
+      includeAssignees: true,
+      capacityDelta: 0,
+      allowWeekend: postLikeOpts.allowWeekend,
+      allowFlexibleAdjustment: postLikeOpts.allowFlexibleAdjustment,
+      leaves: postLikeOpts.leaves,
+      splitAcrossUsers: true,
+      tryBorrowFromNextStage: borrowPost("manager"),
+    }
+  );
+  const approvalDue = managerOut.dates[managerOut.dates.length - 1];
+
+  let postDue = await scheduleStageDay(
+    "postingExecutive",
+    postingExecutiveId,
+    addDaysUTC(approvalDue, 1),
+    holidaySet,
+    postLikeOpts
+  );
+
+  let postingKey = ymdUTC(postDue);
+  while (postingKey && usedPostingDayKeys.has(postingKey)) {
+    postDue = await scheduleStageDay(
+      "postingExecutive",
+      postingExecutiveId,
+      addDaysUTC(postDue, 1),
+      holidaySet,
+      postLikeOpts
+    );
+    postingKey = ymdUTC(postDue);
+  }
+  if (postingKey) usedPostingDayKeys.add(postingKey);
+
+  return {
+    planDue,
+    designDue: designOut.dates[0],
+    designDates: designOut.dates,
+    designAssignees: designOut.assignees || [],
+    approvalStart: managerOut.dates[0],
+    approvalDue: managerOut.dates[managerOut.dates.length - 1],
+    managerDates: managerOut.dates,
+    managerAssignees: managerOut.assignees || [],
+    postDue,
+  };
 }
 
 async function buildReelItemForCalendarDraft({
@@ -832,47 +938,26 @@ async function buildPostItemForCalendarDraft({
     nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
   );
 
-  const planDue = await scheduleStageDay(
-    "strategist",
-    postStrategistId,
+  const {
+    planDue,
+    designDue,
+    designDates,
+    designAssignees,
+    approvalStart,
+    approvalDue,
+    managerDates,
+    managerAssignees,
+    postDue,
+  } = await computePostLikeStageDatesForGeneration({
     itemStartDate,
     holidaySet,
-    schedulingOpts
-  );
-  const designDue = await scheduleStageDay(
-    "graphicDesigner",
-    postDesignerId,
-    addDaysUTC(planDue, 1),
-    holidaySet,
-    schedulingOpts
-  );
-  const approvalDue = await scheduleStageDay(
-    "manager",
-    postManagerId,
-    designDue,
-    holidaySet,
-    schedulingOpts
-  );
-  let postDue = await scheduleStageDay(
-    "postingExecutive",
-    postPostingExecutiveId,
-    addDaysUTC(approvalDue, 1),
-    holidaySet,
-    schedulingOpts
-  );
-
-  let postingKey = ymdUTC(postDue);
-  while (postingKey && usedPostPostingDayKeys.has(postingKey)) {
-    postDue = await scheduleStageDay(
-      "postingExecutive",
-      postPostingExecutiveId,
-      addDaysUTC(postDue, 1),
-      holidaySet,
-      schedulingOpts
-    );
-    postingKey = ymdUTC(postDue);
-  }
-  if (postingKey) usedPostPostingDayKeys.add(postingKey);
+    schedulingOpts,
+    strategistId: postStrategistId,
+    designerId: postDesignerId,
+    managerId: postManagerId,
+    postingExecutiveId: postPostingExecutiveId,
+    usedPostingDayKeys: usedPostPostingDayKeys,
+  });
 
   const postingDate = ymdUTC(postDue);
   const postItem = {
@@ -895,13 +980,17 @@ async function buildPostItemForCalendarDraft({
         role: "graphicDesigner",
         assignedUser: postDesignerId || undefined,
         date: ymdUTC(designDue),
+        durationDays: POST_LIKE_DURATION_PLAN.graphicDesigner,
+        assignedUsersPerDay: buildAssignedUsersPerDayFromSchedule(designDates, designAssignees),
         status: "assigned",
       },
       {
         name: "Approval",
         role: "manager",
         assignedUser: postManagerId || undefined,
-        date: ymdUTC(approvalDue),
+        date: ymdUTC(approvalStart),
+        durationDays: POST_LIKE_DURATION_PLAN.manager,
+        assignedUsersPerDay: buildAssignedUsersPerDayFromSchedule(managerDates, managerAssignees),
         status: "assigned",
       },
       {
@@ -935,47 +1024,26 @@ async function buildCarouselItemForCalendarDraft({
     nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
   );
 
-  const planDue = await scheduleStageDay(
-    "strategist",
-    carouselStrategistId,
+  const {
+    planDue,
+    designDue,
+    designDates,
+    designAssignees,
+    approvalStart,
+    approvalDue,
+    managerDates,
+    managerAssignees,
+    postDue,
+  } = await computePostLikeStageDatesForGeneration({
     itemStartDate,
     holidaySet,
-    schedulingOpts
-  );
-  const designDue = await scheduleStageDay(
-    "graphicDesigner",
-    carouselDesignerId,
-    addDaysUTC(planDue, 1),
-    holidaySet,
-    schedulingOpts
-  );
-  const approvalDue = await scheduleStageDay(
-    "manager",
-    carouselManagerId,
-    designDue,
-    holidaySet,
-    schedulingOpts
-  );
-  let postDue = await scheduleStageDay(
-    "postingExecutive",
-    carouselPostingExecutiveId,
-    addDaysUTC(approvalDue, 1),
-    holidaySet,
-    schedulingOpts
-  );
-
-  let postingKey = ymdUTC(postDue);
-  while (postingKey && usedCarouselPostingDayKeys.has(postingKey)) {
-    postDue = await scheduleStageDay(
-      "postingExecutive",
-      carouselPostingExecutiveId,
-      addDaysUTC(postDue, 1),
-      holidaySet,
-      schedulingOpts
-    );
-    postingKey = ymdUTC(postDue);
-  }
-  if (postingKey) usedCarouselPostingDayKeys.add(postingKey);
+    schedulingOpts,
+    strategistId: carouselStrategistId,
+    designerId: carouselDesignerId,
+    managerId: carouselManagerId,
+    postingExecutiveId: carouselPostingExecutiveId,
+    usedPostingDayKeys: usedCarouselPostingDayKeys,
+  });
 
   const postingDate = ymdUTC(postDue);
   const carouselItem = {
@@ -998,13 +1066,17 @@ async function buildCarouselItemForCalendarDraft({
         role: "graphicDesigner",
         assignedUser: carouselDesignerId || undefined,
         date: ymdUTC(designDue),
+        durationDays: POST_LIKE_DURATION_PLAN.graphicDesigner,
+        assignedUsersPerDay: buildAssignedUsersPerDayFromSchedule(designDates, designAssignees),
         status: "assigned",
       },
       {
         name: "Approval",
         role: "manager",
         assignedUser: carouselManagerId || undefined,
-        date: ymdUTC(approvalDue),
+        date: ymdUTC(approvalStart),
+        durationDays: POST_LIKE_DURATION_PLAN.manager,
+        assignedUsersPerDay: buildAssignedUsersPerDayFromSchedule(managerDates, managerAssignees),
         status: "assigned",
       },
       {
@@ -1231,48 +1303,16 @@ async function generateClientReels(client, options = {}) {
       nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
     );
 
-    const planDue = await scheduleStageDay(
-      "strategist",
-      postStrategistId,
+    const { planDue, designDue, approvalDue, postDue } = await computePostLikeStageDatesForGeneration({
       itemStartDate,
       holidaySet,
-      schedulingOpts
-    );
-    const designDue = await scheduleStageDay(
-      "graphicDesigner",
-      postDesignerId,
-      addDaysUTC(planDue, 1),
-      holidaySet,
-      schedulingOpts
-    );
-    // same day as design OR next day, depending on capacity/workday.
-    const approvalDue = await scheduleStageDay(
-      "manager",
-      postManagerId,
-      designDue,
-      holidaySet,
-      schedulingOpts
-    );
-    let postDue = await scheduleStageDay(
-      "postingExecutive",
-      postPostingExecutiveId,
-      addDaysUTC(approvalDue, 1),
-      holidaySet,
-      schedulingOpts
-    );
-
-    let postingKey = ymdUTC(postDue);
-    while (postingKey && usedPostPostingDayKeys.has(postingKey)) {
-      postDue = await scheduleStageDay(
-        "postingExecutive",
-        postPostingExecutiveId,
-        addDaysUTC(postDue, 1),
-        holidaySet,
-        schedulingOpts
-      );
-      postingKey = ymdUTC(postDue);
-    }
-    if (postingKey) usedPostPostingDayKeys.add(postingKey);
+      schedulingOpts,
+      strategistId: postStrategistId,
+      designerId: postDesignerId,
+      managerId: postManagerId,
+      postingExecutiveId: postPostingExecutiveId,
+      usedPostingDayKeys: usedPostPostingDayKeys,
+    });
 
     const postingDate = createUTCDate(postDue);
     keepLatestPosting(postingDate);
@@ -1327,47 +1367,16 @@ async function generateClientReels(client, options = {}) {
       nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
     );
 
-    const planDue = await scheduleStageDay(
-      "strategist",
-      carouselStrategistId,
+    const { planDue, designDue, approvalDue, postDue } = await computePostLikeStageDatesForGeneration({
       itemStartDate,
       holidaySet,
-      schedulingOpts
-    );
-    const designDue = await scheduleStageDay(
-      "graphicDesigner",
-      carouselDesignerId,
-      addDaysUTC(planDue, 1),
-      holidaySet,
-      schedulingOpts
-    );
-    const approvalDue = await scheduleStageDay(
-      "manager",
-      carouselManagerId,
-      designDue,
-      holidaySet,
-      schedulingOpts
-    );
-    let postDue = await scheduleStageDay(
-      "postingExecutive",
-      carouselPostingExecutiveId,
-      addDaysUTC(approvalDue, 1),
-      holidaySet,
-      schedulingOpts
-    );
-
-    let postingKey = ymdUTC(postDue);
-    while (postingKey && usedCarouselPostingDayKeys.has(postingKey)) {
-      postDue = await scheduleStageDay(
-        "postingExecutive",
-        carouselPostingExecutiveId,
-        addDaysUTC(postDue, 1),
-        holidaySet,
-        schedulingOpts
-      );
-      postingKey = ymdUTC(postDue);
-    }
-    if (postingKey) usedCarouselPostingDayKeys.add(postingKey);
+      schedulingOpts,
+      strategistId: carouselStrategistId,
+      designerId: carouselDesignerId,
+      managerId: carouselManagerId,
+      postingExecutiveId: carouselPostingExecutiveId,
+      usedPostingDayKeys: usedCarouselPostingDayKeys,
+    });
 
     const postingDate = createUTCDate(postDue);
     keepLatestPosting(postingDate);

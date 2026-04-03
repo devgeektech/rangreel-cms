@@ -581,6 +581,11 @@ export default function NewClientPage() {
 
   const selectedPackageId = watch("packageId");
   const startDateWatch = watch("startDate");
+  const clientStartDateYmd = useMemo(() => {
+    if (!startDateWatch) return "";
+    const m = String(startDateWatch).match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : "";
+  }, [startDateWatch]);
   /** useWatch (not watch) so nested Controller fields like `teamAssignment.strategist` update this object reliably. */
   const teamAssignmentWatch = useWatch({
     control,
@@ -1922,7 +1927,9 @@ export default function NewClientPage() {
                       </Button>
                     )}
                     <span className="text-xs text-muted-foreground">
-                      {customizingSchedule ? "Drag stages to reschedule" : "Preview mode"}
+                      {customizingSchedule
+                        ? "Drag Post to reschedule the pipeline (weekdays only; not before start date)"
+                        : "Preview mode"}
                     </span>
                   </div>
 
@@ -1931,14 +1938,17 @@ export default function NewClientPage() {
                     controlledDraft
                     canEdit={customizingSchedule}
                     isCustomizationMode={isCustomizationMode}
-                    editableStageNames={customizingSchedule ? ["Plan", "Shoot", "Edit", "Approval", "Post"] : ["Plan", "Shoot", "Edit", "Approval"]}
+                    editableStageNames={
+                      customizingSchedule ? ["Post"] : ["Plan", "Shoot", "Edit", "Approval"]
+                    }
+                    customizationMinStageDateYmd={customizingSchedule ? clientStartDateYmd : ""}
                     conflictMode="new"
                     roleCapMap={{}}
                     saving={false}
                     userById={userById}
                     onCalendarStateChange={(nextDraft) => setCalendarDraft(nextDraft)}
-                    weekendMode={previewWeekendMode}
-                    onToggleWeekend={setPreviewWeekendMode}
+                    weekendMode={customizingSchedule ? false : previewWeekendMode}
+                    onToggleWeekend={customizingSchedule ? undefined : setPreviewWeekendMode}
                     stageFilter={scheduleStageFilter}
                     onStageFilterChange={setScheduleStageFilter}
                     showStageFilterBar
