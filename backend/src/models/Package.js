@@ -55,6 +55,12 @@ const packageSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    /** Who created this package — used for manager vs global (admin) listing. */
+    createdByRole: {
+      type: String,
+      enum: ["admin", "manager"],
+      default: "manager",
+    },
   },
   {
     timestamps: true,

@@ -271,6 +271,11 @@ export const api = {
 
   // Manager reads (packages/users for client creation)
   getManagerPackages: () => requestJson("/manager/packages", { method: "GET" }),
+  createManagerPackage: (body) =>
+    requestJson("/manager/packages", {
+      method: "POST",
+      body,
+    }),
   getTeamUsers: () => requestJson("/manager/team-users", { method: "GET" }),
 
   /** PROMPT 67 — Manager drag with full scheduler (replacement, buffer, duration, weekend). */

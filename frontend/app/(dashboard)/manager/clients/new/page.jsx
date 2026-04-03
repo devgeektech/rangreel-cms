@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Package as PackageIcon,
+  Plus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -24,8 +25,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { z } from "zod";
-import { Controller, useForm } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import ContentCalendarDnd from "@/components/calendar/ContentCalendarDnd";
 import { cn } from "@/lib/utils";
@@ -179,25 +181,127 @@ const socialHandlesShape = z.object({
 
 const optionalTeamStr = z.string().optional().default("");
 
-const teamGroupReelsShape = z.object({
+const teamAssignmentShape = z.object({
   strategist: optionalTeamStr,
   videographer: optionalTeamStr,
-  videoEditor: optionalTeamStr,
-  manager: optionalTeamStr,
-  postingExecutive: optionalTeamStr,
-});
-
-const teamGroupPostShape = z.object({
-  strategist: optionalTeamStr,
+  editor: optionalTeamStr,
   graphicDesigner: optionalTeamStr,
   manager: optionalTeamStr,
   postingExecutive: optionalTeamStr,
 });
 
-const REEL_KEYS = ["strategist", "videographer", "videoEditor", "manager", "postingExecutive"];
-const POST_KEYS = ["strategist", "graphicDesigner", "manager", "postingExecutive"];
+/** Same content-type flags as package counts (includes noOfPosts + noOfStaticPosts for static). */
+function packageTeamFlags(pkg) {
+  if (!pkg) return { hasReels: false, hasStatic: false, hasCarousels: false };
+  return {
+    hasReels: (Number(pkg.noOfReels) || 0) > 0,
+    hasStatic: (Number(pkg.noOfStaticPosts) || 0) + (Number(pkg.noOfPosts) || 0) > 0,
+    hasCarousels: (Number(pkg.noOfCarousels) || 0) > 0,
+  };
+}
+
+function deriveTeamRoleNeeds({ hasReels, hasStatic, hasCarousels }) {
+  const anyContent = hasReels || hasStatic || hasCarousels;
+  return {
+    needsStrategist: anyContent,
+    needsVideographer: hasReels,
+    needsEditor: hasReels,
+    needsGraphicDesigner: hasStatic || hasCarousels,
+    needsManager: anyContent,
+    needsPostingExecutive: anyContent,
+  };
+}
+
+/** Maps flat teamAssignment to API shape expected by calendar + createClient. */
+function legacyTeamFromAssignment(ta, hasReels, hasStatic, hasCarousels) {
+  const s = (v) => (filled(v) ? v : "");
+  const a = ta || {};
+  const reels = {
+    strategist: "",
+    videographer: "",
+    videoEditor: "",
+    manager: "",
+    postingExecutive: "",
+  };
+  const posts = {
+    strategist: "",
+    graphicDesigner: "",
+    manager: "",
+    postingExecutive: "",
+  };
+  const carousel = { strategist: "", graphicDesigner: "", manager: "", postingExecutive: "" };
+
+  if (hasReels) {
+    reels.strategist = s(a.strategist);
+    reels.videographer = s(a.videographer);
+    reels.videoEditor = s(a.editor);
+    reels.manager = s(a.manager);
+    reels.postingExecutive = s(a.postingExecutive);
+  }
+  if (hasStatic) {
+    posts.strategist = s(a.strategist);
+    posts.graphicDesigner = s(a.graphicDesigner);
+    posts.manager = s(a.manager);
+    posts.postingExecutive = s(a.postingExecutive);
+  }
+  if (hasCarousels) {
+    carousel.strategist = s(a.strategist);
+    carousel.graphicDesigner = s(a.graphicDesigner);
+    carousel.manager = s(a.manager);
+    carousel.postingExecutive = s(a.postingExecutive);
+  }
+  return { reels, posts, carousel };
+}
+
+function buildTeamAssignmentPayload(ta, needs) {
+  const a = ta || {};
+  const pick = (key, need) => (need && filled(a[key]) ? a[key] : null);
+  return {
+    strategist: pick("strategist", needs.needsStrategist),
+    videographer: pick("videographer", needs.needsVideographer),
+    editor: pick("editor", needs.needsEditor),
+    graphicDesigner: pick("graphicDesigner", needs.needsGraphicDesigner),
+    manager: pick("manager", needs.needsManager),
+    postingExecutive: pick("postingExecutive", needs.needsPostingExecutive),
+  };
+}
+
+const TEAM_FIELD_LABELS = {
+  strategist: "Strategist",
+  videographer: "Videographer",
+  editor: "Editor",
+  graphicDesigner: "Graphic Designer",
+  manager: "Manager",
+  postingExecutive: "Posting Executive",
+};
+
+const TEAM_SELECT_CONFIG = [
+  { field: "strategist", label: "Strategist", needsKey: "needsStrategist", optionsKey: "strategist" },
+  { field: "videographer", label: "Videographer", needsKey: "needsVideographer", optionsKey: "videographer" },
+  { field: "editor", label: "Editor", needsKey: "needsEditor", optionsKey: "videoEditor" },
+  { field: "graphicDesigner", label: "Graphic Designer", needsKey: "needsGraphicDesigner", optionsKey: "graphicDesigner" },
+  { field: "manager", label: "Manager", needsKey: "needsManager", optionsKey: "manager" },
+  { field: "postingExecutive", label: "Posting Executive", needsKey: "needsPostingExecutive", optionsKey: "postingExecutive" },
+];
 
 const filled = (s) => s != null && String(s).trim() !== "";
+
+/** Derived scheduling flags from package counts (no manual toggles). */
+function getContentEnabledFromPackage(pkg) {
+  if (!pkg) {
+    return { reels: false, posts: false, carousel: false, googleReviews: false };
+  }
+  const reelCap = Number(pkg.noOfReels) || 0;
+  const postCap = (Number(pkg.noOfPosts) || 0) + (Number(pkg.noOfStaticPosts) || 0);
+  const carCap = Number(pkg.noOfCarousels) || 0;
+  const reviewCap = Number(pkg.noOfGoogleReviews) || 0;
+  return {
+    reels: reelCap > 0,
+    posts: postCap > 0,
+    carousel: carCap > 0,
+    googleReviews: reviewCap > 0,
+  };
+}
 
 function buildClientSchema(packagesList) {
   return z
@@ -244,108 +348,44 @@ function buildClientSchema(packagesList) {
       industry: z.string().optional().default(""),
       packageId: z.string().min(1, "Package selection is required"),
       startDate: z.string().min(1, "Start date is required"),
-      contentEnabled: z
-        .object({
-          reels: z.boolean().optional(),
-          posts: z.boolean().optional(),
-          carousel: z.boolean().optional(),
-        })
-        .optional(),
-      team: z.object({
-        reels: teamGroupReelsShape,
-        posts: teamGroupPostShape,
-        carousel: teamGroupPostShape,
-      }),
+      teamAssignment: teamAssignmentShape,
     })
     .strict()
     .superRefine((data, ctx) => {
       const pkg = (packagesList || []).find((p) => String(p._id) === String(data.packageId));
       if (!pkg) return;
 
-      const ce = data.contentEnabled || {};
+      const ce = getContentEnabledFromPackage(pkg);
       const reelCap = Number(pkg.noOfReels) || 0;
       const postCap = (Number(pkg.noOfPosts) || 0) + (Number(pkg.noOfStaticPosts) || 0);
       const carCap = Number(pkg.noOfCarousels) || 0;
-      const reelsCount = ce.reels === false ? 0 : reelCap;
-      const postsCount = ce.posts === false ? 0 : postCap;
-      const carouselsCount = ce.carousel === false ? 0 : carCap;
+      const reelsCount = ce.reels ? reelCap : 0;
+      const postsCount = ce.posts ? postCap : 0;
+      const carouselsCount = ce.carousel ? carCap : 0;
 
       if (reelCap + postCap + carCap > 0 && reelsCount + postsCount + carouselsCount === 0) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "Turn on at least one of reels, static, or carousels",
-          path: ["contentEnabled", "reels"],
+          message: "This package must include at least one of reels, static posts, or carousels",
+          path: ["packageId"],
         });
       }
 
-      const reels = data.team.reels;
-      const reelAny = REEL_KEYS.some((k) => filled(reels[k]));
-      const reelAll = REEL_KEYS.every((k) => filled(reels[k]));
-      if (reelsCount > 0) {
-        if (!reelAll) {
-          REEL_KEYS.forEach((k) => {
-            if (!filled(reels[k])) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                message: "Required — reels are included in this package",
-                path: ["team", "reels", k],
-              });
-            }
-          });
-        }
-      } else if (reelAny) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "This package has no reels — leave the reels team empty",
-          path: ["team", "reels", "strategist"],
-        });
-      }
+      const flags = packageTeamFlags(pkg);
+      const needs = deriveTeamRoleNeeds(flags);
+      const ta = data.teamAssignment || {};
 
-      const posts = data.team.posts;
-      const postAny = POST_KEYS.some((k) => filled(posts[k]));
-      const postAll = POST_KEYS.every((k) => filled(posts[k]));
-      if (postsCount > 0) {
-        if (!postAll) {
-          POST_KEYS.forEach((k) => {
-            if (!filled(posts[k])) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                message: "Required — static content is included for this client",
-                path: ["team", "posts", k],
-              });
-            }
+      TEAM_SELECT_CONFIG.forEach(({ field, needsKey }) => {
+        if (!needs[needsKey]) return;
+        if (!filled(ta[field])) {
+          const roleName = TEAM_FIELD_LABELS[field] || field;
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Please assign a ${roleName}`,
+            path: ["teamAssignment", field],
           });
         }
-      } else if (postAny) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "Static is not in this package — leave the static team empty",
-          path: ["team", "posts", "strategist"],
-        });
-      }
-
-      const carousel = data.team.carousel;
-      const carAny = POST_KEYS.some((k) => filled(carousel[k]));
-      const carAll = POST_KEYS.every((k) => filled(carousel[k]));
-      if (carouselsCount > 0) {
-        if (!carAll) {
-          POST_KEYS.forEach((k) => {
-            if (!filled(carousel[k])) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                message: "Required — carousels are included in this package",
-                path: ["team", "carousel", k],
-              });
-            }
-          });
-        }
-      } else if (carAny) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "This package has no carousels — leave the carousel team empty",
-          path: ["team", "carousel", "strategist"],
-        });
-      }
+      });
     });
 }
 
@@ -395,33 +435,17 @@ const defaultValues = {
   industry: "",
   packageId: "",
   startDate: "",
-  contentEnabled: {
-    reels: true,
-    posts: true,
-    carousel: true,
-  },
-  team: {
-    reels: {
-      strategist: "",
-      videographer: "",
-      videoEditor: "",
-      manager: "",
-      postingExecutive: "",
-    },
-    posts: {
-      strategist: "",
-      graphicDesigner: "",
-      manager: "",
-      postingExecutive: "",
-    },
-    carousel: {
-      strategist: "",
-      graphicDesigner: "",
-      manager: "",
-      postingExecutive: "",
-    },
+  teamAssignment: {
+    strategist: "",
+    videographer: "",
+    editor: "",
+    graphicDesigner: "",
+    manager: "",
+    postingExecutive: "",
   },
 };
+
+const emptyTeamAssignment = { ...defaultValues.teamAssignment };
 
 function toIsoUtcMidnight(dateOnly) {
   if (!dateOnly) return "";
@@ -520,6 +544,19 @@ export default function NewClientPage() {
   const [scheduleSubmitted, setScheduleSubmitted] = useState(false);
   const [calendarDraftError, setCalendarDraftError] = useState("");
   const [briefFiles, setBriefFiles] = useState(emptyBriefFiles);
+  const [currentUserId, setCurrentUserId] = useState(null);
+  const [createPackageOpen, setCreatePackageOpen] = useState(false);
+  const [createPackageSubmitting, setCreatePackageSubmitting] = useState(false);
+  const [createPackageError, setCreatePackageError] = useState("");
+  const [newPkgForm, setNewPkgForm] = useState({
+    name: "",
+    noOfReels: 0,
+    noOfStaticPosts: 0,
+    noOfCarousels: 0,
+    noOfGoogleReviews: 0,
+    gmbPosting: false,
+    campaignManagement: false,
+  });
   const packagesRef = useRef(packages);
   packagesRef.current = packages;
 
@@ -529,6 +566,7 @@ export default function NewClientPage() {
     watch,
     trigger,
     setValue,
+    getValues,
     formState: { errors, isSubmitting },
   } = useForm({
     resolver: (...args) => zodResolver(buildClientSchema(packagesRef.current))(...args),
@@ -539,119 +577,70 @@ export default function NewClientPage() {
 
   const selectedPackageId = watch("packageId");
   const startDateWatch = watch("startDate");
-  const teamWatch = watch("team");
-  const contentEnabledW = watch("contentEnabled");
+  /** useWatch (not watch) so nested Controller fields like `teamAssignment.strategist` update this object reliably. */
+  const teamAssignmentWatch = useWatch({
+    control,
+    name: "teamAssignment",
+    defaultValue: emptyTeamAssignment,
+  });
   const selectedPackage = useMemo(
     () => (packages || []).find((p) => String(p._id) === String(selectedPackageId)),
     [packages, selectedPackageId]
   );
 
-  const pkgReelCap = selectedPackage ? (Number(selectedPackage.noOfReels) || 0) > 0 : false;
-  const pkgPostCap =
-    selectedPackage
-      ? ((Number(selectedPackage.noOfPosts) || 0) + (Number(selectedPackage.noOfStaticPosts) || 0)) > 0
-      : false;
-  const pkgCarouselCap = selectedPackage ? (Number(selectedPackage.noOfCarousels) || 0) > 0 : false;
+  const contentEnabledDerived = useMemo(
+    () => getContentEnabledFromPackage(selectedPackage),
+    [selectedPackage]
+  );
 
-  const needReels = pkgReelCap && contentEnabledW?.reels !== false;
-  const needPosts = pkgPostCap && contentEnabledW?.posts !== false;
-  const needCarousel = pkgCarouselCap && contentEnabledW?.carousel !== false;
+  const teamFlags = useMemo(() => packageTeamFlags(selectedPackage), [selectedPackage]);
+  const roleNeeds = useMemo(() => deriveTeamRoleNeeds(teamFlags), [teamFlags]);
 
-  const reelsCompleteNow = !needReels || REEL_KEYS.every((k) => filled(teamWatch?.reels?.[k]));
-  const postsCompleteNow = !needPosts || POST_KEYS.every((k) => filled(teamWatch?.posts?.[k]));
-  const carouselsCompleteNow = !needCarousel || POST_KEYS.every((k) => filled(teamWatch?.carousel?.[k]));
+  const teamAssignmentComplete = useMemo(() => {
+    return TEAM_SELECT_CONFIG.every(({ field, needsKey }) => {
+      if (!roleNeeds[needsKey]) return true;
+      return filled(teamAssignmentWatch?.[field]);
+    });
+  }, [teamAssignmentWatch, roleNeeds]);
 
-  // Dependency stability: `watch("team")` may keep object identity stable. These signatures
-  // ensure the preview generation effect reruns when dropdown values change.
-  const reelsTeamSignature = REEL_KEYS.map((k) => teamWatch?.reels?.[k] ?? "").join("|");
-  const postsTeamSignature = POST_KEYS.map((k) => teamWatch?.posts?.[k] ?? "").join("|");
-  const carouselsTeamSignature = POST_KEYS.map((k) => teamWatch?.carousel?.[k] ?? "").join("|");
+  const teamAssignmentFieldSignature = useMemo(
+    () =>
+      TEAM_SELECT_CONFIG.map(({ field, needsKey }) =>
+        roleNeeds[needsKey] ? (teamAssignmentWatch?.[field] ?? "") : ""
+      ).join("|"),
+    [teamAssignmentWatch, roleNeeds]
+  );
 
-  const missingTeams = [];
-  if (needReels && !reelsCompleteNow) missingTeams.push("Reels team");
-  if (needPosts && !postsCompleteNow) missingTeams.push("Static team");
-  if (needCarousel && !carouselsCompleteNow) missingTeams.push("Carousel team");
+  const assigningTypeLabels = [];
+  if (teamFlags.hasReels) assigningTypeLabels.push("Reels");
+  if (teamFlags.hasStatic) assigningTypeLabels.push("Static");
+  if (teamFlags.hasCarousels) assigningTypeLabels.push("Carousel");
 
-  const enabledTypeLabels = [];
-  if (needReels) enabledTypeLabels.push("Reels");
-  if (needPosts) enabledTypeLabels.push("Static");
-  if (needCarousel) enabledTypeLabels.push("Carousels");
-
-  const keyLabelReels = {
-    strategist: "Strategist",
-    videographer: "Videographer",
-    videoEditor: "Editor",
-    manager: "Manager",
-    postingExecutive: "Posting Executive",
-  };
-  const keyLabelPost = {
-    strategist: "Strategist",
-    graphicDesigner: "Graphic Designer",
-    manager: "Manager",
-    postingExecutive: "Posting Executive",
-  };
-
-  const missingRoleDetails = [];
-  if (needReels && !reelsCompleteNow) {
-    const missingKeys = REEL_KEYS.filter((k) => !filled(teamWatch?.reels?.[k]));
-    missingRoleDetails.push(`Reels: ${missingKeys.map((k) => keyLabelReels[k] || k).join(", ")}`);
-  }
-  if (needPosts && !postsCompleteNow) {
-    const missingKeys = POST_KEYS.filter((k) => !filled(teamWatch?.posts?.[k]));
-    missingRoleDetails.push(`Static: ${missingKeys.map((k) => keyLabelPost[k] || k).join(", ")}`);
-  }
-  if (needCarousel && !carouselsCompleteNow) {
-    const missingKeys = POST_KEYS.filter((k) => !filled(teamWatch?.carousel?.[k]));
-    missingRoleDetails.push(`Carousels: ${missingKeys.map((k) => keyLabelPost[k] || k).join(", ")}`);
-  }
-
-  /** Only reset toggles when the user picks a different package — not on unrelated re-renders. */
-  const scheduleSyncedPackageIdRef = useRef(null);
-  useEffect(() => {
-    if (!selectedPackageId) {
-      scheduleSyncedPackageIdRef.current = null;
-      return;
+  const missingRoleLabelsForPreview = [];
+  TEAM_SELECT_CONFIG.forEach(({ field, needsKey }) => {
+    if (!roleNeeds[needsKey]) return;
+    if (!filled(teamAssignmentWatch?.[field])) {
+      missingRoleLabelsForPreview.push(TEAM_FIELD_LABELS[field] || field);
     }
-    const idStr = String(selectedPackageId);
-    const pkg = (packages || []).find((p) => String(p._id) === idStr);
-    if (!pkg) return;
-    if (scheduleSyncedPackageIdRef.current === idStr) return;
-    scheduleSyncedPackageIdRef.current = idStr;
-    setValue(
-      "contentEnabled",
-      {
-        reels: (Number(pkg.noOfReels) || 0) > 0,
-        posts: (Number(pkg.noOfPosts) || 0) + (Number(pkg.noOfStaticPosts) || 0) > 0,
-        carousel: (Number(pkg.noOfCarousels) || 0) > 0,
-      },
-      { shouldValidate: false }
-    );
-  }, [selectedPackageId, packages, setValue]);
+  });
 
   useEffect(() => {
-    if (!contentEnabledW) return;
-    if (contentEnabledW.reels === false) {
-      setValue("team.reels", { ...defaultValues.team.reels });
-    }
-    if (contentEnabledW.posts === false) {
-      setValue("team.posts", { ...defaultValues.team.posts });
-    }
-    if (contentEnabledW.carousel === false) {
-      setValue("team.carousel", { ...defaultValues.team.carousel });
-    }
-  }, [contentEnabledW, setValue]);
+    if (!selectedPackageId) return;
+    setValue("teamAssignment", { ...emptyTeamAssignment }, { shouldValidate: false });
+  }, [selectedPackageId, setValue]);
 
   useEffect(() => {
     if (step !== 2) return;
     if (!selectedPackageId) return;
     if (!startDateWatch) return;
-    if (!selectedPackage) return;
 
-    const reelsComplete = !needReels || REEL_KEYS.every((k) => filled(teamWatch?.reels?.[k]));
-    const postsComplete = !needPosts || POST_KEYS.every((k) => filled(teamWatch?.posts?.[k]));
-    const carouselsComplete = !needCarousel || POST_KEYS.every((k) => filled(teamWatch?.carousel?.[k]));
+    const pkg = packagesRef.current.find((p) => String(p._id) === String(selectedPackageId));
+    if (!pkg) return;
 
-    if (!reelsComplete || !postsComplete || !carouselsComplete) return;
+    const ce = getContentEnabledFromPackage(pkg);
+    if (!ce.reels && !ce.posts && !ce.carousel) return;
+
+    if (!teamAssignmentComplete) return;
 
     let mounted = true;
     setCalendarDraftLoading(true);
@@ -659,11 +648,17 @@ export default function NewClientPage() {
 
     const t = setTimeout(async () => {
       try {
+        const pkgNow = packagesRef.current.find((p) => String(p._id) === String(selectedPackageId));
+        if (!pkgNow) throw new Error("Package not found");
+        const ta = getValues("teamAssignment");
+        const flags = packageTeamFlags(pkgNow);
+        const teamPayload = legacyTeamFromAssignment(ta, flags.hasReels, flags.hasStatic, flags.hasCarousels);
+
         const res = await api.generateCalendarDraft({
           packageId: selectedPackageId,
           startDate: startDateWatch,
-          team: teamWatch,
-          contentEnabled: contentEnabledW || {},
+          team: teamPayload,
+          contentEnabled: getContentEnabledFromPackage(pkgNow),
         });
 
         const payload = res?.data ?? res;
@@ -689,14 +684,9 @@ export default function NewClientPage() {
     step,
     selectedPackageId,
     startDateWatch,
-    selectedPackage,
-    needReels,
-    needPosts,
-    needCarousel,
-    reelsTeamSignature,
-    postsTeamSignature,
-    carouselsTeamSignature,
-    contentEnabledW,
+    teamAssignmentComplete,
+    teamAssignmentFieldSignature,
+    getValues,
   ]);
 
   const loadPackages = async () => {
@@ -723,9 +713,66 @@ export default function NewClientPage() {
     }
   };
 
+  const openCreatePackageModal = () => {
+    setCreatePackageError("");
+    setNewPkgForm({
+      name: "",
+      noOfReels: 0,
+      noOfStaticPosts: 0,
+      noOfCarousels: 0,
+      noOfGoogleReviews: 0,
+      gmbPosting: false,
+      campaignManagement: false,
+    });
+    setCreatePackageOpen(true);
+  };
+
+  const submitCreatePackage = async (e) => {
+    e.preventDefault();
+    setCreatePackageError("");
+    setCreatePackageSubmitting(true);
+    try {
+      const res = await api.createManagerPackage({
+        name: newPkgForm.name.trim(),
+        noOfReels: Number(newPkgForm.noOfReels),
+        noOfStaticPosts: Number(newPkgForm.noOfStaticPosts),
+        noOfCarousels: Number(newPkgForm.noOfCarousels),
+        noOfGoogleReviews: Number(newPkgForm.noOfGoogleReviews) || 0,
+        gmbPosting: Boolean(newPkgForm.gmbPosting),
+        campaignManagement: Boolean(newPkgForm.campaignManagement),
+      });
+      const created = res?.data;
+      if (!created?._id) throw new Error("Invalid response from server");
+      setPackages((prev) => [created, ...(prev || [])]);
+      setValue("packageId", created._id, { shouldValidate: true });
+      setCreatePackageOpen(false);
+      toast.success("Package created");
+    } catch (err) {
+      setCreatePackageError(err?.message || "Failed to create package");
+    } finally {
+      setCreatePackageSubmitting(false);
+    }
+  };
+
   useEffect(() => {
     loadPackages();
     loadUsers();
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await api.getMe();
+        const id = res?.user?._id;
+        if (mounted && id) setCurrentUserId(String(id));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const roleOptions = useMemo(() => {
@@ -791,6 +838,19 @@ export default function NewClientPage() {
 
   const back = () => setStep((prev) => Math.max(prev - 1, 0));
 
+  const scrollToFirstTeamError = (formErrors) => {
+    const order = ["strategist", "videographer", "editor", "graphicDesigner", "manager", "postingExecutive"];
+    for (const key of order) {
+      if (formErrors.teamAssignment?.[key]) {
+        document
+          .querySelector(`[data-rhf-field="teamAssignment.${key}"]`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+    }
+    document.querySelector("form .text-destructive")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+
   const onSubmit = async (values) => {
     if (step !== 2) return;
 
@@ -840,11 +900,15 @@ export default function NewClientPage() {
         startDate: toIsoUtcMidnight(values.startDate),
         status: "active",
         package: values.packageId,
-        contentEnabled: {
-          reels: values.contentEnabled?.reels !== false,
-          posts: values.contentEnabled?.posts !== false,
-          carousel: values.contentEnabled?.carousel !== false,
-        },
+        contentEnabled: (() => {
+          const pkgSubmit = (packages || []).find((p) => String(p._id) === String(values.packageId));
+          const ce = getContentEnabledFromPackage(pkgSubmit);
+          return {
+            reels: ce.reels,
+            posts: ce.posts,
+            carousel: ce.carousel,
+          };
+        })(),
         calendarDraft: calendarDraft && Array.isArray(calendarDraft.items) ? calendarDraft : undefined,
         customStages:
           calendarDraft && Array.isArray(calendarDraft.items)
@@ -862,27 +926,16 @@ export default function NewClientPage() {
                 })),
               }))
             : undefined,
-        team: {
-          reels: {
-            strategist: values.team?.reels?.strategist || undefined,
-            videographer: values.team?.reels?.videographer || undefined,
-            videoEditor: values.team?.reels?.videoEditor || undefined,
-            manager: values.team?.reels?.manager || undefined,
-            postingExecutive: values.team?.reels?.postingExecutive || undefined,
-          },
-          posts: {
-            strategist: values.team?.posts?.strategist || undefined,
-            graphicDesigner: values.team?.posts?.graphicDesigner || undefined,
-            manager: values.team?.posts?.manager || undefined,
-            postingExecutive: values.team?.posts?.postingExecutive || undefined,
-          },
-          carousel: {
-            strategist: values.team?.carousel?.strategist || undefined,
-            graphicDesigner: values.team?.carousel?.graphicDesigner || undefined,
-            manager: values.team?.carousel?.manager || undefined,
-            postingExecutive: values.team?.carousel?.postingExecutive || undefined,
-          },
-        },
+        team: (() => {
+          const pkgSubmit = (packages || []).find((p) => String(p._id) === String(values.packageId));
+          const f = packageTeamFlags(pkgSubmit);
+          return legacyTeamFromAssignment(values.teamAssignment, f.hasReels, f.hasStatic, f.hasCarousels);
+        })(),
+        teamAssignment: (() => {
+          const pkgSubmit = (packages || []).find((p) => String(p._id) === String(values.packageId));
+          const needs = deriveTeamRoleNeeds(packageTeamFlags(pkgSubmit));
+          return buildTeamAssignmentPayload(values.teamAssignment, needs);
+        })(),
       };
 
       const res = await api.createClient(payload);
@@ -942,7 +995,7 @@ export default function NewClientPage() {
         </div>
       </div>
 
-      <form className="space-y-5" onSubmit={handleSubmit(onSubmit)}>
+      <form className="space-y-5" onSubmit={handleSubmit(onSubmit, scrollToFirstTeamError)}>
         {step === 0 ? (
           <div className="space-y-5" data-client-step="1">
             <Card>
@@ -1543,10 +1596,110 @@ export default function NewClientPage() {
             </Card>
 
             <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <PackageIcon className="h-4 w-4 text-muted-foreground" />
-                <h3 className="text-lg font-semibold">Package</h3>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <PackageIcon className="h-4 w-4 text-muted-foreground" />
+                  <h3 className="text-lg font-semibold">Package</h3>
+                </div>
+                <Button type="button" variant="outline" size="sm" className="gap-1" onClick={openCreatePackageModal}>
+                  <Plus className="h-3.5 w-3.5" />
+                  Create package
+                </Button>
               </div>
+
+              <Dialog open={createPackageOpen} onOpenChange={setCreatePackageOpen}>
+                <DialogContent className="sm:max-w-md" showCloseButton>
+                  <form onSubmit={submitCreatePackage}>
+                    <DialogHeader>
+                      <DialogTitle>Create package</DialogTitle>
+                    </DialogHeader>
+                    <div className="grid gap-3 py-2">
+                      {createPackageError ? (
+                        <p className="text-sm text-destructive">{createPackageError}</p>
+                      ) : null}
+                      <Field label="Package name *" required>
+                        <Input
+                          value={newPkgForm.name}
+                          onChange={(e) => setNewPkgForm((p) => ({ ...p, name: e.target.value }))}
+                          placeholder="e.g. Growth"
+                          autoComplete="off"
+                        />
+                      </Field>
+                      <Field label="Reels per month *" required>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={newPkgForm.noOfReels}
+                          onChange={(e) =>
+                            setNewPkgForm((p) => ({ ...p, noOfReels: e.target.valueAsNumber || Number(e.target.value) || 0 }))
+                          }
+                        />
+                      </Field>
+                      <Field label="Static posts per month *" required>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={newPkgForm.noOfStaticPosts}
+                          onChange={(e) =>
+                            setNewPkgForm((p) => ({
+                              ...p,
+                              noOfStaticPosts: e.target.valueAsNumber || Number(e.target.value) || 0,
+                            }))
+                          }
+                        />
+                      </Field>
+                      <Field label="Carousels per month *" required>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={newPkgForm.noOfCarousels}
+                          onChange={(e) =>
+                            setNewPkgForm((p) => ({
+                              ...p,
+                              noOfCarousels: e.target.valueAsNumber || Number(e.target.value) || 0,
+                            }))
+                          }
+                        />
+                      </Field>
+                      <Field label="Google Reviews per month">
+                        <Input
+                          type="number"
+                          min={0}
+                          value={newPkgForm.noOfGoogleReviews}
+                          onChange={(e) =>
+                            setNewPkgForm((p) => ({
+                              ...p,
+                              noOfGoogleReviews: e.target.valueAsNumber || Number(e.target.value) || 0,
+                            }))
+                          }
+                        />
+                      </Field>
+                      <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+                        <span className="text-sm">GMB Posting</span>
+                        <Checkbox
+                          checked={newPkgForm.gmbPosting}
+                          onCheckedChange={(v) => setNewPkgForm((p) => ({ ...p, gmbPosting: v === true }))}
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+                        <span className="text-sm">Campaign Management</span>
+                        <Checkbox
+                          checked={newPkgForm.campaignManagement}
+                          onCheckedChange={(v) => setNewPkgForm((p) => ({ ...p, campaignManagement: v === true }))}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:justify-end">
+                      <Button type="button" variant="outline" onClick={() => setCreatePackageOpen(false)}>
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={createPackageSubmitting}>
+                        {createPackageSubmitting ? "Creating…" : "Create & select"}
+                      </Button>
+                    </div>
+                  </form>
+                </DialogContent>
+              </Dialog>
 
               {packagesLoading ? (
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -1567,6 +1720,15 @@ export default function NewClientPage() {
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                   {packages.map((pkg) => {
                     const selected = pkg._id === selectedPackageId;
+                    const createdById =
+                      pkg.createdBy && typeof pkg.createdBy === "object" && pkg.createdBy._id != null
+                        ? String(pkg.createdBy._id)
+                        : pkg.createdBy != null
+                          ? String(pkg.createdBy)
+                          : "";
+                    const showMine =
+                      Boolean(currentUserId && createdById && createdById === currentUserId && pkg.createdByRole === "manager");
+                    const showGlobal = pkg.createdByRole === "admin" || !createdById;
                     return (
                       <button
                         key={pkg._id}
@@ -1577,8 +1739,21 @@ export default function NewClientPage() {
                         <Card className={selected ? "border-primary ring-2 ring-primary/20" : ""}>
                           <CardHeader className="pb-2">
                             <div className="flex items-start justify-between gap-2">
-                              <CardTitle className="text-base">{pkg.name}</CardTitle>
-                              {selected ? <CheckCircle2 className="h-5 w-5 text-primary" /> : null}
+                              <div className="min-w-0 flex-1 space-y-1.5">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <CardTitle className="text-base">{pkg.name}</CardTitle>
+                                  {showMine ? (
+                                    <Badge className="shrink-0 border-purple-500/30 bg-purple-500/15 text-purple-800 dark:text-purple-200">
+                                      Mine
+                                    </Badge>
+                                  ) : showGlobal ? (
+                                    <Badge variant="secondary" className="shrink-0 text-muted-foreground">
+                                      Global
+                                    </Badge>
+                                  ) : null}
+                                </div>
+                              </div>
+                              {selected ? <CheckCircle2 className="h-5 w-5 shrink-0 text-primary" /> : null}
                             </div>
                           </CardHeader>
                           <CardContent className="space-y-3 text-sm">
@@ -1608,44 +1783,56 @@ export default function NewClientPage() {
                 <p className="text-xs text-destructive">{errors.packageId.message}</p>
               ) : null}
 
-              {selectedPackage ? (
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Content to schedule</CardTitle>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Content to schedule</CardTitle>
+                  {selectedPackage ? (
                     <p className="text-xs font-normal text-muted-foreground">
-                      Uncheck types you don’t need for this client (e.g. only reels). Team assignment follows these checkboxes.
+                      Types below are included in the selected package. Team assignment on the next step follows these types.
                     </p>
-                  </CardHeader>
-                  <CardContent className="space-y-3 text-sm">
-                    <ScheduleToggleRow
-                      label={`Reels (${Number(selectedPackage.noOfReels) || 0} in package)`}
-                      disabled={!((Number(selectedPackage.noOfReels) || 0) > 0)}
-                      name="contentEnabled.reels"
-                      control={control}
-                    />
-                    <ScheduleToggleRow
-                      label={`Static (${(Number(selectedPackage.noOfPosts) || 0) + (Number(selectedPackage.noOfStaticPosts) || 0)} in package)`}
-                      disabled={!(((Number(selectedPackage.noOfPosts) || 0) + (Number(selectedPackage.noOfStaticPosts) || 0)) > 0)}
-                      name="contentEnabled.posts"
-                      control={control}
-                    />
-                    <ScheduleToggleRow
-                      label={`Carousels (${Number(selectedPackage.noOfCarousels) || 0} in package)`}
-                      disabled={!((Number(selectedPackage.noOfCarousels) || 0) > 0)}
-                      name="contentEnabled.carousel"
-                      control={control}
-                    />
-                  </CardContent>
-                </Card>
-              ) : null}
+                  ) : null}
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  {!selectedPackage ? (
+                    <p className="text-sm text-muted-foreground">Select a package above to see included content types.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {(Number(selectedPackage.noOfReels) || 0) > 0 ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/20 px-3 py-2">
+                          <span className="font-medium">Reels</span>
+                          <Badge variant="secondary">{Number(selectedPackage.noOfReels) || 0} in package</Badge>
+                        </div>
+                      ) : null}
+                      {(Number(selectedPackage.noOfPosts) || 0) + (Number(selectedPackage.noOfStaticPosts) || 0) > 0 ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/20 px-3 py-2">
+                          <span className="font-medium">Static</span>
+                          <Badge variant="secondary">
+                            {(Number(selectedPackage.noOfPosts) || 0) + (Number(selectedPackage.noOfStaticPosts) || 0)} in package
+                          </Badge>
+                        </div>
+                      ) : null}
+                      {(Number(selectedPackage.noOfCarousels) || 0) > 0 ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/20 px-3 py-2">
+                          <span className="font-medium">Carousels</span>
+                          <Badge variant="secondary">{Number(selectedPackage.noOfCarousels) || 0} in package</Badge>
+                        </div>
+                      ) : null}
+                      {(Number(selectedPackage.noOfGoogleReviews) || 0) > 0 ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/20 px-3 py-2">
+                          <span className="font-medium">Google Reviews</span>
+                          <Badge variant="secondary">{Number(selectedPackage.noOfGoogleReviews) || 0} in package</Badge>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </div>
           </div>
         ) : null}
 
         {step === 2 ? (
           <div className="space-y-4">
-            <h3 className="text-lg font-semibold">Team assignment</h3>
-
             {usersLoading ? (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {Array.from({ length: 6 }).map((_, idx) => (
@@ -1653,137 +1840,35 @@ export default function NewClientPage() {
                 ))}
               </div>
             ) : (
-              <div className="space-y-5">
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">🎬 Reels team</CardTitle>
-                    <p className="text-xs font-normal text-muted-foreground">
-                      {needReels
-                        ? "Scheduled for this client — assign all five roles."
-                        : "Not scheduled — leave empty (enable “Reels” under Content to schedule if this package includes reels)."}
-                    </p>
-                  </CardHeader>
-                  <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                    <TeamSelect
-                      label={needReels ? "Strategist *" : "Strategist"}
-                      name="team.reels.strategist"
-                      control={control}
-                      options={roleOptions.strategist}
-                      error={errors.team?.reels?.strategist?.message}
-                    />
-                    <TeamSelect
-                      label={needReels ? "Videographer *" : "Videographer"}
-                      name="team.reels.videographer"
-                      control={control}
-                      options={roleOptions.videographer}
-                      error={errors.team?.reels?.videographer?.message}
-                    />
-                    <TeamSelect
-                      label={needReels ? "Editor *" : "Editor"}
-                      name="team.reels.videoEditor"
-                      control={control}
-                      options={roleOptions.videoEditor}
-                      error={errors.team?.reels?.videoEditor?.message}
-                    />
-                    <TeamSelect
-                      label={needReels ? "Manager *" : "Manager"}
-                      name="team.reels.manager"
-                      control={control}
-                      options={roleOptions.manager}
-                      error={errors.team?.reels?.manager?.message}
-                    />
-                    <TeamSelect
-                      label={needReels ? "Posting Executive *" : "Posting Executive"}
-                      name="team.reels.postingExecutive"
-                      control={control}
-                      options={roleOptions.postingExecutive}
-                      error={errors.team?.reels?.postingExecutive?.message}
-                    />
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">🖼 Static team</CardTitle>
-                    <p className="text-xs font-normal text-muted-foreground">
-                      {needPosts
-                        ? "Scheduled for this client — assign all four roles."
-                        : "Not scheduled — leave empty."}
-                    </p>
-                  </CardHeader>
-                  <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                    <TeamSelect
-                      label={needPosts ? "Strategist *" : "Strategist"}
-                      name="team.posts.strategist"
-                      control={control}
-                      options={roleOptions.strategist}
-                      error={errors.team?.posts?.strategist?.message}
-                    />
-                    <TeamSelect
-                      label={needPosts ? "Graphic Designer *" : "Graphic Designer"}
-                      name="team.posts.graphicDesigner"
-                      control={control}
-                      options={roleOptions.graphicDesigner}
-                      error={errors.team?.posts?.graphicDesigner?.message}
-                    />
-                    <TeamSelect
-                      label={needPosts ? "Manager *" : "Manager"}
-                      name="team.posts.manager"
-                      control={control}
-                      options={roleOptions.manager}
-                      error={errors.team?.posts?.manager?.message}
-                    />
-                    <TeamSelect
-                      label={needPosts ? "Posting Executive *" : "Posting Executive"}
-                      name="team.posts.postingExecutive"
-                      control={control}
-                      options={roleOptions.postingExecutive}
-                      error={errors.team?.posts?.postingExecutive?.message}
-                    />
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">📚 Carousel team</CardTitle>
-                    <p className="text-xs font-normal text-muted-foreground">
-                      {needCarousel
-                        ? "Scheduled for this client — assign all four roles."
-                        : "Not scheduled — leave empty (uncheck Carousels under Content to schedule on the package step if you only want reels)."}
-                    </p>
-                  </CardHeader>
-                  <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                    <TeamSelect
-                      label={needCarousel ? "Strategist *" : "Strategist"}
-                      name="team.carousel.strategist"
-                      control={control}
-                      options={roleOptions.strategist}
-                      error={errors.team?.carousel?.strategist?.message}
-                    />
-                    <TeamSelect
-                      label={needCarousel ? "Graphic Designer *" : "Graphic Designer"}
-                      name="team.carousel.graphicDesigner"
-                      control={control}
-                      options={roleOptions.graphicDesigner}
-                      error={errors.team?.carousel?.graphicDesigner?.message}
-                    />
-                    <TeamSelect
-                      label={needCarousel ? "Manager *" : "Manager"}
-                      name="team.carousel.manager"
-                      control={control}
-                      options={roleOptions.manager}
-                      error={errors.team?.carousel?.manager?.message}
-                    />
-                    <TeamSelect
-                      label={needCarousel ? "Posting Executive *" : "Posting Executive"}
-                      name="team.carousel.postingExecutive"
-                      control={control}
-                      options={roleOptions.postingExecutive}
-                      error={errors.team?.carousel?.postingExecutive?.message}
-                    />
-                  </CardContent>
-                </Card>
-              </div>
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Team assignment</CardTitle>
+                  <p className="text-xs font-normal text-muted-foreground">
+                    {assigningTypeLabels.length > 0
+                      ? `Assigning team for: ${assigningTypeLabels.join(", ")}`
+                      : "Select a package with reels, static, or carousel content."}
+                  </p>
+                </CardHeader>
+                <CardContent className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  {TEAM_SELECT_CONFIG.map(({ field, label, needsKey, optionsKey }) => {
+                    if (!roleNeeds[needsKey]) return null;
+                    const opts = roleOptions[optionsKey] || [];
+                    const err = errors.teamAssignment?.[field]?.message;
+                    return (
+                      <TeamSelect
+                        key={field}
+                        label={label}
+                        name={`teamAssignment.${field}`}
+                        control={control}
+                        options={opts}
+                        error={err}
+                        placeholder={`Select ${label}`}
+                        required
+                      />
+                    );
+                  })}
+                </CardContent>
+              </Card>
             )}
           </div>
         ) : null}
@@ -1852,11 +1937,15 @@ export default function NewClientPage() {
                 <p className="text-sm text-muted-foreground">
                   {calendarDraft && Array.isArray(calendarDraft.items) && calendarDraft.items.length === 0
                     ? "Schedule preview generated 0 items. Check that enabled content types have counts in the selected package."
-                    : missingTeams.length
-                      ? `Fill required teams to generate schedule preview (${missingRoleDetails.join("; ")}).`
-                      : enabledTypeLabels.length
-                        ? `Teams for enabled types (${enabledTypeLabels.join(", ")}) look complete, but preview is not generated yet. Change any team selection or refresh.`
-                        : "Fill required teams to generate schedule preview."}
+                    : !teamAssignmentComplete
+                      ? `Fill required team members to generate schedule preview.${
+                          missingRoleLabelsForPreview.length
+                            ? ` Missing: ${missingRoleLabelsForPreview.join(", ")}.`
+                            : ""
+                        }`
+                      : assigningTypeLabels.length
+                        ? "Fill required team members to generate schedule preview. If preview does not appear, change a selection or wait a moment."
+                        : "Fill required team members to generate schedule preview."}
                 </p>
               )}
             </CardContent>
@@ -1927,55 +2016,33 @@ function Field({ label, children, error, required }) {
   );
 }
 
-function ScheduleToggleRow({ label, disabled, name, control }) {
-  const inputId = useId();
+function TeamSelect({ label, name, control, options, error, placeholder, required }) {
+  const ph = placeholder || `Select ${label}`;
   return (
-    <Controller
-      name={name}
-      control={control}
-      render={({ field }) => {
-        const checked = disabled ? false : field.value !== false;
-        return (
-          <div
-            className={`flex items-center justify-between gap-4 rounded-md border border-border px-3 py-2 ${disabled ? "bg-muted/40 opacity-70" : ""}`}
-          >
-            <label htmlFor={inputId} className={`flex-1 cursor-pointer text-sm ${disabled ? "cursor-not-allowed" : ""}`}>
-              {label}
-            </label>
-            <Checkbox
-              id={inputId}
-              checked={checked}
-              disabled={disabled}
-              onCheckedChange={(next) => {
-                if (!disabled) field.onChange(next === true);
-              }}
-            />
-          </div>
-        );
-      }}
-    />
-  );
-}
-
-function TeamSelect({ label, name, control, options, error }) {
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
+    <div className="space-y-1.5" data-rhf-field={name}>
+      <Label>
+        {label}
+        {required ? <span className="text-red-500"> *</span> : null}
+      </Label>
       <Controller
         name={name}
         control={control}
         render={({ field }) => {
-          const selected = (options || []).find((u) => String(u?._id) === String(field.value));
+          const v = field.value != null && field.value !== "" ? String(field.value) : undefined;
+          const selected = (options || []).find((u) => String(u?._id) === v);
           return (
-          <Select value={field.value || undefined} onValueChange={(value) => field.onChange(value)}>
+          <Select
+            value={v}
+            onValueChange={(value) => field.onChange(value != null ? String(value) : "")}
+          >
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select team member">
-                {selected?.name || (field.value ? "Selected user" : "")}
+              <SelectValue placeholder={ph}>
+                {selected?.name || (v ? "Selected user" : "")}
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {(options || []).map((u) => (
-                <SelectItem key={u._id} value={u._id}>
+                <SelectItem key={String(u._id)} value={String(u._id)}>
                   {u.name}
                 </SelectItem>
               ))}

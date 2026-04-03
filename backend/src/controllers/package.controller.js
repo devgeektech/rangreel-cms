@@ -20,6 +20,7 @@ const createPackage = async (req, res) => {
     const packageDoc = await Package.create({
       ...req.body,
       createdBy: req.user.id,
+      createdByRole: "admin",
     });
     return success(res, packageDoc, 201);
   } catch (error) {
