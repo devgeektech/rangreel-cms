@@ -46,17 +46,24 @@ const getMe = async (req, res) => {
 const getMyTasks = async (req, res) => {
   try {
     const month = req.query.month;
+    const includeCompleted =
+      String(req.query.includeCompleted || "").toLowerCase() === "true" ||
+      req.query.includeCompleted === "1";
 
     if (!normalizeMonthTarget(month)) {
       return failure(res, "month must be in format YYYY-MM", 400);
     }
+
+    const statusInQuery = includeCompleted
+      ? ["assigned", "in_progress", "planned", "completed"]
+      : ["assigned", "in_progress", "planned"];
 
     const items = await ContentItem.find({
       month,
       workflowStages: {
         $elemMatch: {
           assignedUser: req.user.id,
-          status: { $in: ["assigned", "in_progress"] },
+          status: { $in: statusInQuery },
         },
       },
     })
@@ -64,12 +71,19 @@ const getMyTasks = async (req, res) => {
       .select("title contentType plan clientPostingDate overallStatus workflowStages client")
       .lean();
 
-    const tasks = items.map((item) => {
+    const tasks = items
+      .map((item) => {
       const filteredStages = (item.workflowStages || []).filter((s) => {
         const isMine = s.assignedUser && String(s.assignedUser) === String(req.user.id);
         const stageStatus = String(s.status || "").toLowerCase();
-        const isActive = stageStatus === "assigned" || stageStatus === "in_progress";
-        return isMine && isActive;
+        const allowedPending =
+          stageStatus === "assigned" ||
+          stageStatus === "in_progress" ||
+          stageStatus === "planned";
+        const isIncluded = includeCompleted
+          ? allowedPending || stageStatus === "completed"
+          : allowedPending;
+        return isMine && isIncluded;
       });
 
       const approvalStage = (item.workflowStages || []).find((s) => {
@@ -92,7 +106,8 @@ const getMyTasks = async (req, res) => {
         })),
         overallStatus: item.overallStatus,
       };
-    });
+    })
+      .filter((t) => (t.stages || []).length > 0);
 
     console.log("[getMyTasks] returned tasks", {
       userId: String(req.user.id),

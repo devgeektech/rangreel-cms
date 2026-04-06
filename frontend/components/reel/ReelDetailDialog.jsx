@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { api } from "@/lib/api";
+import { api, getBaseUrl } from "@/lib/api";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,38 @@ function isCompletedLike(status) {
   return s === "completed" || s === "approved";
 }
 
+function contentDetailTitle(contentType) {
+  const t = String(contentType || "").toLowerCase();
+  if (t === "reel") return "Reel details";
+  if (t === "static_post") return "Post details";
+  if (t === "carousel") return "Carousel details";
+  if (t === "gmb_post") return "GMB post details";
+  if (t === "campaign") return "Campaign details";
+  return "Content details";
+}
+
+/** Strategist plan fields may be HTML (rich text). */
+function PlanHtmlBlock({ label, html }) {
+  const raw = String(html || "").trim();
+  if (!raw) {
+    return (
+      <div className="space-y-1">
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <p className="text-sm italic text-muted-foreground">Not provided yet.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-medium text-muted-foreground">{label}</p>
+      <div
+        className="strategist-plan-html rounded-md border border-border bg-muted/20 p-3 text-sm leading-relaxed text-foreground [&_a]:text-primary [&_a]:underline [&_blockquote]:border-l-2 [&_blockquote]:border-muted-foreground/30 [&_blockquote]:pl-3 [&_blockquote]:italic [&_h2]:text-base [&_h2]:font-semibold [&_h3]:text-sm [&_h3]:font-semibold [&_li]:my-0.5 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:mb-2 [&_p:last-child]:mb-0 [&_ul]:list-disc [&_ul]:pl-5"
+        dangerouslySetInnerHTML={{ __html: raw }}
+      />
+    </div>
+  );
+}
+
 function broadcastTasksUpdated() {
   try {
     if (typeof window === "undefined") return;
@@ -41,12 +73,23 @@ function broadcastTasksUpdated() {
   }
 }
 
+/** `/temp/videos/...` is served from the API origin (not `/api`). */
+function resolveBackendMediaUrl(pathOrUrl) {
+  if (!pathOrUrl) return "";
+  const s = String(pathOrUrl).trim();
+  if (/^https?:\/\//i.test(s)) return s;
+  const origin = getBaseUrl().replace(/\/api\/?$/i, "");
+  return `${origin}${s.startsWith("/") ? s : `/${s}`}`;
+}
+
 export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, onDidMutate }) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
   const [mutating, setMutating] = useState(false);
   const [editorVideoUrl, setEditorVideoUrl] = useState("");
   const [editorVideoFile, setEditorVideoFile] = useState(null);
+  const [shootFootageLink, setShootFootageLink] = useState("");
+  const [shootFootageFile, setShootFootageFile] = useState(null);
 
   const load = async () => {
     if (!contentId) return;
@@ -82,6 +125,11 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
     return Array.isArray(data?.contentBrief) ? data.contentBrief : [];
   }, [data]);
 
+  const planHook = data?.hook ?? "";
+  const planConcept = data?.concept ?? "";
+  const planCaption = data?.captionDirection ?? "";
+  const contentType = data?.contentType || data?.type || "";
+
   const planStage = useMemo(() => {
     return stages.find((s) => String(s?.stageName || "").toLowerCase() === "plan") || null;
   }, [stages]);
@@ -89,6 +137,12 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
   const shootStage = useMemo(() => {
     return stages.find((s) => String(s?.stageName || "").toLowerCase() === "shoot") || null;
   }, [stages]);
+
+  useEffect(() => {
+    if (!open) return;
+    setShootFootageLink(String(shootStage?.footageLink || ""));
+    setShootFootageFile(null);
+  }, [open, contentId, shootStage?.footageLink]);
 
   const showVideographerActions = String(viewerRole || "").toLowerCase() === "videographer" && Boolean(shootStage?._id);
   const showEditorActions = String(viewerRole || "").toLowerCase() === "editor" && Boolean(stages.find((s) => String(s?.stageName || "").toLowerCase() === "edit")?._id);
@@ -117,7 +171,7 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Reel details</DialogTitle>
+          <DialogTitle>{contentDetailTitle(contentType)}</DialogTitle>
         </DialogHeader>
 
         {loading ? (
@@ -141,7 +195,7 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
               <CardHeader className="pb-2">
                 <CardTitle className="text-base">{data.title}</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2">
+              <CardContent className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2">
                   {String(data?.planType || "").toLowerCase() === "urgent" ? (
                     <Badge className="bg-red-600 text-white">Urgent Plan</Badge>
@@ -156,23 +210,64 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                   )}
                 </div>
 
-                <p className="text-xs font-medium text-muted-foreground">Content brief</p>
-                {contentBrief.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No content points yet.</p>
-                ) : (
-                  <ul className="list-disc pl-5 text-sm">
-                    {contentBrief.map((p, idx) => (
-                      <li key={idx}>{p}</li>
-                    ))}
-                  </ul>
-                )}
+                <div className="space-y-3 rounded-lg border border-border/80 bg-muted/10 p-3">
+                  <p className="text-sm font-semibold text-foreground">Strategist plan</p>
+                  <PlanHtmlBlock label="Hook" html={planHook} />
+                  <PlanHtmlBlock label="Concept" html={planConcept} />
+                  <PlanHtmlBlock label="Caption direction" html={planCaption} />
+                </div>
+
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground">Content points</p>
+                  {contentBrief.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No content points yet.</p>
+                  ) : (
+                    <ul className="mt-1 list-disc pl-5 text-sm">
+                      {contentBrief.map((p, idx) => (
+                        <li key={idx} className="[&_a]:text-primary [&_a]:underline">
+                          {/<[a-z][\s\S]*>/i.test(String(p)) ? (
+                            <span dangerouslySetInnerHTML={{ __html: String(p) }} />
+                          ) : (
+                            String(p)
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                {shootStage?.footageLink ? (
+                  <div className="rounded-lg border border-border/80 bg-muted/10 p-3">
+                    <p className="text-sm font-semibold text-foreground">Videographer raw footage</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Submitted for the Shoot stage (link or file uploaded to the server).
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <a
+                        href={resolveBackendMediaUrl(shootStage.footageLink)}
+                        download
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm font-medium text-primary underline underline-offset-2"
+                      >
+                        Download footage
+                      </a>
+                    </div>
+                    <video
+                      className="mt-2 w-full rounded-lg border border-border bg-black"
+                      src={resolveBackendMediaUrl(shootStage.footageLink)}
+                      controls
+                      preload="metadata"
+                    />
+                  </div>
+                ) : null}
 
                 {data.videoUrl ? (
                   <div className="pt-2">
-                    <p className="text-xs font-medium text-muted-foreground">Video</p>
+                    <p className="text-xs font-medium text-muted-foreground">Final video (editor)</p>
                     <video
                       className="mt-2 w-full rounded-lg border border-border bg-black"
-                      src={data.videoUrl}
+                      src={resolveBackendMediaUrl(data.videoUrl)}
                       controls
                       preload="metadata"
                     />
@@ -301,12 +396,13 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                 <CardHeader className="pb-2">
                   <CardTitle className="text-base">Shoot</CardTitle>
                 </CardHeader>
-                <CardContent className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <CardContent className="space-y-3">
                   <div className="text-sm text-muted-foreground">
                     Status: <span className="text-foreground">{String(shootStage?.status || "-")}</span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {String(shootStage?.status || "").toLowerCase() === "assigned" ? (
+
+                  {String(shootStage?.status || "").toLowerCase() === "assigned" ? (
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         type="button"
                         disabled={mutating}
@@ -327,17 +423,54 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                       >
                         Start
                       </Button>
-                    ) : null}
+                    </div>
+                  ) : null}
 
-                    {String(shootStage?.status || "").toLowerCase() === "in_progress" ? (
+                  {String(shootStage?.status || "").toLowerCase() === "in_progress" ? (
+                    <div className="space-y-3 rounded-lg border border-border/60 bg-muted/5 p-3">
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Footage link (optional if you upload a file)</p>
+                        <Input
+                          type="url"
+                          placeholder="Paste footage URL (Drive/Dropbox/etc.)"
+                          value={shootFootageLink}
+                          onChange={(e) => setShootFootageLink(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Upload video (saved under server temp)</p>
+                        <Input
+                          type="file"
+                          accept="video/*"
+                          disabled={mutating}
+                          onChange={(e) => setShootFootageFile(e.target.files?.[0] || null)}
+                        />
+                      </div>
                       <Button
                         type="button"
                         disabled={mutating}
+                        className="w-full sm:w-auto"
                         onClick={async () => {
+                          const trimmed = shootFootageLink.trim();
+                          const file = shootFootageFile;
+                          if (!trimmed && !file) {
+                            toast.error("Add a footage link or upload a video file.");
+                            return;
+                          }
                           try {
                             setMutating(true);
-                            await api.updateMyTaskStatus(contentId, shootStage._id, { status: "completed" });
-                            toast.success("Shoot completed");
+                            let footageLink = trimmed;
+                            if (file) {
+                              const resBody = await api.uploadVideo(file);
+                              const path = resBody?.data?.videoUrl ?? resBody?.videoUrl ?? "";
+                              if (!path) throw new Error("Upload did not return a file URL");
+                              footageLink = path;
+                            }
+                            await api.updateMyTaskStatus(contentId, shootStage._id, {
+                              status: "completed",
+                              footageLink,
+                            });
+                            toast.success("Shoot completed — footage saved");
                             await load();
                             onDidMutate?.();
                             broadcastTasksUpdated();
@@ -348,14 +481,14 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                           }
                         }}
                       >
-                        Complete
+                        {mutating ? "Uploading…" : "Submit footage & complete"}
                       </Button>
-                    ) : null}
+                    </div>
+                  ) : null}
 
-                    {isCompletedLike(shootStage?.status) ? (
-                      <Badge className="bg-green-600 text-white">Shoot completed</Badge>
-                    ) : null}
-                  </div>
+                  {isCompletedLike(shootStage?.status) ? (
+                    <Badge className="bg-green-600 text-white">Shoot completed</Badge>
+                  ) : null}
                 </CardContent>
               </Card>
             ) : null}
@@ -496,6 +629,18 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                           ) : null}
                           {s.rejectionNote ? (
                             <p className="mt-1 text-xs text-destructive">{s.rejectionNote}</p>
+                          ) : null}
+                          {String(s.stageName || "").toLowerCase() === "shoot" && s.footageLink ? (
+                            <p className="mt-1 text-xs">
+                              <a
+                                href={resolveBackendMediaUrl(s.footageLink)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="font-medium text-primary underline underline-offset-2"
+                              >
+                                Raw footage
+                              </a>
+                            </p>
                           ) : null}
                         </div>
                         <div className="shrink-0">{stageStatusBadge(s.status)}</div>
