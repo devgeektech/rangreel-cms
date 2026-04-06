@@ -53,6 +53,7 @@ export default function VideographerDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [tasks, setTasks] = useState([]);
   const [footageDrafts, setFootageDrafts] = useState({});
+  const [footageUploading, setFootageUploading] = useState({});
   const [openReelDetail, setOpenReelDetail] = useState(false);
   const [selectedContentId, setSelectedContentId] = useState(null);
 
@@ -135,12 +136,13 @@ export default function VideographerDashboardPage() {
                   const overdue = isWorkflowStageOverdue(stage, todayStartMs);
                   const completed = isWorkflowStageCompleted(stage, "default");
                   const dueText = stage?.dueDate ? new Date(stage.dueDate).toLocaleDateString() : "-";
-                  const draft = footageDrafts[stageId] || { footageLink: "" };
+                  const draft = footageDrafts[stageId] || { footageLink: "", footageFile: null };
+                  const uploading = Boolean(footageUploading[stageId]);
 
                   return (
                     <div key={stageId} className="rounded-lg border border-border p-3">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="min-w-0">
+                      <div className="grid grid-cols-1 gap-3 lg:grid-cols-6 lg:gap-4 lg:items-start">
+                        <div className="min-w-0 lg:col-span-4">
                           <p className={`text-sm font-semibold ${completed ? "line-through opacity-70" : ""}`}>{title}</p>
                           <button
                             type="button"
@@ -164,7 +166,7 @@ export default function VideographerDashboardPage() {
                           </div>
                         </div>
 
-                        <div className="w-full sm:w-[360px] space-y-2">
+                        <div className="w-full space-y-2 lg:col-span-2 lg:col-start-5">
                           {status === "assigned" ? (
                             <Button
                               style={{ backgroundColor: accent, color: "#fff" }}
@@ -188,7 +190,7 @@ export default function VideographerDashboardPage() {
                           {status === "in_progress" ? (
                             <>
                               <div className="space-y-1">
-                                <p className="text-xs text-muted-foreground">Footage Link</p>
+                                <p className="text-xs text-muted-foreground">Footage link (optional if you upload a file)</p>
                                 <Input
                                   type="url"
                                   placeholder="Paste footage URL (Drive/Dropbox/etc.)"
@@ -201,25 +203,66 @@ export default function VideographerDashboardPage() {
                                   }
                                 />
                               </div>
+                              <div className="space-y-1">
+                                <p className="text-xs text-muted-foreground">Upload video file (stored on server)</p>
+                                <Input
+                                  type="file"
+                                  accept="video/*"
+                                  disabled={uploading}
+                                  onChange={(e) =>
+                                    setFootageDrafts((prev) => ({
+                                      ...prev,
+                                      [stageId]: {
+                                        ...draft,
+                                        footageFile: e.target.files?.[0] || null,
+                                      },
+                                    }))
+                                  }
+                                />
+                                <p className="text-[11px] text-muted-foreground">
+                                  Saved under server temp; editors can download from View reel details.
+                                </p>
+                              </div>
                               <Button
                                 style={{ backgroundColor: accent, color: "#fff" }}
                                 className="w-full"
+                                disabled={uploading}
                                 onClick={async () => {
+                                  const trimmed = String(draft.footageLink || "").trim();
+                                  const file = draft.footageFile;
+                                  if (!trimmed && !file) {
+                                    toast.error("Add a footage link or upload a video file.");
+                                    return;
+                                  }
                                   try {
+                                    setFootageUploading((prev) => ({ ...prev, [stageId]: true }));
+                                    let footageLink = trimmed;
+                                    if (file) {
+                                      const resBody = await api.uploadVideo(file);
+                                      const path =
+                                        resBody?.data?.videoUrl ?? resBody?.videoUrl ?? "";
+                                      if (!path) throw new Error("Upload did not return a file URL");
+                                      footageLink = path;
+                                    }
                                     await api.updateMyTaskStatus(itemId, stageId, {
                                       status: "completed",
-                                      footageLink: draft.footageLink,
+                                      footageLink,
                                     });
                                     toast.success("Footage submitted");
+                                    setFootageDrafts((prev) => ({
+                                      ...prev,
+                                      [stageId]: { footageLink: "", footageFile: null },
+                                    }));
                                   } catch (error) {
                                     toast.error(error.message || "Failed to submit footage");
                                   } finally {
+                                    setFootageUploading((prev) => ({ ...prev, [stageId]: false }));
                                     const res = await api.getMyTasks(month);
                                     setTasks(Array.isArray(res?.data) ? res.data : []);
                                   }
                                 }}
                               >
-                                Submit Footage
+                                {uploading ? "Uploading…" : "Submit Footage"}
                               </Button>
                             </>
                           ) : null}

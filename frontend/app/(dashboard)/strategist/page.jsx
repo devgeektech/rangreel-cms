@@ -1,23 +1,35 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { CalendarDays, FileText, LayoutDashboard, Rocket, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  CalendarDays,
+  CheckCircle2,
+  ClipboardList,
+  FileText,
+  Film,
+  LayoutDashboard,
+  Rocket,
+  Sparkles,
+} from "lucide-react";
 import DashboardShell from "@/components/layout/DashboardShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { getMyTasksIncludingCompleted } from "@/lib/userMyTasksApi";
 import EmptyState from "@/components/shared/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskMonthControls } from "@/components/role-dashboard/TaskMonthControls";
 import { ReelDetailDialog } from "@/components/reel/ReelDetailDialog";
+import { StrategistReelCalendar } from "@/components/strategist/StrategistReelCalendar";
+import { SubmitPlanDialog } from "@/components/strategist/SubmitPlanDialog";
 import {
   getTodayStartMs,
   isWorkflowStageCompleted,
   isWorkflowStageOverdue,
 } from "@/lib/roleDashboardTasks";
+import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/strategist", label: "Dashboard", icon: LayoutDashboard },
@@ -49,21 +61,57 @@ function contentTypeLabel(ct) {
   return ct || "Content";
 }
 
+function emptyDraft() {
+  return { hook: "", concept: "", captionDirection: "", contentBrief: [""] };
+}
+
+function isPlanPendingStage(stage) {
+  const s = String(stage?.status || "").toLowerCase();
+  return s === "assigned" || s === "planned" || s === "in_progress";
+}
+
+function isPlanCompletedStage(stage) {
+  return String(stage?.status || "").toLowerCase() === "completed";
+}
+
+function draftFromStage(stage, fallback) {
+  const base = fallback || emptyDraft();
+  const brief = Array.isArray(stage?.contentBrief) && stage.contentBrief.length
+    ? [...stage.contentBrief]
+    : base.contentBrief?.length
+      ? base.contentBrief
+      : [""];
+  return {
+    hook: stage?.hook != null ? String(stage.hook) : base.hook,
+    concept: stage?.concept != null ? String(stage.concept) : base.concept,
+    captionDirection:
+      stage?.captionDirection != null ? String(stage.captionDirection) : base.captionDirection,
+    contentBrief: brief,
+  };
+}
+
 export default function StrategistDashboardPage() {
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [loading, setLoading] = useState(true);
   const [tasks, setTasks] = useState([]);
   const [planDrafts, setPlanDrafts] = useState({});
-  const [expandedStageId, setExpandedStageId] = useState(null);
   const [openReelDetail, setOpenReelDetail] = useState(false);
   const [selectedContentId, setSelectedContentId] = useState(null);
+  const [planDialogEntry, setPlanDialogEntry] = useState(null);
+  const [planDialogOpen, setPlanDialogOpen] = useState(false);
+  const [planSubmitting, setPlanSubmitting] = useState(false);
+  const [planTab, setPlanTab] = useState("pending");
+
+  const reloadTasks = useCallback(async () => {
+    const res = await getMyTasksIncludingCompleted(month);
+    setTasks(Array.isArray(res?.data) ? res.data : []);
+  }, [month]);
 
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
-        const res = await api.getMyTasks(month);
-        setTasks(Array.isArray(res?.data) ? res.data : []);
+        await reloadTasks();
       } catch (error) {
         toast.error(error.message || "Failed to load tasks");
       } finally {
@@ -71,7 +119,7 @@ export default function StrategistDashboardPage() {
       }
     };
     load();
-  }, [month]);
+  }, [reloadTasks]);
 
   const planStages = useMemo(() => {
     const entries = [];
@@ -84,6 +132,7 @@ export default function StrategistDashboardPage() {
             contentType: t.contentType,
             plan: t.plan,
             clientBrand: t.clientBrandName,
+            clientPostingDate: t.clientPostingDate,
             stage,
           });
         }
@@ -92,35 +141,210 @@ export default function StrategistDashboardPage() {
     return entries.sort((a, b) => new Date(a.stage.dueDate) - new Date(b.stage.dueDate));
   }, [tasks]);
 
+  const planStagesPending = useMemo(
+    () => planStages.filter((e) => isPlanPendingStage(e.stage)),
+    [planStages]
+  );
+  const planStagesCompleted = useMemo(
+    () => planStages.filter((e) => isPlanCompletedStage(e.stage)),
+    [planStages]
+  );
+
+  const visiblePlanStages = planTab === "pending" ? planStagesPending : planStagesCompleted;
+
+  const reelPlanEntries = useMemo(
+    () =>
+      planStages.filter(
+        (e) =>
+          String(e.contentType || "").toLowerCase() === "reel" && isPlanPendingStage(e.stage)
+      ),
+    [planStages]
+  );
+
+  const stats = useMemo(() => {
+    const todayStartMs = getTodayStartMs();
+    let overdue = 0;
+    for (const e of planStagesPending) {
+      if (isWorkflowStageOverdue(e.stage, todayStartMs)) overdue += 1;
+    }
+    return {
+      total: planStages.length,
+      pending: planStagesPending.length,
+      completed: planStagesCompleted.length,
+      overdue,
+    };
+  }, [planStages, planStagesPending, planStagesCompleted]);
+
   const todayStartMs = useMemo(() => getTodayStartMs(), []);
+
+  const openSubmitPlanDialog = (entry) => {
+    const sid = entry.stage._id;
+    setPlanDrafts((prev) => ({
+      ...prev,
+      [sid]: draftFromStage(entry.stage, prev[sid]),
+    }));
+    setPlanDialogEntry(entry);
+    setPlanDialogOpen(true);
+  };
+
+  const handleCalendarEvent = (entry) => {
+    const status = String(entry.stage?.status || "").toLowerCase();
+    if (status === "in_progress") {
+      openSubmitPlanDialog(entry);
+      return;
+    }
+    toast.message("Start planning", {
+      description: "Use Start Planning on this task in the list below.",
+    });
+  };
+
+  const handleSubmitPlan = async () => {
+    if (!planDialogEntry) return;
+    const { itemId, stage } = planDialogEntry;
+    const stageId = stage._id;
+    const draft = planDrafts[stageId] || emptyDraft();
+    setPlanSubmitting(true);
+    try {
+      const cleanedContentBrief = (draft.contentBrief || [])
+        .map((x) => String(x || "").trim())
+        .filter((x) => x.length > 0);
+      await api.updateMyTaskStatus(itemId, stageId, {
+        status: "completed",
+        hook: draft.hook,
+        concept: draft.concept,
+        captionDirection: draft.captionDirection,
+        contentBrief: cleanedContentBrief,
+      });
+      toast.success("Plan submitted");
+      setPlanDialogOpen(false);
+      setPlanDialogEntry(null);
+      setPlanTab("completed");
+    } catch (error) {
+      toast.error(error.message || "Failed to submit plan");
+    } finally {
+      setPlanSubmitting(false);
+      await reloadTasks();
+    }
+  };
 
   return (
     <DashboardShell navItems={navItems}>
       <section className="space-y-6">
         <Card className="border-[#0EA5E9]/30 bg-gradient-to-r from-[#0EA5E9]/15 to-transparent">
-          <CardContent className="flex items-center justify-between p-6">
+          <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-2xl font-semibold">Strategist Dashboard</h2>
-              <p className="mt-1 text-sm text-muted-foreground">Plan, submit, and keep content aligned.</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Plan, submit, and keep content aligned — reels on the calendar, all tasks below.
+              </p>
             </div>
-            <Sparkles className="h-8 w-8 text-[#0EA5E9]" />
+            <Sparkles className="h-10 w-10 shrink-0 text-[#0EA5E9]" />
           </CardContent>
         </Card>
+
+        {!loading && planStages.length > 0 ? (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Card className="border-border/80 shadow-sm">
+              <CardContent className="flex items-center gap-3 p-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-sky-500/15 text-sky-600 dark:text-sky-400">
+                  <ClipboardList className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-2xl font-semibold tabular-nums">{stats.total}</p>
+                  <p className="text-xs text-muted-foreground">All plan tasks</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="border-border/80 shadow-sm">
+              <CardContent className="flex items-center gap-3 p-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-500/15 text-violet-600 dark:text-violet-400">
+                  <Film className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-2xl font-semibold tabular-nums">{stats.pending}</p>
+                  <p className="text-xs text-muted-foreground">Pending</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="border-border/80 shadow-sm">
+              <CardContent className="flex items-center gap-3 p-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-2xl font-semibold tabular-nums">{stats.completed}</p>
+                  <p className="text-xs text-muted-foreground">Completed</p>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="border-border/80 shadow-sm">
+              <CardContent className="flex items-center gap-3 p-4">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/15 text-rose-600 dark:text-rose-400">
+                  <CalendarDays className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-2xl font-semibold tabular-nums">{stats.overdue}</p>
+                  <p className="text-xs text-muted-foreground">Overdue (pending)</p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        ) : null}
+
+        {loading ? null : reelPlanEntries.length > 0 ? (
+          <StrategistReelCalendar
+            monthStr={month}
+            reelPlanEntries={reelPlanEntries}
+            onSelectEvent={handleCalendarEvent}
+          />
+        ) : null}
 
         <Card className="border-border">
           <CardHeader className="pb-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <CardTitle className="text-base">My tasks</CardTitle>
+              <div>
+                <CardTitle className="text-base">All plan tasks</CardTitle>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Brand, format, plan due date, and post date at a glance.
+                </p>
+                {!loading && planStages.length > 0 ? (
+                  <div className="mt-3 inline-flex flex-wrap gap-2 rounded-lg border border-border bg-muted/30 p-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={planTab === "pending" ? "default" : "ghost"}
+                      className="h-8"
+                      onClick={() => setPlanTab("pending")}
+                    >
+                      Pending ({planStagesPending.length})
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={planTab === "completed" ? "default" : "ghost"}
+                      className="h-8"
+                      onClick={() => setPlanTab("completed")}
+                    >
+                      Completed ({planStagesCompleted.length})
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
               <TaskMonthControls month={month} onMonthChange={setMonth} accent={accent} />
             </div>
           </CardHeader>
           <CardContent>
             {loading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 5 }).map((_, idx) => (
-                  <div key={idx} className="flex items-center justify-between gap-4 rounded-lg border border-border p-3">
-                    <Skeleton className="h-4 w-48" />
-                    <Skeleton className="h-6 w-20" />
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                {Array.from({ length: 6 }).map((_, idx) => (
+                  <div
+                    key={idx}
+                    className="flex flex-col gap-3 rounded-xl border border-border p-4"
+                  >
+                    <Skeleton className="h-4 w-full" />
+                    <Skeleton className="h-3 w-2/3" />
+                    <Skeleton className="h-3 w-full" />
+                    <Skeleton className="mt-auto h-9 w-full" />
                   </div>
                 ))}
               </div>
@@ -129,203 +353,192 @@ export default function StrategistDashboardPage() {
                 title="No Plan tasks this month"
                 description="You’ll see your Strategist Plan stages here once they’re assigned."
               />
+            ) : visiblePlanStages.length === 0 ? (
+              <EmptyState
+                title={planTab === "pending" ? "No pending plan tasks" : "No completed plans yet"}
+                description={
+                  planTab === "pending"
+                    ? "Completed items move to the Completed tab."
+                    : "Submit a plan from the Pending tab to see it here."
+                }
+              />
             ) : (
-              <div className="space-y-3">
-                {planStages.map(({ itemId, title, clientBrand, contentType, stage }) => {
-                  const overdue = isWorkflowStageOverdue(stage, todayStartMs);
-                  const status = String(stage.status || "").toLowerCase();
-                  const completed = isWorkflowStageCompleted(stage, "default");
-                  const dueText = stage?.dueDate ? new Date(stage.dueDate).toLocaleDateString() : "-";
-                  const stageId = stage._id;
-                  const draft = planDrafts[stageId] || {
-                    hook: "",
-                    concept: "",
-                    captionDirection: "",
-                    contentBrief: [""],
-                  };
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                {visiblePlanStages.map(
+                  ({ itemId, title, clientBrand, contentType, clientPostingDate, plan, stage }) => {
+                    const overdue = isWorkflowStageOverdue(stage, todayStartMs);
+                    const status = String(stage.status || "").toLowerCase();
+                    const completed = isWorkflowStageCompleted(stage, "default");
+                    const dueText = stage?.dueDate
+                      ? new Date(stage.dueDate).toLocaleDateString(undefined, {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                        })
+                      : "—";
+                    const postText = clientPostingDate
+                      ? new Date(clientPostingDate).toLocaleDateString(undefined, {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                        })
+                      : null;
+                    const stageId = stage._id;
+                    const isReel = String(contentType || "").toLowerCase() === "reel";
 
-                  return (
-                    <div key={stageId} className="rounded-lg border border-border p-3">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                        <div className="min-w-0">
-                          <p
-                            className={`text-sm font-semibold ${
-                              completed ? "line-through opacity-70" : ""
-                            }`}
-                            title={title}
-                            onClick={() => {
-                              if (status === "in_progress") setExpandedStageId(stageId);
-                            }}
-                            style={{ cursor: status === "in_progress" ? "pointer" : undefined }}
-                          >
-                            {title}
+                    return (
+                      <div
+                        key={stageId}
+                        className={cn(
+                          "flex h-full min-h-[220px] flex-col rounded-xl border border-border bg-card/50 p-3 shadow-sm transition-colors hover:bg-card/80 sm:p-4",
+                          overdue && !completed && "border-destructive/35"
+                        )}
+                      >
+                        <div className="min-w-0 flex-1 space-y-2">
+                          <div className="flex flex-wrap items-start gap-1.5">
+                            <h3
+                              className={cn(
+                                "line-clamp-2 min-w-0 flex-1 text-sm font-semibold leading-snug sm:text-base",
+                                completed && "text-muted-foreground line-through"
+                              )}
+                              title={title}
+                            >
+                              {title}
+                            </h3>
+                            <Badge variant="secondary" className="shrink-0 text-[10px] font-normal sm:text-xs">
+                              {contentTypeLabel(contentType)}
+                            </Badge>
+                            {isReel ? (
+                              <Film className="h-3.5 w-3.5 shrink-0 text-sky-500" aria-hidden />
+                            ) : null}
+                          </div>
+                          <p className="line-clamp-1 text-xs text-muted-foreground sm:text-sm">
+                            {clientBrand || "—"}
                           </p>
+                          <div className="space-y-1 text-[11px] leading-snug text-muted-foreground sm:text-xs">
+                            <p>
+                              <span className="font-medium text-foreground">Plan due</span> {dueText}
+                            </p>
+                            {postText ? (
+                              <p>
+                                <span className="font-medium text-foreground">Post</span> {postText}
+                              </p>
+                            ) : null}
+                            {String(plan || "").toLowerCase() === "urgent" ? (
+                              <Badge variant="destructive" className="text-[10px]">
+                                Urgent
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {overdue ? <Badge variant="destructive">Overdue</Badge> : null}
+                            {completed ? (
+                              <Badge className="bg-green-600 text-[10px] text-white sm:text-xs">
+                                Completed
+                              </Badge>
+                            ) : (
+                              <span className="[&_span]:text-[10px] sm:[&_span]:text-xs">
+                                {stageStatusBadge(stage.status)}
+                              </span>
+                            )}
+                          </div>
                           <button
                             type="button"
-                            className="mt-1 text-xs text-primary underline underline-offset-2"
+                            className="text-left text-[11px] font-medium text-primary underline-offset-4 hover:underline sm:text-xs"
                             onClick={() => {
                               setSelectedContentId(itemId);
                               setOpenReelDetail(true);
                             }}
                           >
-                            View reel details
+                            {isReel ? "View reel details" : "View details"}
                           </button>
-                          <p className="text-xs text-muted-foreground">{clientBrand}</p>
-                          <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <Badge variant="outline">{contentTypeLabel(contentType)}</Badge>
-                            <Badge variant="outline">{stage.stageName}</Badge>
-                            <span className={overdue ? "text-xs font-medium text-destructive" : "text-xs text-muted-foreground"}>
-                              Due: {dueText}
-                            </span>
-                            {overdue ? <Badge variant="destructive">Overdue</Badge> : null}
-                            {completed ? (
-                              <Badge className="bg-green-600 text-white">Completed</Badge>
-                            ) : (
-                              stageStatusBadge(stage.status)
-                            )}
-                          </div>
                         </div>
 
-                        <div className="flex flex-col items-start gap-2 sm:items-end">
+                        <div className="mt-3 flex flex-col gap-2 border-t border-border/60 pt-3">
                           {status === "assigned" || status === "planned" ? (
                             <Button
+                              size="sm"
+                              className="w-full"
                               onClick={async () => {
                                 try {
-                                  await api.updateMyTaskStatus(itemId, stageId, { status: "in_progress" });
-                                  setExpandedStageId(stageId);
+                                  await api.updateMyTaskStatus(itemId, stageId, {
+                                    status: "in_progress",
+                                  });
                                   toast.success("Planning started");
+                                  await reloadTasks();
                                 } catch (error) {
                                   toast.error(error.message || "Failed to start planning");
-                                } finally {
-                                  const res = await api.getMyTasks(month);
-                                  setTasks(Array.isArray(res?.data) ? res.data : []);
                                 }
                               }}
-                              className="bg-primary"
                             >
                               Start Planning
                             </Button>
                           ) : null}
 
                           {status === "in_progress" ? (
-                            expandedStageId === null || expandedStageId === stageId ? (
-                              <div className="w-full sm:w-[360px] space-y-2">
-                              <div className="space-y-1">
-                                <p className="text-xs text-muted-foreground">Hook</p>
-                                <Input
-                                  value={draft.hook}
-                                  placeholder="Write a strong hook..."
-                                  onChange={(e) =>
-                                    setPlanDrafts((prev) => ({
-                                      ...prev,
-                                      [stageId]: { ...draft, hook: e.target.value },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="space-y-1">
-                                <p className="text-xs text-muted-foreground">Concept</p>
-                                <Input
-                                  value={draft.concept}
-                                  placeholder="Concept direction..."
-                                  onChange={(e) =>
-                                    setPlanDrafts((prev) => ({
-                                      ...prev,
-                                      [stageId]: { ...draft, concept: e.target.value },
-                                    }))
-                                  }
-                                />
-                              </div>
-                              <div className="space-y-1">
-                                <p className="text-xs text-muted-foreground">Caption Direction</p>
-                                <Input
-                                  value={draft.captionDirection}
-                                  placeholder="Caption direction..."
-                                  onChange={(e) =>
-                                    setPlanDrafts((prev) => ({
-                                      ...prev,
-                                      [stageId]: { ...draft, captionDirection: e.target.value },
-                                    }))
-                                  }
-                                />
-                              </div>
-
-                              <div className="space-y-1.5 pt-1">
-                                <p className="text-xs text-muted-foreground">Content points</p>
-                                <div className="space-y-2">
-                                  {(draft.contentBrief?.length ? draft.contentBrief : [""]).map((point, idx) => (
-                                    <div key={idx} className="flex items-center gap-2">
-                                      <Input
-                                        value={point}
-                                        placeholder={`Point ${idx + 1}`}
-                                        onChange={(e) => {
-                                          const next = [...(draft.contentBrief || [""])];
-                                          next[idx] = e.target.value;
-                                          setPlanDrafts((prev) => ({
-                                            ...prev,
-                                            [stageId]: { ...draft, contentBrief: next },
-                                          }));
-                                        }}
-                                      />
-                                    </div>
-                                  ))}
-                                </div>
-
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  className="w-full"
-                                  onClick={() => {
-                                    const next = [...(draft.contentBrief || [""]), ""];
-                                    setPlanDrafts((prev) => ({
-                                      ...prev,
-                                      [stageId]: { ...draft, contentBrief: next },
-                                    }));
-                                  }}
-                                >
-                                  + Add
-                                </Button>
-                              </div>
-
-                              <Button
-                                style={{ backgroundColor: accent, color: "#fff" }}
-                                className="w-full"
-                                onClick={async () => {
-                                  try {
-                                    const cleanedContentBrief = (draft.contentBrief || [])
-                                      .map((x) => String(x || "").trim())
-                                      .filter((x) => x.length > 0);
-                                    await api.updateMyTaskStatus(itemId, stageId, {
-                                      status: "completed",
-                                      hook: draft.hook,
-                                      concept: draft.concept,
-                                      captionDirection: draft.captionDirection,
-                                      contentBrief: cleanedContentBrief,
-                                    });
-                                    toast.success("Plan submitted");
-                                  } catch (error) {
-                                    toast.error(error.message || "Failed to submit plan");
-                                  } finally {
-                                    const res = await api.getMyTasks(month);
-                                    setTasks(Array.isArray(res?.data) ? res.data : []);
-                                  }
-                                }}
-                              >
-                                Submit Plan
-                              </Button>
-                            </div>
-                            ) : null
+                            <Button
+                              size="sm"
+                              className="w-full"
+                              style={{ backgroundColor: accent, color: "#fff" }}
+                              onClick={() =>
+                                openSubmitPlanDialog({
+                                  itemId,
+                                  title,
+                                  contentType,
+                                  clientBrand,
+                                  clientPostingDate,
+                                  stage,
+                                })
+                              }
+                            >
+                              Submit Plan
+                            </Button>
                           ) : null}
                         </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  }
+                )}
               </div>
             )}
           </CardContent>
         </Card>
       </section>
+
+      <SubmitPlanDialog
+        open={planDialogOpen}
+        onOpenChange={(v) => {
+          setPlanDialogOpen(v);
+          if (!v) setPlanDialogEntry(null);
+        }}
+        title={planDialogEntry?.title || ""}
+        clientBrand={planDialogEntry?.clientBrand || ""}
+        dueText={
+          planDialogEntry?.stage?.dueDate
+            ? new Date(planDialogEntry.stage.dueDate).toLocaleDateString(undefined, {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+              })
+            : ""
+        }
+        contentTypeLabel={
+          planDialogEntry ? contentTypeLabel(planDialogEntry.contentType) : ""
+        }
+        draft={
+          planDialogEntry
+            ? planDrafts[planDialogEntry.stage._id] || draftFromStage(planDialogEntry.stage)
+            : emptyDraft()
+        }
+        onDraftChange={(next) => {
+          if (!planDialogEntry) return;
+          const sid = planDialogEntry.stage._id;
+          setPlanDrafts((prev) => ({ ...prev, [sid]: next }));
+        }}
+        onSubmit={handleSubmitPlan}
+        submitting={planSubmitting}
+        accent={accent}
+      />
 
       <ReelDetailDialog
         open={openReelDetail}

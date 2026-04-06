@@ -3,13 +3,14 @@ const auth = require("../middleware/auth");
 const roleGuard = require("../middleware/roleGuard");
 const asyncHandler = require("../middleware/asyncHandler");
 const contentController = require("../controllers/content.controller");
+const contentReadController = require("../controllers/contentRead.controller");
 
 const router = express.Router();
 
 router.get(
   "/:id",
   auth,
-  asyncHandler(contentController.getContentById)
+  asyncHandler(contentReadController.getContentById)
 );
 
 router.patch(

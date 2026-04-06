@@ -24,10 +24,21 @@ const storage = multer.diskStorage({
   },
 });
 
+const VIDEO_MIME = /^video\//;
+const VIDEO_EXT = new Set([".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v", ".mpeg", ".mpg"]);
+
 const upload = multer({
   storage,
   limits: {
     fileSize: 500 * 1024 * 1024, // 500MB
+  },
+  fileFilter: (req, file, cb) => {
+    const mt = String(file.mimetype || "");
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    if (VIDEO_MIME.test(mt) || (mt === "" && VIDEO_EXT.has(ext))) {
+      return cb(null, true);
+    }
+    cb(new Error("Only video files are allowed"));
   },
 });
 
