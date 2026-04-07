@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Calendar as CalendarIcon,
   ChevronLeft,
@@ -163,6 +163,54 @@ export default function ManagerGlobalCalendarPage() {
   const [selectedTask, setSelectedTask] = useState(null);
   /** When a cell has multiple tasks, user opens this to see full list (no in-cell scroll). */
   const [cellOverflow, setCellOverflow] = useState(null);
+  const gridScrollRef = useRef(null);
+  const panRef = useRef({ active: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
+  const [isPanningGrid, setIsPanningGrid] = useState(false);
+
+  const handleGridMouseDown = (e) => {
+    if (e.button !== 0) return;
+    const target = e.target;
+    if (target instanceof Element) {
+      const interactive = target.closest('button, input, select, textarea, a, [draggable="true"]');
+      if (interactive) return;
+    }
+    const el = gridScrollRef.current;
+    if (!el) return;
+    panRef.current = {
+      active: true,
+      startX: e.clientX,
+      startY: e.clientY,
+      scrollLeft: el.scrollLeft,
+      scrollTop: el.scrollTop,
+    };
+    setIsPanningGrid(true);
+    e.preventDefault();
+  };
+
+  useEffect(() => {
+    if (!isPanningGrid) return undefined;
+
+    const onMouseMove = (e) => {
+      const el = gridScrollRef.current;
+      const pan = panRef.current;
+      if (!el || !pan.active) return;
+      el.scrollLeft = pan.scrollLeft - (e.clientX - pan.startX);
+      el.scrollTop = pan.scrollTop - (e.clientY - pan.startY);
+    };
+
+    const stopPan = () => {
+      panRef.current.active = false;
+      setIsPanningGrid(false);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", stopPan);
+
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", stopPan);
+    };
+  }, [isPanningGrid]);
 
   const loadCalendar = async () => {
     try {
@@ -640,7 +688,13 @@ export default function ManagerGlobalCalendarPage() {
         />
       ) : (
         <>
-          <div className="rounded-xl border border-border bg-card overflow-auto">
+          <div
+            ref={gridScrollRef}
+            onMouseDown={handleGridMouseDown}
+            className={`rounded-xl border border-border bg-card overflow-auto ${
+              isPanningGrid ? "cursor-grabbing select-none" : "cursor-grab"
+            }`}
+          >
             <div
               className="grid min-w-[2200px]"
               style={{ gridTemplateColumns: `280px repeat(${calendarDays.length}, minmax(120px, 1fr))` }}
@@ -695,7 +749,7 @@ export default function ManagerGlobalCalendarPage() {
                         return (
                           <div
                             key={`${row.userId}-${day.ymd}`}
-                            className={`min-h-28 border-b border-r border-border p-2 ${
+                            className={`flex min-h-28 flex-col border-b border-r border-border p-2 ${
                               isHoliday ? "bg-gray-300/40 dark:bg-gray-700/40" : onLeave ? "bg-blue-500/15" : ""
                             } ${
                               draggingTaskId && hoveredDropCell === `${row.userId}::${day.ymd}`
@@ -740,7 +794,12 @@ export default function ManagerGlobalCalendarPage() {
                             {onLeave && dayTasks.length === 0 ? (
                               <p className="text-xs text-blue-700 dark:text-blue-200">On leave</p>
                             ) : null}
-                            <div className="mt-1 space-y-1">
+                            {dayTasks.length > 0 ? (
+                            <div className="mt-1 flex min-h-0 min-w-0 flex-1 flex-col gap-1">
+                              {/* ~2 full cards visible; scroll for the rest */}
+                              <div
+                                className="max-h-[210px] min-h-0 space-y-1 overflow-y-auto overflow-x-hidden pr-1 [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-track]:bg-transparent"
+                              >
                               {dayTasks.map((task) => {
                               const ctLabel = contentTypeLabel(task.contentType);
                               const urgent = String(task.priority || "").toLowerCase() === "urgent";
@@ -860,8 +919,9 @@ export default function ManagerGlobalCalendarPage() {
                                 </div>
                               );
                               })}
+                              </div>
                               {dayTasks.length > 1 ? (
-                                <div className="flex justify-center pt-0.5">
+                                <div className="flex shrink-0 justify-center border-t border-border/60 pt-1">
                                   <button
                                     type="button"
                                     className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -877,6 +937,7 @@ export default function ManagerGlobalCalendarPage() {
                                 </div>
                               ) : null}
                             </div>
+                            ) : null}
                           </div>
                         );
                       })}
