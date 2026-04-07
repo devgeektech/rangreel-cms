@@ -20,13 +20,52 @@ const calendarRoutes = require("./routes/calendar.routes");
 
 const app = express();
 
-app.use(helmet());
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL,
-    credentials: true,
-  })
-);
+/**
+ * Origins for browser requests. CLIENT_URL is comma-separated and merged with built-ins so
+ * the Next app on http://localhost:5001 is always allowed (including when NODE_ENV=production).
+ */
+function parseCorsOrigins() {
+  const raw = process.env.CLIENT_URL || "";
+  const fromEnv = raw
+    .split(",")
+    .map((s) => s.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+  const alwaysAllow = [
+    "http://localhost:5001",
+    "http://127.0.0.1:5001",
+    "http://localhost:3000",
+  ];
+  return [...new Set([...alwaysAllow, ...fromEnv])];
+}
+
+const allowedOrigins = parseCorsOrigins();
+
+const corsOptions = {
+  origin(origin, callback) {
+    // Non-browser clients (curl, server-to-server) send no Origin
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    // Dev: allow any localhost / 127.0.0.1 origin (different Next port, etc.)
+    if (process.env.NODE_ENV !== "production") {
+      try {
+        const { hostname } = new URL(origin);
+        if (hostname === "localhost" || hostname === "127.0.0.1") {
+          return callback(null, true);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    return callback(null, false);
+  },
+  credentials: true,
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+};
+
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(cookieParser());
