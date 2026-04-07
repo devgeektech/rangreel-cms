@@ -34,6 +34,7 @@ function parseCorsOrigins() {
     "http://localhost:5001",
     "http://127.0.0.1:5001",
     "http://localhost:3000",
+    "http://122.180.29.167:5001",
   ];
   return [...new Set([...alwaysAllow, ...fromEnv])];
 }
