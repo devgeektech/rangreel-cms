@@ -5,10 +5,8 @@ import {
   CalendarDays,
   CheckCircle2,
   ClipboardList,
-  FileText,
   Film,
   LayoutDashboard,
-  Rocket,
   Sparkles,
 } from "lucide-react";
 import DashboardShell from "@/components/layout/DashboardShell";
@@ -22,7 +20,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskMonthControls } from "@/components/role-dashboard/TaskMonthControls";
 import { ReelDetailDialog } from "@/components/reel/ReelDetailDialog";
-import { StrategistReelCalendar } from "@/components/strategist/StrategistReelCalendar";
+import { StrategistPlanCalendar } from "./StrategistPlanCalendar";
 import { SubmitPlanDialog } from "@/components/strategist/SubmitPlanDialog";
 import {
   getTodayStartMs,
@@ -31,12 +29,7 @@ import {
 } from "@/lib/roleDashboardTasks";
 import { cn } from "@/lib/utils";
 
-const navItems = [
-  { href: "/strategist", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/strategist/calendar", label: "Calendar", icon: CalendarDays },
-  { href: "/strategist/campaigns", label: "Campaigns", icon: Rocket },
-  { href: "/strategist/briefs", label: "Briefs", icon: FileText },
-];
+const navItems = [{ href: "/strategist", label: "Dashboard", icon: LayoutDashboard }];
 
 const accent = "#0EA5E9";
 
@@ -152,12 +145,17 @@ export default function StrategistDashboardPage() {
 
   const visiblePlanStages = planTab === "pending" ? planStagesPending : planStagesCompleted;
 
-  const reelPlanEntries = useMemo(
+  const planCalendarEntries = useMemo(
     () =>
-      planStages.filter(
-        (e) =>
-          String(e.contentType || "").toLowerCase() === "reel" && isPlanPendingStage(e.stage)
-      ),
+      planStages.filter((e) => {
+        const ct = String(e.contentType || "").toLowerCase();
+        const onCalendar =
+          ct === "reel" ||
+          ct === "static_post" ||
+          ct === "post" ||
+          ct === "carousel";
+        return onCalendar && isPlanPendingStage(e.stage);
+      }),
     [planStages]
   );
 
@@ -235,7 +233,7 @@ export default function StrategistDashboardPage() {
             <div>
               <h2 className="text-2xl font-semibold">Strategist Dashboard</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Plan, submit, and keep content aligned — reels on the calendar, all tasks below.
+                Plan, submit, and keep content aligned — calendar shows reels, posts, and carousels; full task list below.
               </p>
             </div>
             <Sparkles className="h-10 w-10 shrink-0 text-[#0EA5E9]" />
@@ -291,10 +289,10 @@ export default function StrategistDashboardPage() {
           </div>
         ) : null}
 
-        {loading ? null : reelPlanEntries.length > 0 ? (
-          <StrategistReelCalendar
+        {loading ? null : planCalendarEntries.length > 0 ? (
+          <StrategistPlanCalendar
             monthStr={month}
-            reelPlanEntries={reelPlanEntries}
+            planEntries={planCalendarEntries}
             onSelectEvent={handleCalendarEvent}
           />
         ) : null}
