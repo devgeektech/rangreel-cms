@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   AlertTriangle,
+  MoreHorizontal,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -93,6 +94,27 @@ function normalizeRoleKey(value) {
   return String(value || "");
 }
 
+/** Human label for ContentItem.contentType on calendar blocks (reel / post / carousel / …). */
+function contentTypeLabel(raw) {
+  const t = String(raw || "").toLowerCase();
+  if (t === "reel") return "Reel";
+  if (t === "static_post" || t === "post") return "Post";
+  if (t === "carousel") return "Carousel";
+  if (t === "gmb_post") return "GMB";
+  if (t === "campaign") return "Campaign";
+  if (!t) return "—";
+  return String(raw).replace(/_/g, " ");
+}
+
+function contentTypeChipClassName(raw) {
+  const t = String(raw || "").toLowerCase();
+  if (t === "reel") return "border-sky-500/55 bg-sky-500/15 text-sky-950 dark:text-sky-100";
+  if (t === "static_post" || t === "post") return "border-violet-500/55 bg-violet-500/15 text-violet-950 dark:text-violet-100";
+  if (t === "carousel") return "border-amber-500/55 bg-amber-500/15 text-amber-950 dark:text-amber-100";
+  if (t === "gmb_post") return "border-emerald-500/55 bg-emerald-500/15 text-emerald-950 dark:text-emerald-100";
+  return "border-border bg-background/85 text-foreground";
+}
+
 const CLIENT_COLOR_PALETTE = [
   { bg: "rgba(59,130,246,0.10)", border: "rgba(59,130,246,0.55)" },
   { bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.55)" },
@@ -139,6 +161,8 @@ export default function ManagerGlobalCalendarPage() {
   const [leaveBusy, setLeaveBusy] = useState(false);
   const [leaveFormError, setLeaveFormError] = useState("");
   const [selectedTask, setSelectedTask] = useState(null);
+  /** When a cell has multiple tasks, user opens this to see full list (no in-cell scroll). */
+  const [cellOverflow, setCellOverflow] = useState(null);
 
   const loadCalendar = async () => {
     try {
@@ -716,8 +740,9 @@ export default function ManagerGlobalCalendarPage() {
                             {onLeave && dayTasks.length === 0 ? (
                               <p className="text-xs text-blue-700 dark:text-blue-200">On leave</p>
                             ) : null}
-                            <div className="mt-1 max-h-36 space-y-1 overflow-y-auto pr-1">
+                            <div className="mt-1 space-y-1">
                               {dayTasks.map((task) => {
+                              const ctLabel = contentTypeLabel(task.contentType);
                               const urgent = String(task.priority || "").toLowerCase() === "urgent";
                               const planType = urgent ? "URGENT" : "NORMAL";
                               const hasConflict = Boolean(
@@ -787,7 +812,7 @@ export default function ManagerGlobalCalendarPage() {
                                       ? "FULL"
                                       : hasConflict
                                       ? conflictReason || "Scheduling conflict"
-                                      : `${task.clientName} • ${task.title} • ${task.stageName}`
+                                      : `${task.clientName} • ${ctLabel} • ${task.title} • ${task.stageName}`
                                   }
                                 >
                                   {isStart ? (
@@ -798,7 +823,12 @@ export default function ManagerGlobalCalendarPage() {
                                           <AlertTriangle className="h-3 w-3 shrink-0 text-red-600" />
                                         ) : null}
                                       </p>
-                                      <div className="mb-1 flex items-center gap-1">
+                                      <div className="mb-1 flex flex-wrap items-center gap-1">
+                                        <span
+                                          className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide border ${contentTypeChipClassName(task.contentType)}`}
+                                        >
+                                          {ctLabel}
+                                        </span>
                                         <span
                                           className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
                                             urgent
@@ -816,13 +846,36 @@ export default function ManagerGlobalCalendarPage() {
                                       <p className="truncate opacity-70">{dynamicDuration}d</p>
                                     </>
                                   ) : (
-                                    <p className="truncate opacity-80">
-                                      {userMetaById.get(row.userId)?.name || row.name}
-                                    </p>
+                                    <>
+                                      <span
+                                        className={`mb-0.5 inline-block rounded px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide border ${contentTypeChipClassName(task.contentType)}`}
+                                      >
+                                        {ctLabel}
+                                      </span>
+                                      <p className="truncate opacity-80">
+                                        {userMetaById.get(row.userId)?.name || row.name}
+                                      </p>
+                                    </>
                                   )}
                                 </div>
                               );
                               })}
+                              {dayTasks.length > 1 ? (
+                                <div className="flex justify-center pt-0.5">
+                                  <button
+                                    type="button"
+                                    className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                                    title={`Open expanded view (${dayTasks.length} tasks)`}
+                                    aria-label={`Open expanded view of ${dayTasks.length} tasks`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setCellOverflow({ row, dayYmd: day.ymd, tasks: dayTasks });
+                                    }}
+                                  >
+                                    <MoreHorizontal className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         );
@@ -841,9 +894,24 @@ export default function ManagerGlobalCalendarPage() {
                 Global schedule only (`GET /api/manager/global-calendar`) • grouped by Role → User
               </p>
             </CardHeader>
-            <CardContent className="flex items-center gap-2 text-xs">
+            <CardContent className="flex flex-wrap items-center gap-2 text-xs">
               <Badge variant="outline">Urgent = red</Badge>
               <Badge variant="outline">Normal = primary</Badge>
+              <span
+                className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${contentTypeChipClassName("reel")}`}
+              >
+                Reel
+              </span>
+              <span
+                className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${contentTypeChipClassName("static_post")}`}
+              >
+                Post
+              </span>
+              <span
+                className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${contentTypeChipClassName("carousel")}`}
+              >
+                Carousel
+              </span>
             </CardContent>
           </Card>
           <Card>
@@ -948,6 +1016,14 @@ export default function ManagerGlobalCalendarPage() {
               <div className="grid grid-cols-2 gap-2 rounded border p-3">
                 <p><span className="text-muted-foreground">Client:</span> {selectedTaskDetails.task.clientName || "-"}</p>
                 <p><span className="text-muted-foreground">Title:</span> {selectedTaskDetails.task.title || "-"}</p>
+                <p>
+                  <span className="text-muted-foreground">Format:</span>{" "}
+                  <span
+                    className={`inline-flex rounded border px-1.5 py-0.5 text-xs font-semibold ${contentTypeChipClassName(selectedTaskDetails.task.contentType)}`}
+                  >
+                    {contentTypeLabel(selectedTaskDetails.task.contentType)}
+                  </span>
+                </p>
                 <p><span className="text-muted-foreground">Role:</span> {selectedTaskDetails.task.role || "-"}</p>
                 <p><span className="text-muted-foreground">Priority:</span> {selectedTaskDetails.task.priority || "normal"}</p>
                 <p><span className="text-muted-foreground">Start:</span> {String(selectedTaskDetails.task.startDate || "").slice(0, 10) || "-"}</p>
@@ -977,6 +1053,105 @@ export default function ManagerGlobalCalendarPage() {
               ) : null}
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(cellOverflow)} onOpenChange={(open) => !open && setCellOverflow(null)}>
+        <DialogContent className="max-h-[min(85vh,720px)] max-w-lg gap-0 overflow-y-auto p-0 sm:max-w-xl">
+          <DialogHeader className="border-b border-border px-6 py-4 text-left">
+            <DialogTitle className="text-lg">
+              {cellOverflow ? `${cellOverflow.row.name}` : ""}
+              {cellOverflow ? (
+                <span className="block text-sm font-normal text-muted-foreground">
+                  {cellOverflow.dayYmd}
+                  {cellOverflow.tasks?.length ? ` · ${cellOverflow.tasks.length} tasks` : ""}
+                </span>
+              ) : null}
+            </DialogTitle>
+            <DialogDescription className="text-left text-sm">
+              Select a task to open full details.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 px-6 py-4">
+            {(cellOverflow?.tasks || []).map((task, idx) => {
+              const ctLabel = contentTypeLabel(task.contentType);
+              const urgent = String(task.priority || "").toLowerCase() === "urgent";
+              const planType = urgent ? "URGENT" : "NORMAL";
+              const hasConflict = Boolean(
+                task?.conflict || task?.hasConflict || task?.isConflict || task?.conflictFlag
+              );
+              const conflictReason =
+                task?.conflictReason || task?.reason || task?.conflictMessage || "";
+              const perDay =
+                task?.assignedUsersPerDay && typeof task.assignedUsersPerDay === "object"
+                  ? task.assignedUsersPerDay
+                  : {};
+              const taskDaysForRow = Object.entries(perDay)
+                .filter(([, uid]) => String(uid || "") === String(cellOverflow.row.userId || ""))
+                .map(([ymd]) => ymd)
+                .sort();
+              const dynamicDuration = taskDaysForRow.length || 1;
+              const clientKey = String(task?.clientId || task?.clientName || "");
+              const clientColor = clientColorByKey.get(clientKey) || CLIENT_COLOR_PALETTE[0];
+              const row = cellOverflow.row;
+
+              return (
+                <button
+                  key={`${String(task.taskId || idx)}-${idx}`}
+                  type="button"
+                  className={`w-full rounded-xl border px-4 py-3 text-left text-sm shadow-sm transition hover:opacity-95 ${
+                    hasConflict
+                      ? "border-red-600/70 bg-red-500/10 text-red-900 dark:text-red-100"
+                      : "border-border bg-card text-foreground"
+                  }`}
+                  style={
+                    !hasConflict && !urgent
+                      ? { backgroundColor: clientColor.bg, borderColor: clientColor.border }
+                      : undefined
+                  }
+                  onClick={() => {
+                    const payload = cellOverflow;
+                    setCellOverflow(null);
+                    if (payload) setSelectedTask({ task, day: payload.dayYmd, userId: payload.row.userId });
+                  }}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="text-base font-semibold leading-tight inline-flex items-center gap-2">
+                        {task.clientName}
+                        {hasConflict ? <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" /> : null}
+                      </p>
+                      <p className="text-sm text-muted-foreground">{task.title || "—"}</p>
+                      <p className="font-medium">{task.stageName}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {userMetaById.get(row.userId)?.name || row.name} · {dynamicDuration} day
+                        {dynamicDuration === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <span
+                        className={`rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide border ${contentTypeChipClassName(task.contentType)}`}
+                      >
+                        {ctLabel}
+                      </span>
+                      <span
+                        className={`rounded px-2 py-1 text-xs font-semibold ${
+                          urgent ? "bg-red-600 text-white" : "border border-border bg-background/90"
+                        }`}
+                      >
+                        {planType}
+                      </span>
+                    </div>
+                  </div>
+                  {hasConflict && conflictReason ? (
+                    <p className="mt-2 rounded border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-800 dark:text-red-200">
+                      {conflictReason}
+                    </p>
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
         </DialogContent>
       </Dialog>
     </section>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BarChart3, ClipboardCheck, PieChart, TriangleAlert, Users2 } from "lucide-react";
+import { BarChart3, ClipboardCheck, PieChart, Users2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -121,34 +121,6 @@ export default function ManagerDashboardPage() {
     return list;
   }, [tasks]);
 
-  const overbooking = useMemo(() => {
-    const todayStart = getTodayStartUTC().getTime();
-    const counts = new Map(); // dayKey|userId -> number
-
-    for (const task of tasks || []) {
-      const userId = (task.assignedUsers || [])[0];
-      for (const dayKey of task.dates || []) {
-        if (!userId || !dayKey) continue;
-        const status = String(task.status || "").toLowerCase();
-        if (status === "submitted" || status === "posted") continue;
-        const key = `${dayKey}|${String(userId)}`;
-        counts.set(key, (counts.get(key) || 0) + 1);
-      }
-    }
-
-    let biggest = null;
-    for (const [key, count] of counts.entries()) {
-      if (count < 3) continue;
-      const [dayKey, userId] = key.split("|");
-      const due = new Date(dayKey + "T00:00:00.000Z").getTime();
-      const overdue = due < todayStart;
-      biggest = biggest || { dayKey, userId, count, overdue };
-      if (count > biggest.count) biggest = { dayKey, userId, count, overdue };
-    }
-
-    return biggest;
-  }, [tasks]);
-
   const todayStart = useMemo(() => getTodayStartUTC().getTime(), []);
   const isStageOverdue = (dueDate, status) => {
     const d = dueDate ? new Date(dueDate).getTime() : null;
@@ -188,24 +160,6 @@ export default function ManagerDashboardPage() {
           <p className="text-sm text-muted-foreground">Review, approve and keep delivery on track.</p>
         </div>
       </div>
-
-      {overbooking ? (
-        <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-4">
-          <div className="flex items-start gap-3">
-            <TriangleAlert className="mt-0.5 h-5 w-5 text-destructive" />
-            <div>
-              <p className="font-medium text-destructive">
-                Overbooking detected
-              </p>
-              <p className="text-sm text-muted-foreground">
-                User <span className="font-medium text-foreground">{overbooking.userId.slice(-4)}</span> has{" "}
-                <span className="font-medium text-foreground">{overbooking.count}</span> tasks on{" "}
-                <span className="font-medium text-foreground">{overbooking.dayKey}</span>.
-              </p>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard title="Total Clients" value={stats.totalClients} loading={loading} accent="#6C3EBF" />
