@@ -115,6 +115,21 @@ function contentTypeChipClassName(raw) {
   return "border-border bg-background/85 text-foreground";
 }
 
+/** Maps API contentType to filter bucket (reel / static_post / carousel). */
+function normalizeContentTypeFilterKey(raw) {
+  const t = String(raw || "").toLowerCase();
+  if (t === "reel") return "reel";
+  if (t === "static_post" || t === "post") return "static_post";
+  if (t === "carousel") return "carousel";
+  return "other";
+}
+
+const CONTENT_FILTER_OPTIONS = [
+  { key: "reel", label: "Reel" },
+  { key: "static_post", label: "Static post" },
+  { key: "carousel", label: "Carousel" },
+];
+
 const CLIENT_COLOR_PALETTE = [
   { bg: "rgba(59,130,246,0.10)", border: "rgba(59,130,246,0.55)" },
   { bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.55)" },
@@ -163,6 +178,11 @@ export default function ManagerGlobalCalendarPage() {
   const [selectedTask, setSelectedTask] = useState(null);
   /** When a cell has multiple tasks, user opens this to see full list (no in-cell scroll). */
   const [cellOverflow, setCellOverflow] = useState(null);
+  const [contentTypeFilters, setContentTypeFilters] = useState({
+    reel: true,
+    static_post: true,
+    carousel: true,
+  });
   const gridScrollRef = useRef(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
   const [isPanningGrid, setIsPanningGrid] = useState(false);
@@ -277,6 +297,18 @@ export default function ManagerGlobalCalendarPage() {
     return out;
   }, [month]);
 
+  const filteredTasks = useMemo(() => {
+    const list = tasks || [];
+    const { reel, static_post, carousel } = contentTypeFilters;
+    if (!reel && !static_post && !carousel) return [];
+    if (reel && static_post && carousel) return list;
+    return list.filter((task) => {
+      const k = normalizeContentTypeFilterKey(task.contentType);
+      if (k === "other") return false;
+      return Boolean(contentTypeFilters[k]);
+    });
+  }, [tasks, contentTypeFilters]);
+
   const groupedRows = useMemo(() => {
     const rowMap = new Map(); // role::userId => row
     const seenCellTask = new Set(); // role::userId::day::taskId
@@ -306,7 +338,7 @@ export default function ManagerGlobalCalendarPage() {
     }
 
     // Fill per-day cells from assignedUsersPerDay (source of truth for rendered allocation).
-    for (const task of tasks || []) {
+    for (const task of filteredTasks || []) {
       const taskRole = normalizeRoleKey(task?.role || "unknown");
       const perDay = task?.assignedUsersPerDay && typeof task.assignedUsersPerDay === "object"
         ? task.assignedUsersPerDay
@@ -344,7 +376,7 @@ export default function ManagerGlobalCalendarPage() {
       role,
       rows: (roleGroups.get(role) || []).sort((a, b) => String(a.name).localeCompare(String(b.name))),
     }));
-  }, [tasks, users, userMetaById]);
+  }, [filteredTasks, users, userMetaById]);
 
   const normalizedLeaves = useMemo(() => {
     const source = [
@@ -419,7 +451,7 @@ export default function ManagerGlobalCalendarPage() {
   const usedByUserDay = useMemo(() => {
     const map = new Map();
     const seen = new Set(); // user::day::taskId
-    for (const task of tasks || []) {
+    for (const task of filteredTasks || []) {
       const perDay = task?.assignedUsersPerDay && typeof task.assignedUsersPerDay === "object"
         ? task.assignedUsersPerDay
         : {};
@@ -437,7 +469,7 @@ export default function ManagerGlobalCalendarPage() {
       }
     }
     return map;
-  }, [tasks]);
+  }, [filteredTasks]);
 
   const taskById = useMemo(() => {
     const map = new Map();
@@ -672,6 +704,48 @@ export default function ManagerGlobalCalendarPage() {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
+        <span className="text-xs font-medium text-muted-foreground">Content type</span>
+        {CONTENT_FILTER_OPTIONS.map(({ key, label }) => {
+          const on = contentTypeFilters[key];
+          const chip =
+            key === "reel"
+              ? "border-sky-500/60 bg-sky-500/15 text-sky-950 dark:text-sky-100"
+              : key === "static_post"
+                ? "border-violet-500/60 bg-violet-500/15 text-violet-950 dark:text-violet-100"
+                : "border-amber-500/60 bg-amber-500/15 text-amber-950 dark:text-amber-100";
+          return (
+            <Button
+              key={key}
+              type="button"
+              size="sm"
+              variant="outline"
+              className={`h-8 text-xs ${on ? chip : "opacity-60"}`}
+              aria-pressed={on}
+              onClick={() =>
+                setContentTypeFilters((prev) => ({
+                  ...prev,
+                  [key]: !prev[key],
+                }))
+              }
+            >
+              {label}
+            </Button>
+          );
+        })}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 text-xs text-muted-foreground"
+          onClick={() =>
+            setContentTypeFilters({ reel: true, static_post: true, carousel: true })
+          }
+        >
+          Show all
+        </Button>
+      </div>
+
       {loading ? (
         <div className="rounded-xl border border-border bg-card p-4">
           <div className="space-y-3">
@@ -686,6 +760,16 @@ export default function ManagerGlobalCalendarPage() {
           title="No calendar items"
           description="Nothing is scheduled for this month yet."
         />
+      ) : filteredTasks.length === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="py-8 text-center text-sm text-muted-foreground">
+            <p className="font-medium text-foreground">No tasks match the current filters</p>
+            <p className="mt-1">
+              Turn on at least one of <strong>Reel</strong>, <strong>Static post</strong>, or <strong>Carousel</strong>,
+              or click <strong>Show all</strong>.
+            </p>
+          </CardContent>
+        </Card>
       ) : (
         <>
           <div
