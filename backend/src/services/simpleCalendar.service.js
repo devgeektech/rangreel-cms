@@ -130,6 +130,113 @@ const nextValidWorkdayUTC = (date, holidaySet, options = {}) => {
   return d;
 };
 
+function splitIntoWeeks(baseStartDate) {
+  const weeks = [];
+  let current = createUTCDate(baseStartDate);
+
+  for (let i = 0; i < 4; i++) {
+    const weekStart = createUTCDate(current);
+    const weekDays = [];
+
+    for (let d = 0; d < 7; d++) {
+      const temp = addDaysUTC(weekStart, d);
+      const day = temp.getUTCDay();
+      if (day !== 0 && day !== 6) {
+        weekDays.push(createUTCDate(temp));
+      }
+    }
+
+    weeks.push(weekDays);
+    current = addDaysUTC(current, 7);
+  }
+
+  return weeks;
+}
+
+function generateWeeklyPlan(totalItems, weeks) {
+  const MIN_PER_WEEK = 2;
+  const perWeek = Math.max(MIN_PER_WEEK, Math.ceil(totalItems / weeks.length));
+  const plan = [];
+  let count = 0;
+
+  for (let i = 0; i < weeks.length; i++) {
+    if (count >= totalItems) break;
+    const remaining = totalItems - count;
+    const itemsThisWeek = Math.min(perWeek, remaining);
+    plan.push({ weekIndex: i, count: itemsThisWeek });
+    count += itemsThisWeek;
+  }
+
+  return plan;
+}
+
+function distributeInWeek(weekDays, count) {
+  const result = [];
+  const gap = Math.floor(weekDays.length / count) || 1;
+
+  for (let i = 0; i < count; i++) {
+    let index = i * gap;
+    if (index >= weekDays.length) index = weekDays.length - 1;
+    result.push(createUTCDate(weekDays[index]));
+  }
+
+  return result;
+}
+
+function generateSchedule(totalItems, baseStartDate) {
+  const weeks = splitIntoWeeks(baseStartDate);
+  const weeklyPlan = generateWeeklyPlan(totalItems, weeks);
+  const schedule = [];
+
+  weeklyPlan.forEach((week) => {
+    const dates = distributeInWeek(weeks[week.weekIndex], week.count);
+    schedule.push(...dates);
+  });
+
+  return schedule;
+}
+
+function interleaveContent(reels, posts, carousels) {
+  const result = [];
+  let i = 0;
+
+  while (i < reels.length || i < posts.length || i < carousels.length) {
+    if (reels[i]) result.push({ type: "reel", date: createUTCDate(reels[i]) });
+    if (posts[i]) result.push({ type: "post", date: createUTCDate(posts[i]) });
+    if (carousels[i]) result.push({ type: "carousel", date: createUTCDate(carousels[i]) });
+    i += 1;
+  }
+
+  return result;
+}
+
+function buildStrategistStartDates({ baseStartDate, reelsCount, postsCount, carouselsCount, holidaySet }) {
+  const reels = generateSchedule(reelsCount, baseStartDate);
+  const posts = generateSchedule(postsCount, baseStartDate);
+  const carousels = generateSchedule(carouselsCount, baseStartDate);
+  const finalSchedule = interleaveContent(reels, posts, carousels);
+
+  const usedDates = new Set();
+  const byType = { reel: [], post: [], carousel: [] };
+
+  const avoidSameDay = (date) => {
+    let d = createUTCDate(date);
+    while (usedDates.has(ymdUTC(d))) {
+      d = addDaysUTC(d, 1);
+      d = nextValidWorkdayUTC(d, holidaySet, { allowWeekend: false });
+    }
+    usedDates.add(ymdUTC(d));
+    return d;
+  };
+
+  for (const entry of finalSchedule) {
+    const safeDate = nextValidWorkdayUTC(entry.date, holidaySet, { allowWeekend: false });
+    byType[entry.type].push(avoidSameDay(safeDate));
+  }
+
+  return byType;
+}
+
 const mapLegacyFlatTeamToTyped = (team) => {
   const flat = team || {};
   const reels = {
@@ -572,11 +679,14 @@ async function fillMultiDaySlots(role, userId, startFrom, nDays, holidaySet, opt
 /**
  * Core reel pipeline dates — shared by `generateClientReels` and `generateCalendarDraft` so preview matches DB.
  * Forward from stagger anchor: urgent reels = one effective business day per stage (strategist → … → post).
+ * DO NOT MODIFY THIS LOGIC
+ * Custom calendar rules apply only during stage movement
  */
 async function computeReelStageDatesForGeneration({
   i,
   isUrgent,
   baseStartDate,
+  strategistStartDate,
   holidaySet,
   schedulingOpts,
   strategistId,
@@ -591,7 +701,7 @@ async function computeReelStageDatesForGeneration({
     schedulingPlanType: isUrgent ? "urgent" : "normal",
   };
   const staggerOffset = isUrgent ? (i - 1) * 1 : (i - 1) * 2;
-  const reelStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+  const reelStartSeed = strategistStartDate || addDaysUTC(baseStartDate, staggerOffset);
   const reelStartDate = createUTCDate(
     nextValidWorkdayUTC(reelStartSeed, holidaySet, schedulingOpts)
   );
@@ -845,6 +955,7 @@ async function buildReelItemForCalendarDraft({
   i,
   isUrgent,
   baseStartDate,
+  strategistStartDate,
   holidaySet,
   schedulingOpts,
   reelTeam,
@@ -860,6 +971,7 @@ async function buildReelItemForCalendarDraft({
     i,
     isUrgent,
     baseStartDate,
+    strategistStartDate,
     holidaySet,
     schedulingOpts,
     strategistId,
@@ -922,6 +1034,7 @@ async function buildReelItemForCalendarDraft({
 async function buildPostItemForCalendarDraft({
   i,
   baseStartDate,
+  strategistStartDate,
   holidaySet,
   schedulingOpts,
   postTeam,
@@ -933,7 +1046,7 @@ async function buildPostItemForCalendarDraft({
   const postPostingExecutiveId = postTeam.postingExecutive?._id || postTeam.postingExecutive;
 
   const staggerOffset = (i - 1) * 2;
-  const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+  const itemStartSeed = strategistStartDate || addDaysUTC(baseStartDate, staggerOffset);
   const itemStartDate = createUTCDate(
     nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
   );
@@ -1008,6 +1121,7 @@ async function buildPostItemForCalendarDraft({
 async function buildCarouselItemForCalendarDraft({
   i,
   baseStartDate,
+  strategistStartDate,
   holidaySet,
   schedulingOpts,
   carouselTeam,
@@ -1019,7 +1133,7 @@ async function buildCarouselItemForCalendarDraft({
   const carouselPostingExecutiveId = carouselTeam.postingExecutive?._id || carouselTeam.postingExecutive;
 
   const staggerOffset = (i - 1) * 2;
-  const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+  const itemStartSeed = strategistStartDate || addDaysUTC(baseStartDate, staggerOffset);
   const itemStartDate = createUTCDate(
     nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
   );
@@ -1173,6 +1287,8 @@ async function generateClientReels(client, options = {}) {
     populatedClient.manager?._id ||
     populatedClient.manager;
   const createdBy = populatedClient.createdBy || managerId;
+  const isCustomCalendar = Boolean(populatedClient.isCustomCalendar);
+  const weekendEnabled = Boolean(populatedClient.weekendEnabled);
 
   const strategistId = reelTeam.strategist?._id || reelTeam.strategist;
   const videographerId = reelTeam.videographer?._id || reelTeam.videographer;
@@ -1216,6 +1332,13 @@ async function generateClientReels(client, options = {}) {
     carouselsCount,
     addDaysUTC
   );
+  const strategistStarts = buildStrategistStartDates({
+    baseStartDate,
+    reelsCount,
+    postsCount,
+    carouselsCount,
+    holidaySet,
+  });
 
   for (const unit of workUnits) {
     if (unit.kind === "reel") {
@@ -1231,6 +1354,7 @@ async function generateClientReels(client, options = {}) {
       i,
       isUrgent,
       baseStartDate,
+      strategistStartDate: strategistStarts.reel[i - 1],
       holidaySet,
       schedulingOpts,
       strategistId,
@@ -1292,13 +1416,15 @@ async function generateClientReels(client, options = {}) {
       month: toMonthStringUTC(postingDate),
       clientPostingDate: createUTCDate(postingDate),
       workflowStages,
+      isCustomCalendar,
+      weekendEnabled,
       createdBy,
     });
     insertedCount += 1;
     } else if (unit.kind === "post") {
     const i = unit.index;
     const staggerOffset = (i - 1) * 2;
-    const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+    const itemStartSeed = strategistStarts.post[i - 1] || addDaysUTC(baseStartDate, staggerOffset);
     const itemStartDate = createUTCDate(
       nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
     );
@@ -1356,13 +1482,16 @@ async function generateClientReels(client, options = {}) {
           status: "assigned",
         },
       ],
+      isCustomCalendar,
+      weekendEnabled,
       createdBy,
     });
     insertedCount += 1;
     } else {
     const i = unit.index;
     const staggerOffset = (i - 1) * 2;
-    const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+    const itemStartSeed =
+      strategistStarts.carousel[i - 1] || addDaysUTC(baseStartDate, staggerOffset);
     const itemStartDate = createUTCDate(
       nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
     );
@@ -1420,6 +1549,8 @@ async function generateClientReels(client, options = {}) {
           status: "assigned",
         },
       ],
+      isCustomCalendar,
+      weekendEnabled,
       createdBy,
     });
     insertedCount += 1;
@@ -1449,6 +1580,7 @@ module.exports = {
   fillMultiDaySlotsWithBuffer,
   scheduleStageDay,
   nextValidWorkdayUTC,
+  buildStrategistStartDates,
   buildHolidaySetUTC,
   pickAssigneeForBufferDay,
   pickAssigneeForSplitDay,

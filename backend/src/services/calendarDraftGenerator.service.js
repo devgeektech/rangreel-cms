@@ -6,6 +6,7 @@ const {
   buildReelItemForCalendarDraft,
   buildPostItemForCalendarDraft,
   buildCarouselItemForCalendarDraft,
+  buildStrategistStartDates,
 } = require("./simpleCalendar.service");
 
 // Prompt 34: force date storage as pure UTC midnight.
@@ -191,6 +192,13 @@ async function generateCalendarDraft({
     postMaxOffset,
     addDaysUTC
   );
+  const strategistStarts = buildStrategistStartDates({
+    baseStartDate,
+    reelsCount,
+    postsCount,
+    carouselsCount,
+    holidaySet,
+  });
 
   for (const unit of draftWorkUnits) {
     if (unit.kind === "reel") {
@@ -200,6 +208,7 @@ async function generateCalendarDraft({
         i,
         isUrgent,
         baseStartDate,
+        strategistStartDate: strategistStarts.reel[i - 1],
         holidaySet,
         schedulingOpts,
         reelTeam,
@@ -212,6 +221,7 @@ async function generateCalendarDraft({
       const postItem = await buildPostItemForCalendarDraft({
         i,
         baseStartDate,
+        strategistStartDate: strategistStarts.post[i - 1],
         holidaySet,
         schedulingOpts,
         postTeam,
@@ -224,6 +234,7 @@ async function generateCalendarDraft({
       const carouselItem = await buildCarouselItemForCalendarDraft({
         i,
         baseStartDate,
+        strategistStartDate: strategistStarts.carousel[i - 1],
         holidaySet,
         schedulingOpts,
         carouselTeam,

@@ -11,7 +11,7 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { AlertTriangle, Film, GripVertical, Layers, Square } from "lucide-react";
+import { AlertTriangle, CalendarDays, Film, GripVertical, Layers, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -22,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
@@ -149,6 +150,7 @@ function buildStageEntries(draft, editableStages) {
         dateYmd: ymd,
         assignedUserId,
         contentType: ct,
+        isCustomCalendar: item?.isCustomCalendar !== false,
         locked,
         title: item.title || "",
         contentLabel,
@@ -225,12 +227,14 @@ function StageChip({
   lockPostStage,
   warnings,
   onOpenDetails,
+  onQuickMove,
 }) {
   const meta = CONTENT_TYPE_META[entry.contentType] || CONTENT_TYPE_META.static_post;
   const postLocked = lockPostStage && entry.stageName === "Post";
+  const dragDisabled = entry.locked || saving || !canEdit || postLocked || !entry.isCustomCalendar;
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: entry.id,
-    disabled: entry.locked || saving || !canEdit || postLocked,
+    disabled: dragDisabled,
     data: {
       contentId: entry.contentId,
       stageName: entry.stageName,
@@ -278,7 +282,7 @@ function StageChip({
       style={style}
       title={hoverTitle}
       className={cn(
-        "flex items-start gap-0.5 rounded border px-1 py-0.5 text-[10px] leading-tight",
+        "group flex items-start gap-0.5 rounded border px-1 py-0.5 text-[10px] leading-tight",
         meta.chip,
         hasWarnings &&
           (hasOverloadedWarning
@@ -288,7 +292,7 @@ function StageChip({
         isDragging && "opacity-40"
       )}
     >
-      {!entry.locked && !saving && canEdit && !postLocked ? (
+      {!dragDisabled ? (
         <button
           type="button"
           className="mt-0.5 shrink-0 cursor-grab touch-none text-current/70 active:cursor-grabbing"
@@ -314,7 +318,7 @@ function StageChip({
           {(entry.contentLabel || meta.label) + " · "}{entry.stageName} · {entry.role}
         </div>
         {isCustomizationMode && entry.stageName === "Plan" ? (
-          <div className="mt-0.5 text-[9px] text-muted-foreground">Plan — Moves entire workflow</div>
+          <div className="mt-0.5 text-[9px] text-muted-foreground">Plan — Moves only this stage</div>
         ) : null}
         {isCustomizationMode && entry.stageName === "Post" ? (
           <div className="mt-0.5 text-[9px] text-muted-foreground">Post — Controls final date</div>
@@ -331,6 +335,21 @@ function StageChip({
           )}
           aria-hidden
         />
+      ) : null}
+      {!dragDisabled ? (
+        <button
+          type="button"
+          className="mt-0.5 shrink-0 text-current/70 opacity-0 transition-opacity group-hover:opacity-100"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onQuickMove?.(entry);
+          }}
+          title="Quick move to date"
+          aria-label="Quick move to date"
+        >
+          <CalendarDays className="h-3 w-3" />
+        </button>
       ) : null}
     </div>
   );
@@ -570,6 +589,7 @@ export default function ContentCalendarDnd({
   const [previewHint, setPreviewHint] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsEntry, setDetailsEntry] = useState(null);
+  const [detailsMoveToYmd, setDetailsMoveToYmd] = useState("");
   const activeEntry = useMemo(
     () => entries.find((e) => e.id === activeDragId) || null,
     [entries, activeDragId]
@@ -614,6 +634,7 @@ export default function ContentCalendarDnd({
 
   const openDetails = useCallback((entry) => {
     setDetailsEntry(entry);
+    setDetailsMoveToYmd(String(entry?.dateYmd || "").slice(0, 10));
     setDetailsOpen(true);
   }, []);
   const handleReplaceUser = useCallback(async () => {
@@ -650,6 +671,50 @@ export default function ContentCalendarDnd({
       toast.error(err?.message || "Extend duration failed");
     }
   }, [detailsEntry, onStageMove, weekendMode]);
+  const runMoveForEntry = useCallback(
+    async (entry, targetYmd) => {
+      if (!entry || !onStageMove) return;
+      const ymd = String(targetYmd || "").slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
+        throw new Error("Please use YYYY-MM-DD format");
+      }
+      if (!weekendMode && isWeekendYmd(ymd)) {
+        throw new Error("Weekend dates are blocked");
+      }
+      await onStageMove({
+        contentId: entry.contentId,
+        stageName: entry.stageName,
+        newDateYmd: ymd,
+        previousYmd: entry.dateYmd,
+        allowWeekend: weekendMode,
+      });
+    },
+    [onStageMove, weekendMode]
+  );
+  const handleQuickMoveFromChip = useCallback(
+    async (entry) => {
+      if (!entry || !onStageMove) return;
+      const input = window.prompt("Move to date (YYYY-MM-DD)", String(entry.dateYmd || ""));
+      if (input == null) return;
+      try {
+        await runMoveForEntry(entry, input);
+        toast.success("Stage moved");
+      } catch (err) {
+        toast.error(err?.message || "Failed to move stage");
+      }
+    },
+    [onStageMove, runMoveForEntry]
+  );
+  const handleMoveToDate = useCallback(async () => {
+    if (!detailsEntry || !onStageMove) return;
+    try {
+      await runMoveForEntry(detailsEntry, detailsMoveToYmd);
+      toast.success("Stage moved");
+      setDetailsOpen(false);
+    } catch (err) {
+      toast.error(err?.message || "Failed to move stage");
+    }
+  }, [detailsEntry, detailsMoveToYmd, onStageMove, runMoveForEntry]);
 
   const postingDateByContentId = useMemo(() => {
     const map = new Map();
@@ -693,8 +758,11 @@ export default function ContentCalendarDnd({
 
     const customizationOpts =
       isCustomizationMode && customizationMinStageDateYmd
-        ? { minStageDateYmd: String(customizationMinStageDateYmd).slice(0, 10) }
-        : {};
+        ? {
+            minStageDateYmd: String(customizationMinStageDateYmd).slice(0, 10),
+            weekendEnabled: weekendMode,
+          }
+        : { weekendEnabled: weekendMode };
     const moved = isCustomizationMode
       ? applyCustomizationDrag(schedule, data.contentId, data.stageName, newYmd, customizationOpts)
       : applyManagerEditDrag(schedule, data.contentId, data.stageName, newYmd);
@@ -797,8 +865,11 @@ export default function ContentCalendarDnd({
     }
     const customizationOptsOver =
       isCustomizationMode && customizationMinStageDateYmd
-        ? { minStageDateYmd: String(customizationMinStageDateYmd).slice(0, 10) }
-        : {};
+        ? {
+            minStageDateYmd: String(customizationMinStageDateYmd).slice(0, 10),
+            weekendEnabled: weekendMode,
+          }
+        : { weekendEnabled: weekendMode };
     const candidate = isCustomizationMode
       ? applyCustomizationDrag(schedule, contentId, stageName, ymd, customizationOptsOver)
       : applyManagerEditDrag(schedule, contentId, stageName, ymd);
@@ -988,6 +1059,7 @@ export default function ContentCalendarDnd({
                       isCustomizationMode={isCustomizationMode}
                       lockPostStage={lockPostStage}
                       onOpenDetails={openDetails}
+                      onQuickMove={handleQuickMoveFromChip}
                       warnings={dayWarnings.filter(
                         (w) =>
                           String(w.role) === String(entry.role) &&
@@ -1077,6 +1149,28 @@ export default function ContentCalendarDnd({
                   <span className="font-medium">{String(detailsItem.postingDate).slice(0, 10)}</span>
                 </div>
               ) : null}
+              <div className="grid gap-2 rounded-md border p-2">
+                <p className="text-xs font-semibold text-muted-foreground">Move stage to date</p>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="date"
+                    value={detailsMoveToYmd}
+                    onChange={(e) => setDetailsMoveToYmd(e.target.value)}
+                    className="h-8"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleMoveToDate}
+                    disabled={!detailsEntry || saving || !detailsMoveToYmd}
+                  >
+                    Move
+                  </Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Use this for cross-month moves (e.g. month end to next month).
+                </p>
+              </div>
             </div>
           ) : null}
 

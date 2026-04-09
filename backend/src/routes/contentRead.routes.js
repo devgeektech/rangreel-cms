@@ -1,12 +1,20 @@
 const express = require("express");
 const auth = require("../middleware/auth");
+const roleGuard = require("../middleware/roleGuard");
 const asyncHandler = require("../middleware/asyncHandler");
 const contentReadController = require("../controllers/contentRead.controller");
+const contentController = require("../controllers/content.controller");
 
 const router = express.Router();
 
 // Prompt 25: unified reel detail read API (includes strategist plan fields).
 router.get("/:id", auth, asyncHandler(contentReadController.getContentById));
+router.patch(
+  "/:itemId/stage/:stageId/move",
+  auth,
+  roleGuard("manager"),
+  asyncHandler(contentController.moveStage)
+);
 
 module.exports = router;
 

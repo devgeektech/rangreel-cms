@@ -544,8 +544,7 @@ export default function NewClientPage() {
   const [scheduleSubmitted, setScheduleSubmitted] = useState(false);
   /** During customize: default to Post-only chips; user can switch to Plan / Shoot / … */
   const [scheduleStageFilter, setScheduleStageFilter] = useState("Post");
-  /** Match server draft: weekdays only for new-client preview (toggle to experiment with weekends). */
-  const [previewWeekendMode, setPreviewWeekendMode] = useState(false);
+  const [weekendEnabled, setWeekendEnabled] = useState(false);
   const [calendarDraftError, setCalendarDraftError] = useState("");
   const [briefFiles, setBriefFiles] = useState(emptyBriefFiles);
   const [currentUserId, setCurrentUserId] = useState(null);
@@ -668,7 +667,7 @@ export default function NewClientPage() {
           startDate: startDateWatch,
           team: teamPayload,
           contentEnabled: getContentEnabledFromPackage(pkgNow),
-          allowWeekend: false,
+          allowWeekend: weekendEnabled,
           allowFlexibleAdjustment: false,
         });
 
@@ -695,6 +694,7 @@ export default function NewClientPage() {
     step,
     selectedPackageId,
     startDateWatch,
+    weekendEnabled,
     teamAssignmentComplete,
     teamAssignmentFieldSignature,
     getValues,
@@ -909,6 +909,8 @@ export default function NewClientPage() {
           },
         },
         startDate: toIsoUtcMidnight(values.startDate),
+        isCustomCalendar: true,
+        weekendEnabled: weekendEnabled,
         status: "active",
         package: values.packageId,
         contentEnabled: (() => {
@@ -1603,6 +1605,14 @@ export default function NewClientPage() {
                   />
                 </Field>
                 <p className="text-xs text-muted-foreground">Pick the contract or campaign start — scheduling begins from the next working day.</p>
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={weekendEnabled}
+                    onChange={(e) => setWeekendEnabled(e.target.checked)}
+                  />
+                  Allow Weekend Scheduling
+                </label>
               </CardContent>
             </Card>
 
@@ -1928,7 +1938,7 @@ export default function NewClientPage() {
                     )}
                     <span className="text-xs text-muted-foreground">
                       {customizingSchedule
-                        ? "Drag Post to reschedule the pipeline (weekdays only; not before start date)"
+                        ? "Drag any stage to reschedule (weekdays only; not before start date)"
                         : "Preview mode"}
                     </span>
                   </div>
@@ -1939,7 +1949,9 @@ export default function NewClientPage() {
                     canEdit={customizingSchedule}
                     isCustomizationMode={isCustomizationMode}
                     editableStageNames={
-                      customizingSchedule ? ["Post"] : ["Plan", "Shoot", "Edit", "Approval"]
+                      customizingSchedule
+                        ? ["Plan", "Shoot", "Edit", "Design", "Approval", "Post"]
+                        : ["Plan", "Shoot", "Edit", "Approval"]
                     }
                     customizationMinStageDateYmd={customizingSchedule ? clientStartDateYmd : ""}
                     conflictMode="new"
@@ -1947,8 +1959,8 @@ export default function NewClientPage() {
                     saving={false}
                     userById={userById}
                     onCalendarStateChange={(nextDraft) => setCalendarDraft(nextDraft)}
-                    weekendMode={customizingSchedule ? false : previewWeekendMode}
-                    onToggleWeekend={customizingSchedule ? undefined : setPreviewWeekendMode}
+                    weekendMode={weekendEnabled}
+                    onToggleWeekend={setWeekendEnabled}
                     stageFilter={scheduleStageFilter}
                     onStageFilterChange={setScheduleStageFilter}
                     showStageFilterBar
