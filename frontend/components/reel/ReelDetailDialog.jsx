@@ -169,11 +169,11 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden p-0">
+        <DialogHeader className="shrink-0 px-6 pt-6">
           <DialogTitle>{contentDetailTitle(contentType)}</DialogTitle>
         </DialogHeader>
-
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
         {loading ? (
           <div className="space-y-3">
             <Skeleton className="h-5 w-2/3" />
@@ -657,6 +657,7 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
             </Card>
           </div>
         )}
+        </div>
       </DialogContent>
     </Dialog>
   );
