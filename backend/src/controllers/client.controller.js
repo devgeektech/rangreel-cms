@@ -294,6 +294,8 @@ const createClient = async (req, res) => {
       contentEnabled,
       calendarDraft,
       customStages,
+      isCustomCalendar,
+      weekendEnabled,
     } = req.body;
 
     if (!packageId) {
@@ -358,6 +360,8 @@ const createClient = async (req, res) => {
         noOfStaticPosts: effective.postsCount,
         noOfCarousels: effective.carouselsCount,
       },
+      isCustomCalendar: isCustomCalendar || false,
+      weekendEnabled: weekendEnabled || false,
       createdBy: req.user.id,
     });
 

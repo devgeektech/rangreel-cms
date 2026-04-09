@@ -61,7 +61,14 @@ function buildDateRangeYMD(startDate, endDate) {
 
 function isEditableRole(role) {
   const r = String(role || "");
-  return r === "strategist" || r === "videographer" || r === "videoEditor" || r === "manager";
+  return (
+    r === "strategist" ||
+    r === "videographer" ||
+    r === "videoEditor" ||
+    r === "graphicDesigner" ||
+    r === "manager" ||
+    r === "postingExecutive"
+  );
 }
 
 function roleToStageName(role) {
@@ -208,7 +215,7 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
 
     const contentItems = allContentIds.length
       ? await ContentItem.find({ _id: { $in: allContentIds } })
-          .select("client contentType type planType plan title clientPostingDate")
+          .select("client contentType type planType plan title clientPostingDate workflowStages.stageName workflowStages._id isCustomCalendar weekendEnabled")
           .lean()
       : [];
 
@@ -226,6 +233,9 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
       for (const item of draft?.items || []) {
         const contentIdStr = String(item?.contentId || "");
         const meta = contentById.get(contentIdStr) || {};
+        const stageIdByStageName = new Map(
+          (meta?.workflowStages || []).map((ws) => [String(ws?.stageName || ""), String(ws?._id || "")])
+        );
         const planType = String(meta.planType || meta.plan || "normal").toLowerCase();
         const priority = planType === "urgent" ? "urgent" : "normal";
 
@@ -258,7 +268,7 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
             contentType: String(meta.contentType || meta.type || item?.type || ""),
             role,
             stageName: roleToStageName(role),
-            stageId: "",
+            stageId: stageIdByStageName.get(roleToStageName(role)) || "",
             status: "assigned",
             planType,
             priority,
@@ -271,6 +281,8 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
             assignedUsers,
             assignedUsersPerDay: perDay,
             isEditable: isEditableRole(role),
+            isCustomCalendar: Boolean(meta.isCustomCalendar),
+            weekendEnabled: Boolean(meta.weekendEnabled),
           });
         }
       }

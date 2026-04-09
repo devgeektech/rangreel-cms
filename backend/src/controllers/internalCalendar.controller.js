@@ -78,7 +78,9 @@ const getInternalCalendar = async (req, res) => {
   try {
     const { clientId } = req.params;
     if (!clientId) return failure(res, "clientId is required", 400);
-    const client = await Client.findById(clientId).select("_id manager").lean();
+    const client = await Client.findById(clientId)
+      .select("_id manager isCustomCalendar weekendEnabled")
+      .lean();
     if (!client) return failure(res, "Client not found", 404);
 
     let allowed = false;
@@ -94,17 +96,22 @@ const getInternalCalendar = async (req, res) => {
     if (!allowed) return failure(res, "Forbidden", 403);
 
     const items = await ContentItem.find({ client: clientId })
-      .select("title type contentType clientPostingDate workflowStages")
+      .select("title type contentType clientPostingDate workflowStages isCustomCalendar weekendEnabled")
       .populate("workflowStages.assignedUser", "name avatar")
       .sort({ clientPostingDate: 1 });
 
     const payload = {
       clientId,
+      isCustomCalendar: Boolean(client.isCustomCalendar),
+      weekendEnabled: Boolean(client.weekendEnabled),
       items: (items || []).map((item) => ({
         contentId: item._id,
         title: item.title || "",
         type: item.type || (item.contentType === "static_post" ? "post" : item.contentType),
+        isCustomCalendar: Boolean(item.isCustomCalendar),
+        weekendEnabled: Boolean(item.weekendEnabled),
         stages: (item.workflowStages || []).map((s) => ({
+          stageId: s._id,
           name: s.stageName,
           role: s.role,
           assignedUser: s.assignedUser || null,

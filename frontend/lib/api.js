@@ -356,6 +356,11 @@ export const api = {
 
   // Content detail (Prompt 25)
   getContent: (id) => requestJson(`/content/${encodeURIComponent(id)}`, { method: "GET" }),
+  moveContentStage: (itemId, stageId, body) =>
+    requestJson(`/content/${encodeURIComponent(itemId)}/stage/${encodeURIComponent(stageId)}/move`, {
+      method: "PATCH",
+      body,
+    }),
 
   uploadVideo: async (file) => {
     const form = new FormData();

@@ -32,6 +32,22 @@ function compareYmd(a, b) {
   return da < db ? -1 : 1;
 }
 
+function isWeekendYmd(ymd) {
+  const d = new Date(`${ymd}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return false;
+  const day = d.getUTCDay();
+  return day === 0 || day === 6;
+}
+
+function nextWeekdayYmd(ymd) {
+  let cur = String(ymd || "").slice(0, 10);
+  for (let i = 0; i < 7; i += 1) {
+    if (!isWeekendYmd(cur)) return cur;
+    cur = addDaysToYmd(cur, 1);
+  }
+  return cur;
+}
+
 /**
  * Apply a dragged stage date plus the same calendar-day delta to following editable stages
  * (stops at first non-editable stage, e.g. Design on static posts).
@@ -104,7 +120,7 @@ export { USER_EDITABLE_AFTER_DRAG };
  * Phase 12: pre-creation customization drag engine.
  *
  * Rules:
- * - Dragging Plan/Post shifts ALL stages by offsetDays.
+ * - Dragging Post shifts ALL stages by offsetDays.
  * - Middle phases (Shoot/Edit/Approval) can move only between prev/next and before Post.
  * - Nothing can cross Post. Stage order must remain Plan < Shoot < Edit < Approval < Post.
  * @param {{ minStageDateYmd?: string }} [options] - If set, every stage date must be on or after this day (YYYY-MM-DD).
@@ -123,22 +139,27 @@ export function applyCustomizationDrag(draft, contentId, stageName, newDateYmd, 
   if (offsetDays === 0) return { draft, blocked: false, reason: "" };
 
   const isPost = String(stageName) === "Post";
-  const isPlan = String(stageName) === "Plan";
   const postStage = stages.find((s) => String(s.name) === "Post");
   const postDate = String(postStage?.date || item.postingDate || "").slice(0, 10);
   const nextStages = [...stages];
+  const weekendEnabled = options?.weekendEnabled === true;
 
-  if (isPost || isPlan) {
+  if (isPost) {
     for (let i = 0; i < nextStages.length; i++) {
       const cur = String(nextStages[i]?.date || "").slice(0, 10);
-      nextStages[i] = { ...nextStages[i], date: addDaysToYmd(cur, offsetDays) };
+      let shifted = addDaysToYmd(cur, offsetDays);
+      if (!weekendEnabled) shifted = nextWeekdayYmd(shifted);
+      nextStages[i] = { ...nextStages[i], date: shifted };
     }
   } else {
     const prevStageDate = idx > 0 ? String(nextStages[idx - 1]?.date || "").slice(0, 10) : "";
     const nextStageDate =
       idx < nextStages.length - 1 ? String(nextStages[idx + 1]?.date || "").slice(0, 10) : "";
 
-    if (postDate && compareYmd(newDateYmd, postDate) >= 0) {
+    let normalizedNewDate = newDateYmd;
+    if (!weekendEnabled) normalizedNewDate = nextWeekdayYmd(normalizedNewDate);
+
+    if (postDate && compareYmd(normalizedNewDate, postDate) >= 0) {
       return {
         draft,
         blocked: true,
@@ -146,14 +167,14 @@ export function applyCustomizationDrag(draft, contentId, stageName, newDateYmd, 
         code: "after_post",
       };
     }
-    if (prevStageDate && compareYmd(newDateYmd, prevStageDate) <= 0) {
+    if (prevStageDate && compareYmd(normalizedNewDate, prevStageDate) <= 0) {
       return { draft, blocked: true, reason: "Cannot overlap previous phase", code: "prev_overlap" };
     }
-    if (nextStageDate && compareYmd(newDateYmd, nextStageDate) >= 0) {
+    if (nextStageDate && compareYmd(normalizedNewDate, nextStageDate) >= 0) {
       return { draft, blocked: true, reason: "Cannot overlap next phase", code: "next_overlap" };
     }
 
-    nextStages[idx] = { ...nextStages[idx], date: newDateYmd };
+    nextStages[idx] = { ...nextStages[idx], date: normalizedNewDate };
   }
 
   // Safety: ensure Post remains last phase by date.

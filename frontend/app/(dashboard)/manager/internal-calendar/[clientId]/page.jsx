@@ -35,6 +35,7 @@ export default function ManagerInternalCalendarPage() {
   const [roleCapMap, setRoleCapMap] = useState({});
   const [weekendMode, setWeekendMode] = useState(true);
   const [debugMeta, setDebugMeta] = useState(null);
+  const customCalendarEnabled = Boolean(draft?.isCustomCalendar);
 
   const load = useCallback(async () => {
     if (!clientId) return;
@@ -43,6 +44,9 @@ export default function ManagerInternalCalendarPage() {
       const res = await api.getInternalCalendar(clientId);
       const next = res?.data || res || null;
       setDraft(next);
+      if (typeof next?.weekendEnabled === "boolean") {
+        setWeekendMode(Boolean(next.weekendEnabled));
+      }
     } catch (err) {
       toast.error(err.message || "Failed to load internal calendar");
       setDraft(null);
@@ -79,18 +83,16 @@ export default function ManagerInternalCalendarPage() {
   }, []);
 
   const moveStage = async ({ contentId, stageName, newDateYmd, allowWeekend }) => {
-    const res = await api.managerDragTask({
-      contentId,
-      stageName,
-      newDate: newDateYmd,
+    const item = (draft?.items || []).find((it) => String(it.contentId) === String(contentId));
+    const stage = (item?.stages || []).find((s) => String(s.name) === String(stageName));
+    const stageId = stage?.stageId ? String(stage.stageId) : "";
+    if (!stageId) throw new Error("Stage not found");
+    await api.moveContentStage(contentId, stageId, {
+      dueDate: newDateYmd,
       allowWeekend,
+      fromGlobalCalendar: false,
     });
-    setDebugMeta(res?.data?.scheduling || null);
-    const nextCalendar = res?.data?.calendar || null;
-    if (nextCalendar && Array.isArray(nextCalendar.items)) {
-      setDraft(nextCalendar);
-      return;
-    }
+    setDebugMeta(null);
     await load();
   };
 
@@ -100,7 +102,7 @@ export default function ManagerInternalCalendarPage() {
         <div>
           <h2 className="text-2xl font-semibold">Internal calendar</h2>
           <p className="text-sm text-muted-foreground">
-            Edits are applied only via global scheduler (`/api/manager/drag-task`). No per-client local save flow.
+            Stage moves use `/api/content/:itemId/stage/:stageId/move`.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -142,7 +144,7 @@ export default function ManagerInternalCalendarPage() {
               onStageMove={moveStage}
               roleCapMap={roleCapMap}
               saving={loading}
-              canEdit
+              canEdit={customCalendarEnabled}
               isCustomizationMode={false}
               allowPostCreationEdit
               lockPostStage

@@ -125,6 +125,14 @@ const contentItemSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    isCustomCalendar: {
+      type: Boolean,
+      default: false,
+    },
+    weekendEnabled: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

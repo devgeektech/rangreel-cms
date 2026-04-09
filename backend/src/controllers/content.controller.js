@@ -113,6 +113,115 @@ const getStageIndexById = (stages, stageId) => {
   return stages.findIndex((s) => s._id && s._id.toString() === String(stageId));
 };
 
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function isWeekend(date) {
+  const d = new Date(date).getDay();
+  return d === 0 || d === 6;
+}
+
+function nextWeekday(date) {
+  let d = new Date(date);
+  for (let i = 0; i < 7; i += 1) {
+    if (!isWeekend(d)) return d;
+    d = addDays(d, 1);
+  }
+  return d;
+}
+
+const moveStage = async (req, res) => {
+  try {
+    const { itemId, stageId } = req.params;
+    const item = await ContentItem.findById(itemId);
+    if (!item) return failure(res, "ContentItem not found", 404);
+
+    if (!item.isCustomCalendar) {
+      if (req.body?.fromGlobalCalendar) {
+        throw new Error("Editing not allowed in global calendar");
+      }
+      const oldReshuffleLogic = () => {
+        const mergedBody = {
+          ...(req.body || {}),
+          newDueDate: req.body?.dueDate || req.body?.newDueDate,
+        };
+        req.body = mergedBody;
+        return reshuffleStage(req, res);
+      };
+      return oldReshuffleLogic();
+    }
+
+    const stages = item.workflowStages;
+    const index = stages.findIndex((s) => s?._id && s._id.equals(stageId));
+    if (index === -1) return failure(res, "Stage not found", 404);
+    const stage = stages[index];
+    const prevStage = stages[index - 1];
+    const nextStage = stages[index + 1];
+
+    const incomingDueDate = req.body?.dueDate;
+    if (!incomingDueDate) return failure(res, "dueDate is required", 400);
+
+    if (!item.weekendEnabled && isWeekend(incomingDueDate)) {
+      throw new Error("Weekend scheduling is disabled");
+    }
+
+    const stageName = String(stage.stageName || "").toLowerCase();
+
+    if (stageName === "post") {
+      const oldDate = new Date(stage.dueDate);
+      const newDate = new Date(incomingDueDate);
+      const diff = Math.floor((newDate - oldDate) / (1000 * 60 * 60 * 24));
+      let prevDue = null;
+      item.workflowStages = item.workflowStages.map((s) => {
+        let shifted = addDays(s.dueDate, diff);
+        if (!item.weekendEnabled) {
+          shifted = nextWeekday(shifted);
+        }
+        if (prevDue && shifted.getTime() <= prevDue.getTime()) {
+          shifted = addDays(prevDue, 1);
+          if (!item.weekendEnabled) shifted = nextWeekday(shifted);
+        }
+        prevDue = shifted;
+        return {
+          ...s.toObject(),
+          dueDate: shifted,
+        };
+      });
+      await item.save();
+      return res.json({
+        success: true,
+        data: item,
+      });
+    }
+
+    let adjustedDate = new Date(incomingDueDate);
+
+    if (prevStage && adjustedDate <= new Date(prevStage.dueDate)) {
+      throw new Error("Move previous stage first");
+    }
+
+    if (nextStage) {
+      const duration = Number(stage?.duration) || 1;
+      const end = addDays(adjustedDate, duration - 1);
+      if (end >= new Date(nextStage.dueDate)) {
+        throw new Error("Adjust next stage first");
+      }
+    }
+    stage.dueDate = adjustedDate;
+
+    await item.save();
+    return res.json({
+      success: true,
+      data: item,
+    });
+  } catch (err) {
+    return failure(res, err.message || "Failed to move stage", 500);
+  }
+};
+
 const reshuffleStage = async (req, res) => {
   try {
     const { itemId, stageId } = req.params;
@@ -629,6 +738,7 @@ const patchContentItemStages = async (req, res) => {
 
 module.exports = {
   getContentById,
+  moveStage,
   reshuffleStage,
   updateStageStatus,
   patchContentItemStages,
