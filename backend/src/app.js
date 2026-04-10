@@ -17,6 +17,8 @@ const uploadRoutes = require("./routes/upload.routes");
 const managerReadRoutes = require("./routes/managerRead.routes");
 const internalCalendarRoutes = require("./routes/internalCalendar.routes");
 const calendarRoutes = require("./routes/calendar.routes");
+const scheduleRoutes = require("./routes/schedule.routes");
+require("./models/Schedule");
 
 const app = express();
 
@@ -91,6 +93,7 @@ app.use("/api/uploads", uploadRoutes);
 app.use("/api/manager", managerReadRoutes);
 app.use("/api/internal-calendar", internalCalendarRoutes);
 app.use("/api/calendar", calendarRoutes);
+app.use("/api/manager/schedule", scheduleRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, error: "Route not found" });

@@ -17,6 +17,7 @@ const {
   normalizeDraftItemToDurationTasks,
 } = require("./taskNormalizer.service");
 const { buildSortedWorkUnitsClientGeneration } = require("./schedulerPriority.service");
+const { getCustomMonthRange } = require("./customMonthRange.service");
 
 /** workflowStages[].role → ROLE_RULES key (Prompt 62). */
 const WORKFLOW_ROLE_TO_RULE_KEY = {
@@ -130,69 +131,43 @@ const nextValidWorkdayUTC = (date, holidaySet, options = {}) => {
   return d;
 };
 
-function splitIntoWeeks(baseStartDate) {
-  const weeks = [];
-  let current = createUTCDate(baseStartDate);
-
-  for (let i = 0; i < 4; i++) {
-    const weekStart = createUTCDate(current);
-    const weekDays = [];
-
-    for (let d = 0; d < 7; d++) {
-      const temp = addDaysUTC(weekStart, d);
-      const day = temp.getUTCDay();
-      if (day !== 0 && day !== 6) {
-        weekDays.push(createUTCDate(temp));
-      }
-    }
-
-    weeks.push(weekDays);
-    current = addDaysUTC(current, 7);
-  }
-
-  return weeks;
+function getDaysBetween(start, end) {
+  const s = createUTCDate(start);
+  const e = createUTCDate(end);
+  if (!s || !e) return 0;
+  const diff = e.getTime() - s.getTime();
+  return Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
 }
 
-function generateWeeklyPlan(totalItems, weeks) {
-  const MIN_PER_WEEK = 2;
-  const perWeek = Math.max(MIN_PER_WEEK, Math.ceil(totalItems / weeks.length));
-  const plan = [];
-  let count = 0;
-
-  for (let i = 0; i < weeks.length; i++) {
-    if (count >= totalItems) break;
-    const remaining = totalItems - count;
-    const itemsThisWeek = Math.min(perWeek, remaining);
-    plan.push({ weekIndex: i, count: itemsThisWeek });
-    count += itemsThisWeek;
+function buildCalendarDays(start, end) {
+  const days = [];
+  let current = createUTCDate(start);
+  const last = createUTCDate(end);
+  if (!current || !last) return days;
+  while (current.getTime() <= last.getTime()) {
+    days.push(createUTCDate(current));
+    current = addDaysUTC(current, 1);
   }
-
-  return plan;
+  return days;
 }
 
-function distributeInWeek(weekDays, count) {
-  const result = [];
-  const gap = Math.floor(weekDays.length / count) || 1;
-
-  for (let i = 0; i < count; i++) {
-    let index = i * gap;
-    if (index >= weekDays.length) index = weekDays.length - 1;
-    result.push(createUTCDate(weekDays[index]));
-  }
-
-  return result;
-}
-
-function generateSchedule(totalItems, baseStartDate) {
-  const weeks = splitIntoWeeks(baseStartDate);
-  const weeklyPlan = generateWeeklyPlan(totalItems, weeks);
+function generateSchedule(totalItems, rangeStart, rangeEnd) {
+  const count = Number(totalItems) || 0;
+  if (count <= 0) return [];
+  const start = createUTCDate(rangeStart);
+  if (!start) return [];
+  const end = createUTCDate(rangeEnd) || addDaysUTC(start, 27);
+  const calendarDays = buildCalendarDays(start, end);
+  if (!calendarDays.length) return [];
+  const totalDays = getDaysBetween(start, end);
+  const gap = Math.max(1, Math.floor(totalDays / count));
   const schedule = [];
-
-  weeklyPlan.forEach((week) => {
-    const dates = distributeInWeek(weeks[week.weekIndex], week.count);
-    schedule.push(...dates);
-  });
-
+  let pointer = 0;
+  for (let i = 0; i < count; i += 1) {
+    const index = Math.min(pointer, calendarDays.length - 1);
+    schedule.push(createUTCDate(calendarDays[index]));
+    pointer += gap;
+  }
   return schedule;
 }
 
@@ -210,10 +185,64 @@ function interleaveContent(reels, posts, carousels) {
   return result;
 }
 
-function buildStrategistStartDates({ baseStartDate, reelsCount, postsCount, carouselsCount, holidaySet }) {
-  const reels = generateSchedule(reelsCount, baseStartDate);
-  const posts = generateSchedule(postsCount, baseStartDate);
-  const carousels = generateSchedule(carouselsCount, baseStartDate);
+/**
+ * Spread strategist anchor dates across the first three custom-month cycles (same anchor as internal calendar).
+ * `baseStartDate` is contract start + 1 day (see generateClientReels); we recover start-of-contract for ranges.
+ */
+function scheduleTypeAcrossThreeMonths(count, baseStartDate, options = {}) {
+  if (!Number.isFinite(count) || count <= 0) return [];
+  const base = createUTCDate(baseStartDate);
+  if (!base) return [];
+  const leadBufferDays = Math.max(0, Number(options.leadBufferDays) || 0);
+  const monthOffsets =
+    Array.isArray(options.monthOffsets) && options.monthOffsets.length
+      ? options.monthOffsets.map((x) => Number(x) || 0)
+      : [0, 1, 2];
+  const clientStart = addDaysUTC(base, -1);
+  const ranges = monthOffsets.map((k) => getCustomMonthRange(clientStart, k));
+  const result = new Array(count);
+  const byMonth = Array.from({ length: ranges.length }, () => []);
+  for (let i = 0; i < count; i += 1) {
+    byMonth[i % byMonth.length].push(i);
+  }
+  for (let m = 0; m < byMonth.length; m += 1) {
+    const idxs = byMonth[m];
+    if (!idxs.length) continue;
+    const monthStart = addDaysUTC(ranges[m].start, 1);
+    let monthEnd = createUTCDate(ranges[m].end);
+    if (leadBufferDays > 0) {
+      const capped = addDaysUTC(monthEnd, -leadBufferDays);
+      if (capped.getTime() >= monthStart.getTime()) monthEnd = capped;
+    }
+    const sched = generateSchedule(idxs.length, monthStart, monthEnd);
+    for (let j = 0; j < idxs.length; j += 1) {
+      result[idxs[j]] = sched[j];
+    }
+  }
+  return result;
+}
+
+function buildStrategistStartDates({
+  baseStartDate,
+  reelsCount,
+  postsCount,
+  carouselsCount,
+  holidaySet,
+  monthOffsets,
+}) {
+  // Keep strategist anchors early enough so downstream stage durations still finish inside each 30-day cycle.
+  const reels = scheduleTypeAcrossThreeMonths(reelsCount, baseStartDate, {
+    leadBufferDays: 14,
+    monthOffsets,
+  });
+  const posts = scheduleTypeAcrossThreeMonths(postsCount, baseStartDate, {
+    leadBufferDays: 8,
+    monthOffsets,
+  });
+  const carousels = scheduleTypeAcrossThreeMonths(carouselsCount, baseStartDate, {
+    leadBufferDays: 8,
+    monthOffsets,
+  });
   const finalSchedule = interleaveContent(reels, posts, carousels);
 
   const usedDates = new Set();
@@ -695,6 +724,8 @@ async function computeReelStageDatesForGeneration({
   managerId,
   postingExecutiveId,
   usedReelPostingDayKeys,
+  allowPostingDayStacking = false,
+  postingWindow,
 }) {
   const reelSchedulingOpts = {
     ...schedulingOpts,
@@ -834,18 +865,28 @@ async function computeReelStageDatesForGeneration({
     postDue = postOut.dates[0];
   }
 
-  let postingKey = ymdUTC(postDue);
-  while (postingKey && usedReelPostingDayKeys.has(postingKey)) {
-    postDue = await scheduleStageDay(
-      "postingExecutive",
-      postingExecutiveId,
-      addDaysUTC(postDue, 1),
-      holidaySet,
-      reelSchedulingOpts
-    );
-    postingKey = ymdUTC(postDue);
+  if (!allowPostingDayStacking) {
+    let postingKey = ymdUTC(postDue);
+    while (postingKey && usedReelPostingDayKeys.has(postingKey)) {
+      postDue = await scheduleStageDay(
+        "postingExecutive",
+        postingExecutiveId,
+        addDaysUTC(postDue, 1),
+        holidaySet,
+        reelSchedulingOpts
+      );
+      postingKey = ymdUTC(postDue);
+    }
+    if (postingKey) usedReelPostingDayKeys.add(postingKey);
   }
-  if (postingKey) usedReelPostingDayKeys.add(postingKey);
+  if (postingWindow?.end) {
+    const end = createUTCDate(postingWindow.end);
+    if (end && postDue.getTime() > end.getTime()) {
+      console.warn(
+        `[scheduler] Cycle overflow for reels in ${postingWindow.label || "current cycle"}; continuing beyond cycle end`
+      );
+    }
+  }
 
   return { planDue, shootDue, editDue, approvalDue, postDue };
 }
@@ -867,6 +908,8 @@ async function computePostLikeStageDatesForGeneration({
   managerId,
   postingExecutiveId,
   usedPostingDayKeys,
+  allowPostingDayStacking = false,
+  postingWindow,
 }) {
   const postLikeOpts = { ...schedulingOpts, schedulingPlanType: "normal" };
 
@@ -925,18 +968,28 @@ async function computePostLikeStageDatesForGeneration({
     postLikeOpts
   );
 
-  let postingKey = ymdUTC(postDue);
-  while (postingKey && usedPostingDayKeys.has(postingKey)) {
-    postDue = await scheduleStageDay(
-      "postingExecutive",
-      postingExecutiveId,
-      addDaysUTC(postDue, 1),
-      holidaySet,
-      postLikeOpts
-    );
-    postingKey = ymdUTC(postDue);
+  if (!allowPostingDayStacking) {
+    let postingKey = ymdUTC(postDue);
+    while (postingKey && usedPostingDayKeys.has(postingKey)) {
+      postDue = await scheduleStageDay(
+        "postingExecutive",
+        postingExecutiveId,
+        addDaysUTC(postDue, 1),
+        holidaySet,
+        postLikeOpts
+      );
+      postingKey = ymdUTC(postDue);
+    }
+    if (postingKey) usedPostingDayKeys.add(postingKey);
   }
-  if (postingKey) usedPostingDayKeys.add(postingKey);
+  if (postingWindow?.end) {
+    const end = createUTCDate(postingWindow.end);
+    if (end && postDue.getTime() > end.getTime()) {
+      console.warn(
+        `[scheduler] Cycle overflow for ${postingWindow.typeLabel || "content"} in ${postingWindow.label || "current cycle"}; continuing beyond cycle end`
+      );
+    }
+  }
 
   return {
     planDue,
@@ -960,6 +1013,7 @@ async function buildReelItemForCalendarDraft({
   schedulingOpts,
   reelTeam,
   usedReelPostingDayKeys,
+  postingWindow,
 }) {
   const strategistId = reelTeam.strategist?._id || reelTeam.strategist;
   const videographerId = reelTeam.videographer?._id || reelTeam.videographer;
@@ -980,6 +1034,8 @@ async function buildReelItemForCalendarDraft({
     managerId,
     postingExecutiveId,
     usedReelPostingDayKeys,
+    allowPostingDayStacking: schedulingOpts.allowPostingDayStacking === true,
+    postingWindow,
   });
 
   const postingDate = ymdUTC(postDue);
@@ -1039,6 +1095,7 @@ async function buildPostItemForCalendarDraft({
   schedulingOpts,
   postTeam,
   usedPostPostingDayKeys,
+  postingWindow,
 }) {
   const postStrategistId = postTeam.strategist?._id || postTeam.strategist;
   const postDesignerId = postTeam.graphicDesigner?._id || postTeam.graphicDesigner;
@@ -1070,6 +1127,8 @@ async function buildPostItemForCalendarDraft({
     managerId: postManagerId,
     postingExecutiveId: postPostingExecutiveId,
     usedPostingDayKeys: usedPostPostingDayKeys,
+    allowPostingDayStacking: schedulingOpts.allowPostingDayStacking === true,
+    postingWindow: postingWindow ? { ...postingWindow, typeLabel: "posts" } : undefined,
   });
 
   const postingDate = ymdUTC(postDue);
@@ -1126,6 +1185,7 @@ async function buildCarouselItemForCalendarDraft({
   schedulingOpts,
   carouselTeam,
   usedCarouselPostingDayKeys,
+  postingWindow,
 }) {
   const carouselStrategistId = carouselTeam.strategist?._id || carouselTeam.strategist;
   const carouselDesignerId = carouselTeam.graphicDesigner?._id || carouselTeam.graphicDesigner;
@@ -1157,6 +1217,8 @@ async function buildCarouselItemForCalendarDraft({
     managerId: carouselManagerId,
     postingExecutiveId: carouselPostingExecutiveId,
     usedPostingDayKeys: usedCarouselPostingDayKeys,
+    allowPostingDayStacking: schedulingOpts.allowPostingDayStacking === true,
+    postingWindow: postingWindow ? { ...postingWindow, typeLabel: "carousels" } : undefined,
   });
 
   const postingDate = ymdUTC(postDue);
