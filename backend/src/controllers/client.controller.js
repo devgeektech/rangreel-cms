@@ -8,6 +8,7 @@ const { generateClientReels } = require("../services/simpleCalendar.service");
 const { persistCalendarDraft } = require("../services/calendarDraftPersistence.service");
 const ContentItem = require("../models/ContentItem");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
+const { createInitialScheduleForClient } = require("../services/clientScheduleMonths.service");
 
 const normalizeMonthTarget = (targetMonth) => {
   if (!targetMonth) return null;
@@ -457,6 +458,12 @@ const createClient = async (req, res) => {
       },
       { upsert: true, new: true, runValidators: true }
     );
+
+    try {
+      await createInitialScheduleForClient(client._id);
+    } catch (schedErr) {
+      console.warn("[createClient] createInitialScheduleForClient:", schedErr?.message || schedErr);
+    }
 
     const populated = await populateClientQuery(Client.findById(client._id));
     return success(res, populated, 201);

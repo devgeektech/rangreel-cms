@@ -27,6 +27,15 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { applyCustomizationDrag, applyManagerEditDrag } from "@/lib/calendarDraftUtils";
+import { classifyWeekendStageMove } from "@/lib/calendarWeekendValidation";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -101,6 +110,22 @@ function addDaysYmd(ymd, days) {
   if (Number.isNaN(d.getTime())) return ymd;
   d.setUTCDate(d.getUTCDate() + days);
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+}
+
+function monthKeyFromYmd(ymd) {
+  const m = String(ymd || "").match(/^(\d{4})-(\d{2})-\d{2}$/);
+  if (!m) return "";
+  return `${m[1]}-${m[2]}`;
+}
+
+function shiftMonthKey(monthKey, delta) {
+  const m = String(monthKey || "").match(/^(\d{4})-(\d{2})$/);
+  if (!m) return "";
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  if (!Number.isFinite(y) || !Number.isFinite(mo)) return "";
+  const d = new Date(Date.UTC(y, mo - 1 + Number(delta || 0), 1));
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
 }
 
 function formatMonthLabel(monthStr) {
@@ -240,6 +265,8 @@ function StageChip({
       stageName: entry.stageName,
       dateYmd: entry.dateYmd,
       locked: entry.locked,
+      isCustomCalendar: entry.isCustomCalendar,
+      role: entry.role,
     },
   });
 
@@ -414,6 +441,8 @@ export default function ContentCalendarDnd({
   allowPostCreationEdit = false,
   lockPostStage = false,
   weekendMode = true,
+  /** When true, dropping on a weekend while weekend mode is OFF opens a confirmation modal (custom calendar only). Defaults to customization preview mode; set explicitly for internal calendar. */
+  weekendBlockedConfirmEnabled,
   onToggleWeekend,
   /** 'all' | stage name — hide chips except this stage when not 'all' */
   stageFilter = "all",
@@ -590,6 +619,8 @@ export default function ContentCalendarDnd({
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsEntry, setDetailsEntry] = useState(null);
   const [detailsMoveToYmd, setDetailsMoveToYmd] = useState("");
+  const [weekendConfirmOpen, setWeekendConfirmOpen] = useState(false);
+  const [pendingWeekendMove, setPendingWeekendMove] = useState(null);
   const activeEntry = useMemo(
     () => entries.find((e) => e.id === activeDragId) || null,
     [entries, activeDragId]
@@ -614,10 +645,7 @@ export default function ContentCalendarDnd({
   const detailSuggestions = useMemo(() => {
     if (!detailsEntry) return [];
     const out = [];
-    if (detailWarnings.length > 0) out.push("Try replacing assignee for this stage.");
-    if (detailsEntry.stageName === "Edit" || detailsEntry.stageName === "Shoot") {
-      out.push("Try extending duration by moving this stage +1 day.");
-    }
+    if (detailsEntry.stageName === "Post") out.push("Move only to a date in the previous month.");
     if (!weekendMode) out.push("Weekend mode is OFF. Turning it ON may unlock dates.");
     return out;
   }, [detailsEntry, detailWarnings, weekendMode]);
@@ -637,67 +665,154 @@ export default function ContentCalendarDnd({
     setDetailsMoveToYmd(String(entry?.dateYmd || "").slice(0, 10));
     setDetailsOpen(true);
   }, []);
-  const handleReplaceUser = useCallback(async () => {
-    if (!detailsEntry || !onStageMove) return;
-    try {
-      // Trigger backend replacement logic on current date.
-      await onStageMove({
-        contentId: detailsEntry.contentId,
-        stageName: detailsEntry.stageName,
-        newDateYmd: detailsEntry.dateYmd,
-        previousYmd: detailsEntry.dateYmd,
-        allowWeekend: weekendMode,
-      });
-      toast.success("Replacement attempt completed");
-      setDetailsOpen(false);
-    } catch (err) {
-      toast.error(err?.message || "Replace user failed");
-    }
-  }, [detailsEntry, onStageMove, weekendMode]);
-  const handleExtendDuration = useCallback(async () => {
-    if (!detailsEntry || !onStageMove) return;
-    const nextYmd = addDaysYmd(detailsEntry.dateYmd, 1);
-    try {
-      await onStageMove({
-        contentId: detailsEntry.contentId,
-        stageName: detailsEntry.stageName,
-        newDateYmd: nextYmd,
-        previousYmd: detailsEntry.dateYmd,
-        allowWeekend: weekendMode,
-      });
-      toast.success("Duration extension attempt completed");
-      setDetailsOpen(false);
-    } catch (err) {
-      toast.error(err?.message || "Extend duration failed");
-    }
-  }, [detailsEntry, onStageMove, weekendMode]);
+  const resolveUseWeekendConfirm = useCallback(
+    (entryIsCustom) =>
+      (weekendBlockedConfirmEnabled ?? isCustomizationMode) &&
+      schedule?.isCustomCalendar !== false &&
+      entryIsCustom !== false,
+    [weekendBlockedConfirmEnabled, isCustomizationMode, schedule?.isCustomCalendar]
+  );
+
   const runMoveForEntry = useCallback(
-    async (entry, targetYmd) => {
-      if (!entry || !onStageMove) return;
+    async (entry, targetYmd, { forceWeekend = false } = {}) => {
+      if (!entry) return;
       const ymd = String(targetYmd || "").slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) {
         throw new Error("Please use YYYY-MM-DD format");
       }
-      if (!weekendMode && isWeekendYmd(ymd)) {
-        throw new Error("Weekend dates are blocked");
+      if (!forceWeekend) {
+        const customizationOpts =
+          isCustomizationMode && customizationMinStageDateYmd
+            ? {
+                minStageDateYmd: String(customizationMinStageDateYmd).slice(0, 10),
+                weekendEnabled: weekendMode,
+              }
+            : { weekendEnabled: weekendMode };
+        const classification = classifyWeekendStageMove({
+          schedule,
+          contentId: entry.contentId,
+          stageName: entry.stageName,
+          newYmd: ymd,
+          weekendMode,
+          useWeekendConfirm: resolveUseWeekendConfirm(entry.isCustomCalendar),
+          isCustomizationMode,
+          customizationOpts,
+          applyCustomizationDrag,
+          applyManagerEditDrag,
+        });
+        if (classification.kind === "hard_block") {
+          throw new Error("Weekend dates are blocked");
+        }
+        if (classification.kind === "error") {
+          throw new Error(classification.message || "Invalid move");
+        }
+        if (classification.kind === "confirm") {
+          setPendingWeekendMove({ source: "entry", entry, newYmd: ymd });
+          setWeekendConfirmOpen(true);
+          return "confirm_opened";
+        }
+      }
+      if (!onStageMove) {
+        const customizationOpts =
+          isCustomizationMode && customizationMinStageDateYmd
+            ? {
+                minStageDateYmd: String(customizationMinStageDateYmd).slice(0, 10),
+                weekendEnabled: forceWeekend || weekendMode,
+              }
+            : { weekendEnabled: forceWeekend || weekendMode };
+        const moved = isCustomizationMode
+          ? applyCustomizationDrag(schedule, entry.contentId, entry.stageName, ymd, customizationOpts)
+          : applyManagerEditDrag(schedule, entry.contentId, entry.stageName, ymd);
+        if (moved?.blocked) {
+          throw new Error(moved.reason || "Invalid move");
+        }
+        if (typeof onCalendarStateChange === "function" && moved?.draft) {
+          onCalendarStateChange(moved.draft);
+        }
+        return;
       }
       await onStageMove({
         contentId: entry.contentId,
         stageName: entry.stageName,
         newDateYmd: ymd,
         previousYmd: entry.dateYmd,
-        allowWeekend: weekendMode,
+        allowWeekend: forceWeekend || weekendMode,
       });
     },
-    [onStageMove, weekendMode]
+    [
+      onStageMove,
+      weekendMode,
+      schedule,
+      isCustomizationMode,
+      customizationMinStageDateYmd,
+      resolveUseWeekendConfirm,
+      onCalendarStateChange,
+    ]
   );
+
+  const confirmWeekendMove = useCallback(async () => {
+    const pending = pendingWeekendMove;
+    if (!pending) return;
+    try {
+      if (pending.source === "drag") {
+        const { data, newYmd } = pending;
+        const customizationOpts =
+          isCustomizationMode && customizationMinStageDateYmd
+            ? {
+                minStageDateYmd: String(customizationMinStageDateYmd).slice(0, 10),
+                weekendEnabled: true,
+              }
+            : { weekendEnabled: true };
+        const moved = isCustomizationMode
+          ? applyCustomizationDrag(schedule, data.contentId, data.stageName, newYmd, customizationOpts)
+          : applyManagerEditDrag(schedule, data.contentId, data.stageName, newYmd);
+        if (moved.blocked) {
+          toast.error(moved.reason || "Invalid move");
+          return;
+        }
+        if (!onStageMove) {
+          if (typeof onCalendarStateChange === "function" && moved?.draft) {
+            onCalendarStateChange(moved.draft);
+          }
+        } else {
+          await onStageMove({
+            contentId: data.contentId,
+            stageName: data.stageName,
+            newDateYmd: newYmd,
+            allowWeekend: true,
+            previousYmd: data.dateYmd,
+            nextStages:
+              moved?.draft?.items?.find((it) => String(it.contentId) === String(data.contentId))?.stages || [],
+          });
+        }
+      } else {
+        await runMoveForEntry(pending.entry, pending.newYmd, { forceWeekend: true });
+      }
+      setWeekendConfirmOpen(false);
+      setPendingWeekendMove(null);
+      toast.success("Stage moved");
+      if (pending.source === "entry") setDetailsOpen(false);
+    } catch (err) {
+      toast.error(err?.message || "Failed to move stage");
+    }
+  }, [
+    pendingWeekendMove,
+    isCustomizationMode,
+    customizationMinStageDateYmd,
+    schedule,
+    onStageMove,
+    onCalendarStateChange,
+    runMoveForEntry,
+  ]);
+
   const handleQuickMoveFromChip = useCallback(
     async (entry) => {
       if (!entry || !onStageMove) return;
       const input = window.prompt("Move to date (YYYY-MM-DD)", String(entry.dateYmd || ""));
       if (input == null) return;
       try {
-        await runMoveForEntry(entry, input);
+        const r = await runMoveForEntry(entry, input);
+        if (r === "confirm_opened") return;
         toast.success("Stage moved");
       } catch (err) {
         toast.error(err?.message || "Failed to move stage");
@@ -705,16 +820,29 @@ export default function ContentCalendarDnd({
     },
     [onStageMove, runMoveForEntry]
   );
+
   const handleMoveToDate = useCallback(async () => {
-    if (!detailsEntry || !onStageMove) return;
+    if (!detailsEntry) return;
+    if (String(detailsEntry.stageName || "") !== "Post") {
+      toast.error("Only Post stage can be moved from this popup");
+      return;
+    }
+    const currentMonth = monthKeyFromYmd(detailsEntry.dateYmd);
+    const targetMonth = monthKeyFromYmd(detailsMoveToYmd);
+    const requiredPrevMonth = shiftMonthKey(currentMonth, -1);
+    if (!currentMonth || !targetMonth || targetMonth !== requiredPrevMonth) {
+      toast.error("Select a date in the immediate previous month");
+      return;
+    }
     try {
-      await runMoveForEntry(detailsEntry, detailsMoveToYmd);
+      const r = await runMoveForEntry(detailsEntry, detailsMoveToYmd);
+      if (r === "confirm_opened") return;
       toast.success("Stage moved");
       setDetailsOpen(false);
     } catch (err) {
       toast.error(err?.message || "Failed to move stage");
     }
-  }, [detailsEntry, detailsMoveToYmd, onStageMove, runMoveForEntry]);
+  }, [detailsEntry, detailsMoveToYmd, runMoveForEntry]);
 
   const postingDateByContentId = useMemo(() => {
     const map = new Map();
@@ -749,12 +877,6 @@ export default function ContentCalendarDnd({
     const newYmd = overId.slice(4);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(newYmd)) return;
     if (newYmd === data.dateYmd) return;
-    if (!weekendMode && isWeekendYmd(newYmd)) {
-      const msg = "Weekend dates are blocked";
-      setDropError(msg);
-      toast.error(msg);
-      return;
-    }
 
     const customizationOpts =
       isCustomizationMode && customizationMinStageDateYmd
@@ -763,6 +885,39 @@ export default function ContentCalendarDnd({
             weekendEnabled: weekendMode,
           }
         : { weekendEnabled: weekendMode };
+
+    const useWeekendConfirm = resolveUseWeekendConfirm(data.isCustomCalendar);
+    const classification = classifyWeekendStageMove({
+      schedule,
+      contentId: data.contentId,
+      stageName: data.stageName,
+      newYmd,
+      weekendMode,
+      useWeekendConfirm,
+      isCustomizationMode,
+      customizationOpts,
+      applyCustomizationDrag,
+      applyManagerEditDrag,
+    });
+
+    if (classification.kind === "hard_block") {
+      const msg = "Weekend dates are blocked";
+      setDropError(msg);
+      toast.error(msg);
+      return;
+    }
+    if (classification.kind === "error") {
+      const msg = classification.message || "Invalid phase move";
+      setDropError(msg);
+      toast.error(msg);
+      return;
+    }
+    if (classification.kind === "confirm") {
+      setPendingWeekendMove({ source: "drag", data, newYmd });
+      setWeekendConfirmOpen(true);
+      return;
+    }
+
     const moved = isCustomizationMode
       ? applyCustomizationDrag(schedule, data.contentId, data.stageName, newYmd, customizationOpts)
       : applyManagerEditDrag(schedule, data.contentId, data.stageName, newYmd);
@@ -836,14 +991,19 @@ export default function ContentCalendarDnd({
       setPreviewHint("");
       return;
     }
-    if (!weekendMode && isWeekendYmd(ymd)) {
+    const data = active?.data?.current;
+    const useWeekendConfirmHover = resolveUseWeekendConfirm(data?.isCustomCalendar);
+    if (!weekendMode && isWeekendYmd(ymd) && !useWeekendConfirmHover) {
       setInvalidDropYmd(ymd);
       setValidDropYmd("");
       setInvalidDropReason("Weekend dates are blocked");
       setPreviewHint("");
       return;
     }
-    const data = active?.data?.current;
+
+    const weekendPreviewUnlock =
+      weekendMode || (!weekendMode && useWeekendConfirmHover && isWeekendYmd(ymd));
+
     const contentId = String(data?.contentId || "");
     const stageName = String(data?.stageName || "");
     const isBoundaryController = stageName === "Post" || stageName === "Plan";
@@ -867,9 +1027,9 @@ export default function ContentCalendarDnd({
       isCustomizationMode && customizationMinStageDateYmd
         ? {
             minStageDateYmd: String(customizationMinStageDateYmd).slice(0, 10),
-            weekendEnabled: weekendMode,
+            weekendEnabled: weekendPreviewUnlock,
           }
-        : { weekendEnabled: weekendMode };
+        : { weekendEnabled: weekendPreviewUnlock };
     const candidate = isCustomizationMode
       ? applyCustomizationDrag(schedule, contentId, stageName, ymd, customizationOptsOver)
       : applyManagerEditDrag(schedule, contentId, stageName, ymd);
@@ -883,7 +1043,11 @@ export default function ContentCalendarDnd({
 
     const day = new Date(`${ymd}T00:00:00.000Z`).getUTCDay();
     const hints = [];
-    if (day === 0 || day === 6) hints.push("May use weekend");
+    if ((day === 0 || day === 6) && !weekendMode && useWeekendConfirmHover) {
+      hints.push("Weekend — confirm on release");
+    } else if (day === 0 || day === 6) {
+      hints.push("May use weekend");
+    }
     const role = String(data?.role || "").toLowerCase();
     if (
       role === "videographer" ||
@@ -1149,41 +1313,68 @@ export default function ContentCalendarDnd({
                   <span className="font-medium">{String(detailsItem.postingDate).slice(0, 10)}</span>
                 </div>
               ) : null}
-              <div className="grid gap-2 rounded-md border p-2">
-                <p className="text-xs font-semibold text-muted-foreground">Move stage to date</p>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="date"
-                    value={detailsMoveToYmd}
-                    onChange={(e) => setDetailsMoveToYmd(e.target.value)}
-                    className="h-8"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={handleMoveToDate}
-                    disabled={!detailsEntry || saving || !detailsMoveToYmd}
-                  >
-                    Move
-                  </Button>
+              {String(detailsEntry?.stageName || "") === "Post" ? (
+                <div className="grid gap-2 rounded-md border p-2">
+                  <p className="text-xs font-semibold text-muted-foreground">Move stage to date</p>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="date"
+                      value={detailsMoveToYmd}
+                      onChange={(e) => setDetailsMoveToYmd(e.target.value)}
+                      className="h-8"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleMoveToDate}
+                      disabled={!detailsEntry || saving || !detailsMoveToYmd}
+                    >
+                      Move
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Only previous-month dates are allowed for Post moves.
+                  </p>
                 </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Use this for cross-month moves (e.g. month end to next month).
-                </p>
-              </div>
+              ) : null}
             </div>
           ) : null}
 
-          <DialogFooter showCloseButton>
-            <Button type="button" variant="outline" onClick={handleReplaceUser} disabled={!detailsEntry || saving}>
-              Replace user
-            </Button>
-            <Button type="button" onClick={handleExtendDuration} disabled={!detailsEntry || saving}>
-              Extend duration
-            </Button>
-          </DialogFooter>
+          <DialogFooter showCloseButton />
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={weekendConfirmOpen}
+        onOpenChange={(open) => {
+          setWeekendConfirmOpen(open);
+          if (!open) setPendingWeekendMove(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Move to weekend?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You are moving this task to a weekend. Do you want to continue?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setWeekendConfirmOpen(false);
+                setPendingWeekendMove(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => void confirmWeekendMove()}>
+              Continue
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

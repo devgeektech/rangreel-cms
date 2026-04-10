@@ -326,6 +326,18 @@ export const api = {
       method: "GET",
     }),
 
+  /** Custom month cycles (startDate-anchored); includes canCreateNextMonth when totalMonths >= 3 */
+  getClientSchedules: (clientId) =>
+    requestJson(`/manager/schedule/${encodeURIComponent(clientId)}`, {
+      method: "GET",
+    }),
+
+  createNextScheduleMonth: (clientId) =>
+    requestJson("/manager/schedule/create-next-month", {
+      method: "POST",
+      body: { clientId },
+    }),
+
   /** Smart scheduling: capacity warnings only (does not block saves). */
   checkCalendarConflicts: (body) =>
     requestJson("/calendar/check-conflicts", {

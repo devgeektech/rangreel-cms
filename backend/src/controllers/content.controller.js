@@ -164,7 +164,8 @@ const moveStage = async (req, res) => {
     const incomingDueDate = req.body?.dueDate;
     if (!incomingDueDate) return failure(res, "dueDate is required", 400);
 
-    if (!item.weekendEnabled && isWeekend(incomingDueDate)) {
+    const allowWeekendOverride = req.body?.allowWeekend === true;
+    if (!item.weekendEnabled && !allowWeekendOverride && isWeekend(incomingDueDate)) {
       throw new Error("Weekend scheduling is disabled");
     }
 
