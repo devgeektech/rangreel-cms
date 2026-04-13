@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FolderOpen, Plus } from "lucide-react";
+import { CalendarDays, FolderOpen, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -111,11 +111,19 @@ export default function ManagerClientsPage() {
                   </td>
                   <td className="px-4 py-3">{statusBadge(client.status)}</td>
                   <td className="px-4 py-3 text-right">
-                    <Link href={`/manager/clients/${client._id}`} onClick={(e) => e.stopPropagation()}>
-                      <Button variant="outline" size="sm" type="button">
-                        View
-                      </Button>
-                    </Link>
+                    <div className="inline-flex items-center gap-2">
+                      <Link href={`/manager/internal-calendar/${client._id}`} onClick={(e) => e.stopPropagation()}>
+                        <Button variant="secondary" size="sm" type="button">
+                          <CalendarDays className="mr-1 h-3.5 w-3.5" />
+                          Edit Schedule
+                        </Button>
+                      </Link>
+                      <Link href={`/manager/clients/${client._id}`} onClick={(e) => e.stopPropagation()}>
+                        <Button variant="outline" size="sm" type="button">
+                          View
+                        </Button>
+                      </Link>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -180,11 +188,18 @@ export default function ManagerClientsPage() {
                 </div>
               </div>
               <div className="mt-3" onClick={(e) => e.stopPropagation()}>
-                <Link href={`/manager/clients/${client._id}`} className="block">
-                  <Button variant="outline" className="w-full" type="button">
-                    View
-                  </Button>
-                </Link>
+                <div className="grid grid-cols-2 gap-2">
+                  <Link href={`/manager/internal-calendar/${client._id}`} className="block">
+                    <Button variant="secondary" className="w-full" type="button">
+                      Edit Schedule
+                    </Button>
+                  </Link>
+                  <Link href={`/manager/clients/${client._id}`} className="block">
+                    <Button variant="outline" className="w-full" type="button">
+                      View
+                    </Button>
+                  </Link>
+                </div>
               </div>
             </div>
           ))

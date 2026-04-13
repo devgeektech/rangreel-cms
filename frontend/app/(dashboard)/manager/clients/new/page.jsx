@@ -976,22 +976,9 @@ export default function NewClientPage() {
           };
         })(),
         calendarDraft: calendarDraft && Array.isArray(calendarDraft.items) ? calendarDraft : undefined,
-        customStages:
-          calendarDraft && Array.isArray(calendarDraft.items)
-            ? calendarDraft.items.map((item) => ({
-                contentItemId: item.contentId,
-                type: item.type,
-                title: item.title,
-                postingDate: item.postingDate,
-                stages: (item.stages || []).map((s) => ({
-                  stageName: s.name,
-                  dueDate: s.date,
-                  role: s.role,
-                  assignedUser: s.assignedUser,
-                  status: s.status,
-                })),
-              }))
-            : undefined,
+        // `calendarDraft` already contains full stage payload; do not duplicate as `customStages`
+        // to avoid oversized create-client requests for large cycle counts.
+        customStages: undefined,
         team: (() => {
           const pkgSubmit = (packages || []).find((p) => String(p._id) === String(values.packageId));
           const f = packageTeamFlags(pkgSubmit);
