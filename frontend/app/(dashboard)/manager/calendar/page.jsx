@@ -185,11 +185,16 @@ export default function ManagerGlobalCalendarPage() {
     carousel: true,
   });
   const gridScrollRef = useRef(null);
+  const leaveSectionRef = useRef(null);
   const overflowCarouselRef = useRef(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
   const lastDragEndRef = useRef({ taskId: "", at: 0 });
   const [isPanningGrid, setIsPanningGrid] = useState(false);
   const [overflowSlideIndex, setOverflowSlideIndex] = useState(0);
+  const [highlightedCell, setHighlightedCell] = useState("");
+  const [highlightLeaveSection, setHighlightLeaveSection] = useState(false);
+  const pendingLeaveConflictRef = useRef(null);
+  const pendingLeaveSuccessRef = useRef(null);
 
   const handleGridMouseDown = (e) => {
     // Left mouse pans only when starting from non-interactive background.
@@ -267,9 +272,53 @@ export default function ManagerGlobalCalendarPage() {
     setOverflowSlideIndex(idx);
   };
 
-  const loadCalendar = async () => {
+  const scrollToLeaveSection = (opts = {}) => {
+    if (opts?.highlight === true) {
+      setHighlightLeaveSection(true);
+    }
+    requestAnimationFrame(() => {
+      const el = leaveSectionRef.current;
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
+  const scrollToConflictCell = (userId, ymd) => {
+    requestAnimationFrame(() => {
+      const day = String(ymd || "").slice(0, 10);
+      if (!day) return;
+      const key = `${String(userId || "")}::${day}`;
+      setHighlightedCell(key);
+      const cells = Array.from(document.querySelectorAll(`[data-gc-ymd="${day}"]`));
+      if (!cells.length) return;
+      const target =
+        cells.find((el) => String(el.getAttribute("data-gc-user") || "") === String(userId || "")) ||
+        cells[0];
+      target.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    });
+  };
+
+  useEffect(() => {
+    if (!highlightedCell) return undefined;
+    const t = setTimeout(() => setHighlightedCell(""), 3500);
+    return () => clearTimeout(t);
+  }, [highlightedCell]);
+
+  useEffect(() => {
+    if (!highlightLeaveSection) return undefined;
+    const t = setTimeout(() => setHighlightLeaveSection(false), 3500);
+    return () => clearTimeout(t);
+  }, [highlightLeaveSection]);
+
+  const loadCalendar = async (options = {}) => {
+    const silent = options?.silent === true;
+    const preserveScroll = options?.preserveScroll === true;
+    const scroller = gridScrollRef.current;
+    const prevScroll = preserveScroll && scroller
+      ? { left: scroller.scrollLeft, top: scroller.scrollTop }
+      : null;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       // Single global source for manager calendar.
       const [calendarRes, teamUsersRes, leaveRes, holidayRes] = await Promise.all([
         api.getManagerGlobalCalendar(month),
@@ -293,10 +342,18 @@ export default function ManagerGlobalCalendarPage() {
         capMap[role] = Number.isFinite(cap) && cap > 0 ? cap : DEFAULT_ROLE_CAPACITY;
       }
       setCapacityByRole(capMap);
+      if (prevScroll) {
+        requestAnimationFrame(() => {
+          const el = gridScrollRef.current;
+          if (!el) return;
+          el.scrollLeft = prevScroll.left;
+          el.scrollTop = prevScroll.top;
+        });
+      }
     } catch (error) {
       toast.error(error.message || "Failed to load calendar");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -304,6 +361,23 @@ export default function ManagerGlobalCalendarPage() {
     loadCalendar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month]);
+
+  useEffect(() => {
+    const pendingSuccess = pendingLeaveSuccessRef.current;
+    if (pendingSuccess) {
+      const successMonth = String(pendingSuccess?.date || "").slice(0, 7);
+      if (successMonth && successMonth === month) {
+        scrollToConflictCell(pendingSuccess.userId, pendingSuccess.date);
+        pendingLeaveSuccessRef.current = null;
+      }
+    }
+    const pending = pendingLeaveConflictRef.current;
+    if (!pending) return;
+    const conflictMonth = String(pending?.date || "").slice(0, 7);
+    if (!conflictMonth || conflictMonth !== month) return;
+    scrollToConflictCell(pending.userId, pending.date);
+    pendingLeaveConflictRef.current = null;
+  }, [month, tasks]);
 
   const userMetaById = useMemo(() => {
     const map = new Map();
@@ -618,7 +692,7 @@ export default function ManagerGlobalCalendarPage() {
         targetUserId: row.userId && row.userId !== "unassigned" ? row.userId : undefined,
       });
       // Backend is source of truth: replace entire calendar state from API.
-      await loadCalendar();
+      await loadCalendar({ silent: true, preserveScroll: true });
       toast.success("Schedule updated");
     } catch (err) {
       const reasons = err?.data?.details?.reasons;
@@ -657,6 +731,8 @@ export default function ManagerGlobalCalendarPage() {
     try {
       setLeaveBusy(true);
       setLeaveFormError("");
+      const successUserId = userId;
+      const successStartDate = startDate;
       // Update = delete + create (current API set has no PATCH leave endpoint).
       if (editingLeaveId) {
         await api.deleteManagerLeave(editingLeaveId);
@@ -664,11 +740,39 @@ export default function ManagerGlobalCalendarPage() {
       await api.addManagerLeave({ userId, startDate, endDate, reason });
       toast.success(editingLeaveId ? "Leave updated" : "Leave added");
       resetLeaveForm();
-      await loadCalendar();
+      await loadCalendar({ silent: true });
+      scrollToLeaveSection({ highlight: true });
+      const successMonth = String(successStartDate || "").slice(0, 7);
+      pendingLeaveSuccessRef.current = {
+        userId: String(successUserId || ""),
+        date: String(successStartDate || "").slice(0, 10),
+      };
+      if (successMonth && successMonth !== month) {
+        setMonth(successMonth);
+      } else {
+        scrollToConflictCell(String(successUserId || ""), String(successStartDate || "").slice(0, 10));
+        pendingLeaveSuccessRef.current = null;
+      }
     } catch (err) {
       const msg = err?.data?.reason || err?.message || "Failed to save leave";
       setLeaveFormError(msg);
       toast.error(msg);
+      const conflict = err?.data?.details?.conflict;
+      if (conflict?.date) {
+        const conflictDate = String(conflict.date).slice(0, 10);
+        const conflictMonth = conflictDate.slice(0, 7);
+        pendingLeaveConflictRef.current = {
+          userId: String(conflict.userId || userId || ""),
+          date: conflictDate,
+        };
+        scrollToLeaveSection();
+        if (conflictMonth && conflictMonth !== month) {
+          setMonth(conflictMonth);
+        } else {
+          scrollToConflictCell(String(conflict.userId || userId || ""), conflictDate);
+          pendingLeaveConflictRef.current = null;
+        }
+      }
     } finally {
       setLeaveBusy(false);
     }
@@ -872,6 +976,8 @@ export default function ManagerGlobalCalendarPage() {
                         return (
                           <div
                             key={`${row.userId}-${day.ymd}`}
+                            data-gc-user={String(row.userId || "")}
+                            data-gc-ymd={String(day.ymd || "")}
                             className={`flex min-h-28 flex-col border-b border-r border-border p-2 ${
                               isHoliday ? "bg-gray-300/40 dark:bg-gray-700/40" : onLeave ? "bg-blue-500/15" : ""
                             } ${
@@ -879,6 +985,10 @@ export default function ManagerGlobalCalendarPage() {
                                 ? canDropOnCell(row, day.ymd)
                                   ? "ring-2 ring-emerald-500/70 bg-emerald-500/15"
                                   : "ring-2 ring-red-500/70 bg-red-500/15"
+                                : ""
+                            } ${
+                              highlightedCell === `${String(row.userId || "")}::${String(day.ymd || "")}`
+                                ? "ring-2 ring-amber-500/80 bg-amber-500/20 transition-colors duration-300"
                                 : ""
                             }`}
                             title={
@@ -1121,7 +1231,10 @@ export default function ManagerGlobalCalendarPage() {
               </span>
             </CardContent>
           </Card>
-          <Card>
+          <Card
+            ref={leaveSectionRef}
+            className={highlightLeaveSection ? "ring-2 ring-amber-500/80 bg-amber-500/10 transition-colors duration-300" : ""}
+          >
             <CardHeader>
               <CardTitle>Leave Blocks</CardTitle>
             </CardHeader>

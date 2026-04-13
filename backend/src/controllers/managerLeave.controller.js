@@ -2,7 +2,6 @@ const mongoose = require("mongoose");
 const User = require("../models/User");
 const Leave = require("../models/Leave");
 const ContentItem = require("../models/ContentItem");
-const { validateTaskPerDay } = require("../services/constraintEngine.service");
 
 function addDaysUTC(date, days) {
   const d = new Date(date);
@@ -45,47 +44,46 @@ const createLeaveSimulatedConflict = async (req, res) => {
       });
     }
 
-    // SimulateSchedule:
-    // 1) Fetch ALL content items (global)
-    // 2) Normalize tasks (stage-level)
-    // 3) Add temporary leave
-    // 4) Reject if any existing scheduled stage becomes invalid due to leave.
-    const contentItems = await ContentItem.find({})
-      .select("contentType planType workflowStages")
+    const endExclusive = addDaysUTC(end, 1);
+    const nonBlockingStatuses = ["completed", "posted", "approved", "submitted", "rejected"];
+    const blockingItem = await ContentItem.findOne({
+      workflowStages: {
+        $elemMatch: {
+          assignedUser: userId,
+          dueDate: { $gte: start, $lt: endExclusive },
+          status: { $nin: nonBlockingStatuses },
+        },
+      },
+    })
+      .select("_id workflowStages")
       .lean();
 
-    const endExclusive = addDaysUTC(end, 1);
-    const tempLeaves = [{ userId, from: start, to: end }];
-
-    for (const item of contentItems || []) {
-      const capacityDelta = item?.planType === "urgent" ? 1 : 0;
-      const taskContentType = item?.contentType || item?.type || "post";
-      for (const stage of item?.workflowStages || []) {
-        if (!stage) continue;
-        if (String(stage?.assignedUser) !== String(userId)) continue;
-        const sd = stage?.dueDate ? new Date(stage.dueDate) : null;
-        if (!sd || Number.isNaN(sd.getTime())) continue;
-        if (!(sd >= start && sd < endExclusive)) continue;
-
-        const terminal = ["completed", "posted"].includes(String(stage?.status || "").toLowerCase());
-        if (terminal) continue;
-
-        const task = {
-          role: stage.role,
-          leaves: tempLeaves,
-          capacityDelta,
-          contentType: taskContentType,
-          contentItemId: item?._id,
-        };
-
-        const result = await validateTaskPerDay(task, sd, stage?.assignedUser);
-        if (result && result.isValid === false && result.reason === "User is on leave") {
-          return res.status(409).json({
-            success: false,
-            reason: "Leave causes global scheduling conflict",
-          });
-        }
-      }
+    if (blockingItem) {
+      const conflictingStage = (blockingItem.workflowStages || []).find((stage) => {
+        if (!stage) return false;
+        if (String(stage?.assignedUser || "") !== String(userId)) return false;
+        const due = stage?.dueDate ? new Date(stage.dueDate) : null;
+        if (!due || Number.isNaN(due.getTime())) return false;
+        if (!(due >= start && due < endExclusive)) return false;
+        const st = String(stage?.status || "").toLowerCase();
+        return !nonBlockingStatuses.includes(st);
+      });
+      return res.status(409).json({
+        success: false,
+        reason: "Leave causes global scheduling conflict",
+        details: conflictingStage
+          ? {
+              conflict: {
+                userId: String(userId),
+                date: conflictingStage.dueDate,
+                stageName: conflictingStage.stageName || "",
+                role: conflictingStage.role || "",
+                status: conflictingStage.status || "",
+                contentItemId: String(blockingItem._id || ""),
+              },
+            }
+          : undefined,
+      });
     }
 
     const createdByRole = req.user?.roleType === "admin" ? "admin" : "manager";
