@@ -31,6 +31,12 @@ import { Controller, useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import ContentCalendarDnd from "@/components/calendar/ContentCalendarDnd";
 import { cn } from "@/lib/utils";
+import {
+  getCustomMonthRange,
+  mergeScheduleDraft,
+  postingInCustomRange,
+  prettyDateUtc,
+} from "@/lib/customMonthRange";
 
 const stepLabels = ["Basic info", "Package & schedule", "Team"];
 
@@ -544,8 +550,9 @@ export default function NewClientPage() {
   const [scheduleSubmitted, setScheduleSubmitted] = useState(false);
   /** During customize: default to Post-only chips; user can switch to Plan / Shoot / … */
   const [scheduleStageFilter, setScheduleStageFilter] = useState("Post");
-  /** Match server draft: weekdays only for new-client preview (toggle to experiment with weekends). */
-  const [previewWeekendMode, setPreviewWeekendMode] = useState(false);
+  /** First 3 custom months from start date (same as post-create Schedule M0–M2). */
+  const [selectedPreviewMonthIndex, setSelectedPreviewMonthIndex] = useState(0);
+  const [weekendEnabled, setWeekendEnabled] = useState(false);
   const [calendarDraftError, setCalendarDraftError] = useState("");
   const [briefFiles, setBriefFiles] = useState(emptyBriefFiles);
   const [currentUserId, setCurrentUserId] = useState(null);
@@ -586,6 +593,47 @@ export default function NewClientPage() {
     const m = String(startDateWatch).match(/^(\d{4}-\d{2}-\d{2})/);
     return m ? m[1] : "";
   }, [startDateWatch]);
+
+  const previewCustomMonths = useMemo(() => {
+    const dynamic = Array.isArray(calendarDraft?.cycleRanges) ? calendarDraft.cycleRanges : null;
+    if (dynamic?.length) {
+      return dynamic.map((row, i) => ({
+        monthIndex: Number.isFinite(row?.monthIndex) ? row.monthIndex : i,
+        start: row?.start,
+        end: row?.end,
+      }));
+    }
+    if (!clientStartDateYmd) return null;
+    try {
+      return [0, 1, 2].map((i) => {
+        const range = getCustomMonthRange(clientStartDateYmd, i);
+        return { monthIndex: i, ...range };
+      });
+    } catch {
+      return null;
+    }
+  }, [clientStartDateYmd, calendarDraft]);
+
+  const selectedPreviewRange = useMemo(() => {
+    if (!previewCustomMonths?.length) return null;
+    return previewCustomMonths[selectedPreviewMonthIndex] ?? previewCustomMonths[0];
+  }, [previewCustomMonths, selectedPreviewMonthIndex]);
+
+  const displayCalendarDraft = useMemo(() => {
+    if (!calendarDraft?.items?.length) return calendarDraft;
+    if (Number.isFinite(selectedPreviewMonthIndex)) {
+      const byCycle = calendarDraft.items.filter(
+        (it) => Number(it?.cycleIndex) === Number(selectedPreviewMonthIndex)
+      );
+      if (byCycle.length > 0) return { ...calendarDraft, items: byCycle };
+    }
+    if (!selectedPreviewRange) return calendarDraft;
+    const items = calendarDraft.items.filter((it) =>
+      postingInCustomRange(it.postingDate, selectedPreviewRange.start, selectedPreviewRange.end)
+    );
+    return { ...calendarDraft, items };
+  }, [calendarDraft, selectedPreviewRange, selectedPreviewMonthIndex]);
+
   /** useWatch (not watch) so nested Controller fields like `teamAssignment.strategist` update this object reliably. */
   const teamAssignmentWatch = useWatch({
     control,
@@ -639,6 +687,10 @@ export default function NewClientPage() {
   }, [selectedPackageId, setValue]);
 
   useEffect(() => {
+    setSelectedPreviewMonthIndex(0);
+  }, [clientStartDateYmd]);
+
+  useEffect(() => {
     if (step !== 2) return;
     if (!selectedPackageId) return;
     if (!startDateWatch) return;
@@ -668,7 +720,7 @@ export default function NewClientPage() {
           startDate: startDateWatch,
           team: teamPayload,
           contentEnabled: getContentEnabledFromPackage(pkgNow),
-          allowWeekend: false,
+          allowWeekend: weekendEnabled,
           allowFlexibleAdjustment: false,
         });
 
@@ -695,6 +747,7 @@ export default function NewClientPage() {
     step,
     selectedPackageId,
     startDateWatch,
+    weekendEnabled,
     teamAssignmentComplete,
     teamAssignmentFieldSignature,
     getValues,
@@ -909,6 +962,8 @@ export default function NewClientPage() {
           },
         },
         startDate: toIsoUtcMidnight(values.startDate),
+        isCustomCalendar: true,
+        weekendEnabled: weekendEnabled,
         status: "active",
         package: values.packageId,
         contentEnabled: (() => {
@@ -921,22 +976,9 @@ export default function NewClientPage() {
           };
         })(),
         calendarDraft: calendarDraft && Array.isArray(calendarDraft.items) ? calendarDraft : undefined,
-        customStages:
-          calendarDraft && Array.isArray(calendarDraft.items)
-            ? calendarDraft.items.map((item) => ({
-                contentItemId: item.contentId,
-                type: item.type,
-                title: item.title,
-                postingDate: item.postingDate,
-                stages: (item.stages || []).map((s) => ({
-                  stageName: s.name,
-                  dueDate: s.date,
-                  role: s.role,
-                  assignedUser: s.assignedUser,
-                  status: s.status,
-                })),
-              }))
-            : undefined,
+        // `calendarDraft` already contains full stage payload; do not duplicate as `customStages`
+        // to avoid oversized create-client requests for large cycle counts.
+        customStages: undefined,
         team: (() => {
           const pkgSubmit = (packages || []).find((p) => String(p._id) === String(values.packageId));
           const f = packageTeamFlags(pkgSubmit);
@@ -1603,6 +1645,14 @@ export default function NewClientPage() {
                   />
                 </Field>
                 <p className="text-xs text-muted-foreground">Pick the contract or campaign start — scheduling begins from the next working day.</p>
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={weekendEnabled}
+                    onChange={(e) => setWeekendEnabled(e.target.checked)}
+                  />
+                  Allow Weekend Scheduling
+                </label>
               </CardContent>
             </Card>
 
@@ -1889,7 +1939,8 @@ export default function NewClientPage() {
             <CardHeader className="pb-2">
               <CardTitle className="text-base">📅 Schedule preview</CardTitle>
               <CardDescription>
-                Auto schedule is read-only. Customize to reschedule stages; capacity warnings are non-blocking.
+                Preview uses three start-date months (e.g. 9 Apr → 8 May), not calendar months. Switch M1–M3 to
+                see and edit each month; edits apply only within that month&apos;s preview.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
@@ -1928,31 +1979,66 @@ export default function NewClientPage() {
                     )}
                     <span className="text-xs text-muted-foreground">
                       {customizingSchedule
-                        ? "Drag Post to reschedule the pipeline (weekdays only; not before start date)"
+                        ? "Drag any stage to reschedule (weekdays only; not before start date)"
                         : "Preview mode"}
                     </span>
                   </div>
 
-                  <ContentCalendarDnd
-                    draft={calendarDraft}
-                    controlledDraft
-                    canEdit={customizingSchedule}
-                    isCustomizationMode={isCustomizationMode}
-                    editableStageNames={
-                      customizingSchedule ? ["Post"] : ["Plan", "Shoot", "Edit", "Approval"]
-                    }
-                    customizationMinStageDateYmd={customizingSchedule ? clientStartDateYmd : ""}
-                    conflictMode="new"
-                    roleCapMap={{}}
-                    saving={false}
-                    userById={userById}
-                    onCalendarStateChange={(nextDraft) => setCalendarDraft(nextDraft)}
-                    weekendMode={customizingSchedule ? false : previewWeekendMode}
-                    onToggleWeekend={customizingSchedule ? undefined : setPreviewWeekendMode}
-                    stageFilter={scheduleStageFilter}
-                    onStageFilterChange={setScheduleStageFilter}
-                    showStageFilterBar
-                  />
+                  {previewCustomMonths?.length ? (
+                    <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
+                      <span className="text-sm text-muted-foreground">Custom month:</span>
+                      {previewCustomMonths.map((m) => (
+                        <Button
+                          key={m.monthIndex}
+                          type="button"
+                          size="sm"
+                          variant={selectedPreviewMonthIndex === m.monthIndex ? "default" : "outline"}
+                          onClick={() => setSelectedPreviewMonthIndex(m.monthIndex)}
+                        >
+                          M{m.monthIndex + 1}{" "}
+                          <span className="hidden sm:inline">
+                            ({prettyDateUtc(m.start)} – {prettyDateUtc(m.end)})
+                          </span>
+                        </Button>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {displayCalendarDraft &&
+                  Array.isArray(displayCalendarDraft.items) &&
+                  displayCalendarDraft.items.length === 0 &&
+                  calendarDraft &&
+                  calendarDraft.items?.length > 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      No posting dates fall in this custom month. Use another tab to edit items in other months.
+                    </p>
+                  ) : (
+                    <ContentCalendarDnd
+                      key={`preview-${selectedPreviewMonthIndex}-${clientStartDateYmd || ""}`}
+                      draft={displayCalendarDraft}
+                      controlledDraft
+                      canEdit={customizingSchedule}
+                      isCustomizationMode={isCustomizationMode}
+                      editableStageNames={
+                        customizingSchedule
+                          ? ["Plan", "Shoot", "Edit", "Design", "Approval", "Post"]
+                          : ["Plan", "Shoot", "Edit", "Approval"]
+                      }
+                      customizationMinStageDateYmd={customizingSchedule ? clientStartDateYmd : ""}
+                      conflictMode="new"
+                      roleCapMap={{}}
+                      saving={false}
+                      userById={userById}
+                      onCalendarStateChange={(nextDraft) =>
+                        setCalendarDraft((prev) => mergeScheduleDraft(prev, nextDraft))
+                      }
+                      weekendMode={weekendEnabled}
+                      onToggleWeekend={setWeekendEnabled}
+                      stageFilter={scheduleStageFilter}
+                      onStageFilterChange={setScheduleStageFilter}
+                      showStageFilterBar
+                    />
+                  )}
                 </>
               ) : (
                 <p className="text-sm text-muted-foreground">

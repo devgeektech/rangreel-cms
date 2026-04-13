@@ -122,7 +122,7 @@ const generateDraft = async (req, res) => {
 
     return success(res, draft);
   } catch (err) {
-    return failure(res, err.message || "Draft generation failed", 500);
+    return failure(res, err.message || "Draft generation failed", err?.statusCode || 500);
   }
 };
 

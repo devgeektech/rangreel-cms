@@ -17,6 +17,8 @@ const uploadRoutes = require("./routes/upload.routes");
 const managerReadRoutes = require("./routes/managerRead.routes");
 const internalCalendarRoutes = require("./routes/internalCalendar.routes");
 const calendarRoutes = require("./routes/calendar.routes");
+const scheduleRoutes = require("./routes/schedule.routes");
+require("./models/Schedule");
 
 const app = express();
 
@@ -67,7 +69,8 @@ const corsOptions = {
 app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(cors(corsOptions));
 app.use(morgan("dev"));
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 app.use(cookieParser());
 
 // Local temp uploads (Prompt 27). Later can be replaced by S3/Cloudinary.
@@ -91,6 +94,7 @@ app.use("/api/uploads", uploadRoutes);
 app.use("/api/manager", managerReadRoutes);
 app.use("/api/internal-calendar", internalCalendarRoutes);
 app.use("/api/calendar", calendarRoutes);
+app.use("/api/manager/schedule", scheduleRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ success: false, error: "Route not found" });

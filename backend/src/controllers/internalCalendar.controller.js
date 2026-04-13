@@ -78,7 +78,9 @@ const getInternalCalendar = async (req, res) => {
   try {
     const { clientId } = req.params;
     if (!clientId) return failure(res, "clientId is required", 400);
-    const client = await Client.findById(clientId).select("_id manager").lean();
+    const client = await Client.findById(clientId)
+      .select("_id manager isCustomCalendar weekendEnabled")
+      .lean();
     if (!client) return failure(res, "Client not found", 404);
 
     let allowed = false;
@@ -94,17 +96,22 @@ const getInternalCalendar = async (req, res) => {
     if (!allowed) return failure(res, "Forbidden", 403);
 
     const items = await ContentItem.find({ client: clientId })
-      .select("title type contentType clientPostingDate workflowStages")
+      .select("title type contentType clientPostingDate workflowStages isCustomCalendar weekendEnabled")
       .populate("workflowStages.assignedUser", "name avatar")
       .sort({ clientPostingDate: 1 });
 
     const payload = {
       clientId,
+      isCustomCalendar: Boolean(client.isCustomCalendar),
+      weekendEnabled: Boolean(client.weekendEnabled),
       items: (items || []).map((item) => ({
         contentId: item._id,
         title: item.title || "",
         type: item.type || (item.contentType === "static_post" ? "post" : item.contentType),
+        isCustomCalendar: Boolean(item.isCustomCalendar),
+        weekendEnabled: Boolean(item.weekendEnabled),
         stages: (item.workflowStages || []).map((s) => ({
+          stageId: s._id,
           name: s.stageName,
           role: s.role,
           assignedUser: s.assignedUser || null,
@@ -168,10 +175,15 @@ const updateInternalCalendarStage = async (req, res) => {
 
     // Prompt 80: urgent reels get a slight priority boost.
     const contentItemForPlan = await ContentItem.findById(contentId)
-      .select("planType")
+      .select("planType contentType type")
       .lean();
     const planType = String(contentItemForPlan?.planType || "normal").toLowerCase();
     const capacityDelta = planType === "urgent" ? 1 : 0;
+    const rawCt = String(contentItemForPlan?.contentType || "").toLowerCase();
+    let scheduleContentType = "static_post";
+    if (rawCt === "reel") scheduleContentType = "reel";
+    else if (rawCt === "carousel") scheduleContentType = "carousel";
+    else scheduleContentType = "static_post";
 
     // Prompt 71: manager-controlled leave integration.
     // Fetch leave entries that overlap the search window so scheduler steps respect leave.
@@ -193,7 +205,7 @@ const updateInternalCalendarStage = async (req, res) => {
         targetStage.role,
         assignedUser,
         requested,
-        { capacityDelta, leaves }
+        { capacityDelta, leaves, contentType: scheduleContentType, contentTypeForTasks: scheduleContentType }
       )
     );
     // Prompt 74: manual drag/edit must not overload capacity.
@@ -203,7 +215,12 @@ const updateInternalCalendarStage = async (req, res) => {
         targetStage.role,
         assignedUser,
         requested,
-        { capacityDelta, leaves }
+        {
+          capacityDelta,
+          leaves,
+          contentType: scheduleContentType,
+          contentTypeForTasks: scheduleContentType,
+        }
       );
       return res.status(409).json({
         success: false,
@@ -237,6 +254,8 @@ const updateInternalCalendarStage = async (req, res) => {
         await getNextAvailableDate(s.role, s.assignedUser, shiftedByDelta, {
           capacityDelta,
           leaves,
+          contentType: scheduleContentType,
+          contentTypeForTasks: scheduleContentType,
         })
       );
       if (postingDate && next && next.getTime() > postingDate.getTime()) {

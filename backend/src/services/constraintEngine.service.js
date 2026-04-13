@@ -1,8 +1,11 @@
 const mongoose = require("mongoose");
 const ContentItem = require("../models/ContentItem");
-const TeamCapacity = require("../models/TeamCapacity");
-const { countActiveStagesOnDay, resolveRoleCapacity } = require("./capacityAvailability.service");
+const {
+  countActiveStagesOnDay,
+  computeThresholdForUser,
+} = require("./capacityAvailability.service");
 const { isUserOnLeaveForDay, MAX_REELS_PER_USER } = require("./availability.service");
+const { normalizeContentTypeForCapacity } = require("../constants/roleCapacityMap");
 
 function toObjectId(userId) {
   if (!userId) return null;
@@ -51,6 +54,11 @@ async function countActiveReelItemsForUser(userId, excludeContentItemId) {
   return row?.n ?? 0;
 }
 
+function resolveTaskContentType(task) {
+  const ct = task?.contentType ?? task?.type;
+  return normalizeContentTypeForCapacity(ct) || "reel";
+}
+
 function isReelWorkloadTask(task) {
   const ct = task?.contentType ?? task?.type;
   if (ct === "reel") return true;
@@ -59,13 +67,7 @@ function isReelWorkloadTask(task) {
 }
 
 /**
- * PROMPT 59 — Per-day validation: capacity, leave, max reels (reel content only).
- *
- * @param {object} task — Must include `role` (workflow role). Optional: `leaves`, `contentItemId` (exclude from reel count),
- *   `contentType` / `type` (reel vs post for max-reels), `capacityDelta` (e.g. urgent reel).
- * @param {Date|string|number} date — UTC calendar day
- * @param {import("mongoose").Types.ObjectId|string} userId
- * @returns {Promise<{ valid: true } | { valid: false, reason: string }>}
+ * PROMPT 59 / 207 — Per-day validation: capacity, leave, max reels (reel content only).
  */
 async function validateTaskPerDay(task, date, userId) {
   const role = task?.role;
@@ -88,14 +90,29 @@ async function validateTaskPerDay(task, date, userId) {
     return { isValid: false, valid: false, reason: "User is on leave" };
   }
 
-  const capDoc = await TeamCapacity.findOne({ role }).select("dailyCapacity").lean();
-  const roleCapacity = resolveRoleCapacity(capDoc);
+  const contentType = resolveTaskContentType(task);
   const capacityDelta = Number.isFinite(task?.capacityDelta) ? Math.max(0, task.capacityDelta) : 0;
-  const threshold = roleCapacity + capacityDelta;
+  const flexThresholdBoost = Number.isFinite(task?.flexThresholdBoost)
+    ? Math.max(0, task.flexThresholdBoost)
+    : 0;
+
+  let threshold;
+  try {
+    threshold = await computeThresholdForUser(uid, role, contentType, {
+      capacityDelta,
+      flexThresholdBoost,
+    });
+  } catch {
+    return { valid: false, reason: "invalid_user" };
+  }
 
   let used;
   try {
-    used = await countActiveStagesOnDay(role, userId, dayStart);
+    used = await countActiveStagesOnDay(role, userId, dayStart, {
+      contentType,
+      contentTypeForTasks: contentType,
+      excludeContentItemId: task.contentItemId || task.contentItem,
+    });
   } catch {
     return { valid: false, reason: "invalid_user" };
   }

@@ -219,6 +219,14 @@ export const api = {
       method: "PATCH",
       body,
     }),
+  getUserCapacity: (id) =>
+    requestJson(`/admin/users/${encodeURIComponent(id)}/capacity`, { method: "GET" }),
+  patchUserCapacity: (id, body) =>
+    requestJson(`/admin/users/${encodeURIComponent(id)}/capacity`, {
+      method: "PATCH",
+      body,
+    }),
+  getCapacityOverview: () => requestJson("/admin/capacity-overview", { method: "GET" }),
 
   // Manager clients
   getMyClients: () => requestJson("/manager/clients", { method: "GET" }),
@@ -326,6 +334,36 @@ export const api = {
       method: "GET",
     }),
 
+  /** Custom month cycles (startDate-anchored); includes canCreateNextMonth when totalMonths >= 3 */
+  getClientSchedules: (clientId) =>
+    requestJson(`/manager/schedule/${encodeURIComponent(clientId)}`, {
+      method: "GET",
+    }),
+
+  createNextScheduleMonth: (clientId) =>
+    requestJson("/manager/schedule/create-next-month", {
+      method: "POST",
+      body: { clientId },
+    }),
+
+  extendClientSchedules: (clientId, numberOfCycles, options = {}) =>
+    requestJson("/manager/schedule/extend", {
+      method: "POST",
+      body: { clientId, numberOfCycles, startMonthIndex: options.startMonthIndex },
+    }),
+
+  saveClientSchedules: (clientId, schedules) =>
+    requestJson("/manager/schedule/save", {
+      method: "POST",
+      body: { clientId, schedules },
+    }),
+
+  previewExtendClientSchedules: (clientId, numberOfCycles, options = {}) =>
+    requestJson("/manager/schedule/preview-extend", {
+      method: "POST",
+      body: { clientId, numberOfCycles, startMonthIndex: options.startMonthIndex },
+    }),
+
   /** Smart scheduling: capacity warnings only (does not block saves). */
   checkCalendarConflicts: (body) =>
     requestJson("/calendar/check-conflicts", {
@@ -356,6 +394,11 @@ export const api = {
 
   // Content detail (Prompt 25)
   getContent: (id) => requestJson(`/content/${encodeURIComponent(id)}`, { method: "GET" }),
+  moveContentStage: (itemId, stageId, body) =>
+    requestJson(`/content/${encodeURIComponent(itemId)}/stage/${encodeURIComponent(stageId)}/move`, {
+      method: "PATCH",
+      body,
+    }),
 
   uploadVideo: async (file) => {
     const form = new FormData();

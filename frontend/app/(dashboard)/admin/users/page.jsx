@@ -45,10 +45,18 @@ export default function AdminUsersPage() {
   const [openForm, setOpenForm] = useState(false);
   const [openEditForm, setOpenEditForm] = useState(false);
   const [openResetForm, setOpenResetForm] = useState(false);
+  const [openCapacityForm, setOpenCapacityForm] = useState(false);
   const [editingUserId, setEditingUserId] = useState("");
   const [resetUserId, setResetUserId] = useState("");
+  const [capacityUserId, setCapacityUserId] = useState("");
+  const [capacityRoleSlug, setCapacityRoleSlug] = useState("");
   const [resetUserRoleType, setResetUserRoleType] = useState("user");
   const [resetPassword, setResetPassword] = useState("User@123!");
+  const [capacityForm, setCapacityForm] = useState({
+    reelCapacity: "0",
+    postCapacity: "0",
+    carouselCapacity: "0",
+  });
   const [pendingStatusChange, setPendingStatusChange] = useState(null);
   const [form, setForm] = useState({
     name: "",
@@ -179,6 +187,43 @@ export default function AdminUsersPage() {
     }
   };
 
+  const openCapacityEditor = async (user) => {
+    try {
+      setCapacityUserId(user._id);
+      setCapacityRoleSlug(user.role?.slug || "");
+      const res = await api.getUserCapacity(user._id);
+      const c = res?.data || res || {};
+      setCapacityForm({
+        reelCapacity: String(c.reelCapacity ?? 0),
+        postCapacity: String(c.postCapacity ?? 0),
+        carouselCapacity: String(c.carouselCapacity ?? 0),
+      });
+      setOpenCapacityForm(true);
+    } catch (error) {
+      toast.error(error.message || "Failed to load user capacity");
+    }
+  };
+
+  const submitCapacity = async (event) => {
+    event.preventDefault();
+    try {
+      const payload = {
+        reelCapacity: Number(capacityForm.reelCapacity),
+        postCapacity: Number(capacityForm.postCapacity),
+        carouselCapacity: Number(capacityForm.carouselCapacity),
+      };
+      if (Object.values(payload).some((n) => Number.isNaN(n) || n < 0)) {
+        toast.error("Capacity values must be non-negative");
+        return;
+      }
+      await api.patchUserCapacity(capacityUserId, payload);
+      toast.success("User capacity saved");
+      setOpenCapacityForm(false);
+    } catch (error) {
+      toast.error(error.message || "Failed to save user capacity");
+    }
+  };
+
   return (
     <section className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -278,6 +323,7 @@ export default function AdminUsersPage() {
                           setResetPassword(user.roleType === "manager" ? "Manager@123!" : "User@123!");
                           setOpenResetForm(true);
                         }}
+                        onCapacity={() => openCapacityEditor(user)}
                         onToggleActive={async () => {
                           setPendingStatusChange(user);
                         }}
@@ -327,6 +373,7 @@ export default function AdminUsersPage() {
                       setResetPassword(user.roleType === "manager" ? "Manager@123!" : "User@123!");
                       setOpenResetForm(true);
                     }}
+                    onCapacity={() => openCapacityEditor(user)}
                     onToggleActive={async () => {
                       setPendingStatusChange(user);
                     }}
@@ -481,6 +528,64 @@ export default function AdminUsersPage() {
       </Dialog>
 
       <Dialog
+        open={openCapacityForm}
+        onOpenChange={(open) => {
+          setOpenCapacityForm(open);
+          if (!open) {
+            setCapacityUserId("");
+            setCapacityRoleSlug("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>User Capacity Override</DialogTitle>
+          </DialogHeader>
+          <form className="space-y-3" onSubmit={submitCapacity}>
+            {capacityRoleSlug !== "designer" ? (
+              <Field label="Reel Capacity">
+                <Input
+                  type="number"
+                  min={0}
+                  value={capacityForm.reelCapacity}
+                  onChange={(event) =>
+                    setCapacityForm((prev) => ({ ...prev, reelCapacity: event.target.value }))
+                  }
+                />
+              </Field>
+            ) : null}
+            <Field label="Post Capacity">
+              <Input
+                type="number"
+                min={0}
+                value={capacityForm.postCapacity}
+                onChange={(event) =>
+                  setCapacityForm((prev) => ({ ...prev, postCapacity: event.target.value }))
+                }
+              />
+            </Field>
+            <Field label="Carousel Capacity">
+              <Input
+                type="number"
+                min={0}
+                value={capacityForm.carouselCapacity}
+                onChange={(event) =>
+                  setCapacityForm((prev) => ({ ...prev, carouselCapacity: event.target.value }))
+                }
+              />
+            </Field>
+            <p className="text-xs text-muted-foreground">0 = Use Global Capacity</p>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setOpenCapacityForm(false)}>
+                Cancel
+              </Button>
+              <Button type="submit">Save</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={openResetForm}
         onOpenChange={(open) => {
           setOpenResetForm(open);
@@ -580,7 +685,7 @@ function Field({ label, children }) {
   );
 }
 
-function ActionMenu({ onEdit, onReset, onToggleActive, isActive }) {
+function ActionMenu({ onEdit, onReset, onCapacity, onToggleActive, isActive }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -591,6 +696,7 @@ function ActionMenu({ onEdit, onReset, onToggleActive, isActive }) {
       <DropdownMenuContent align="end" className="w-40">
         <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
         <DropdownMenuItem onClick={onReset}>Update Password</DropdownMenuItem>
+        <DropdownMenuItem onClick={onCapacity}>Capacity</DropdownMenuItem>
         <DropdownMenuItem onClick={onToggleActive}>
           {isActive ? "Deactivate" : "Activate"}
         </DropdownMenuItem>

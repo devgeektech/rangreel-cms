@@ -7,8 +7,6 @@
  * it from that module.
  */
 
-const TeamCapacity = require("../models/TeamCapacity");
-const { resolveRoleCapacity } = require("./capacityAvailability.service");
 const { getNextStageTask } = require("./constraintEngine.moveValidation");
 const { tryBorrowOneDayFromNextStage } = require("./durationBorrowing.service");
 const { canBorrowFromPipelineTask, clampStageDurationDaysForRole } = require("./durationValidation.service");
@@ -162,9 +160,6 @@ async function fillMultiDaySlotsWithBufferP107(
   const contentTypeForTasks = options.contentType || "reel";
   const flexThresholdBoost = allowFlexibleAdjustment ? 1 : 0;
 
-  const capDoc = await TeamCapacity.findOne({ role }).select("dailyCapacity").lean();
-  const threshold = resolveRoleCapacity(capDoc) + capacityDelta + flexThresholdBoost;
-
   const dates = [];
   const assignees = [];
   const pendingSynthetic = [...seedTasks];
@@ -202,7 +197,9 @@ async function fillMultiDaySlotsWithBufferP107(
           workflowRole: role,
           primaryUserId: userId,
           workday,
-          threshold,
+          contentType: contentTypeForTasks,
+          capacityDelta,
+          flexThresholdBoost,
           pendingSynthetic,
           leaves,
           previousAssigneeId: assignees.length ? assignees[assignees.length - 1] : null,
@@ -212,7 +209,9 @@ async function fillMultiDaySlotsWithBufferP107(
           workflowRole: role,
           primaryUserId: userId,
           workday,
-          threshold,
+          contentType: contentTypeForTasks,
+          capacityDelta,
+          flexThresholdBoost,
           pendingSynthetic,
           leaves,
           excludeContentItemId: options.excludeContentItemId,

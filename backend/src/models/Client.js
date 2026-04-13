@@ -179,6 +179,14 @@ const clientSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    isCustomCalendar: {
+      type: Boolean,
+      default: false,
+    },
+    weekendEnabled: {
+      type: Boolean,
+      default: false,
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

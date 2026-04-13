@@ -1,33 +1,23 @@
 const mongoose = require("mongoose");
-
-const TEAM_ROLES = [
-  "strategist",
-  "videographer",
-  "videoEditor",
-  "manager",
-  "postingExecutive",
-  "graphicDesigner",
-  "photographer",
-];
+const { TEAM_CAPACITY_ROLES } = require("../constants/roleCapacityMap");
 
 const teamCapacitySchema = new mongoose.Schema(
   {
     role: {
       type: String,
       required: true,
-      enum: TEAM_ROLES,
+      enum: TEAM_CAPACITY_ROLES,
       unique: true,
     },
-    dailyCapacity: {
-      type: Number,
-      required: true,
-      min: 0,
-    },
+    reelCapacity: { type: Number, default: 0, min: 0 },
+    postCapacity: { type: Number, default: 0, min: 0 },
+    carouselCapacity: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );
 
-module.exports =
+const TeamCapacity =
   mongoose.models.TeamCapacity || mongoose.model("TeamCapacity", teamCapacitySchema);
 
-module.exports.TEAM_ROLES = TEAM_ROLES;
+module.exports = TeamCapacity;
+module.exports.TEAM_ROLES = TEAM_CAPACITY_ROLES;
