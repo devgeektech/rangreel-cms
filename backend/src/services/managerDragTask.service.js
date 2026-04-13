@@ -674,19 +674,20 @@ async function runManagerDragTask({
    * breaks "Edit starts day after Shoot ends" and can push Edit/Approval onto/after posting date.
    * Re-fill Edit → Approval forward from the new anchor instead.
    */
+  const allowDownstreamChainAdjust = fromGlobalCalendar !== true;
   const dayOptsChain = { allowWeekend: weekendEnabled };
   const forwardChainNormalReelShoot =
+    allowDownstreamChainAdjust &&
     isReel &&
     !isUrgent &&
     String(stageName) === "Shoot" &&
-    useBuffer &&
     String(role || "").toLowerCase() === "videographer";
 
   const forwardChainNormalReelEdit =
+    allowDownstreamChainAdjust &&
     isReel &&
     !isUrgent &&
     String(stageName) === "Edit" &&
-    useBuffer &&
     String(role || "").toLowerCase() === "videoeditor";
 
   const tryBufferWeekendFallback = async (workflowRole, userId, startFrom, nDays, borrowRole) => {
@@ -737,7 +738,7 @@ async function runManagerDragTask({
       editWin.first &&
       editWin.last &&
       shootEnd.getTime() < editWin.first.getTime() &&
-      (!postingDate || editWin.last.getTime() <= postingDate.getTime());
+      (!postingDate || editWin.last.getTime() < postingDate.getTime());
 
     const apprSt = stages.find((s) => String(s?.name) === "Approval");
     const apprWin = getManagerApprovalTaskWindow(item);
@@ -749,7 +750,7 @@ async function runManagerDragTask({
       editWin.first &&
       editWin.last &&
       editWin.last.getTime() < apprWin.first.getTime() &&
-      (!postingDate || apprWin.last.getTime() <= postingDate.getTime());
+      (!postingDate || apprWin.last.getTime() < postingDate.getTime());
 
     if (editSt?.assignedUser) {
       if (preserveEditAfterShootMove) {
@@ -836,17 +837,28 @@ async function runManagerDragTask({
     if (apprSt?.assignedUser) {
       if (preserveApprovalAfterShootEditPreserve) {
         // Keep existing Approval dates; edit window was preserved and approval still fits before post.
-      } else if (postingDate && chainCursor.getTime() >= postingDate.getTime()) {
-        return {
-          ok: false,
-          status: 400,
-          error: "Cannot maintain post date",
-          details: { code: "POST_DATE_LOCKED", postingDate: toYMD(postingDate), reason: "approval_chain" },
-        };
       } else {
+        // Sequence validation already allows Edit and Approval on the same day.
+        // When the next-day cursor touches post-date boundary, try same-day-from-edit first.
+        let approvalStartCursor = chainCursor;
+        if (postingDate && approvalStartCursor.getTime() >= postingDate.getTime()) {
+          const editAnchor = normalizeUTCDate(editSt?.date) || editWin.last;
+          if (editAnchor && editAnchor.getTime() < postingDate.getTime()) {
+            approvalStartCursor =
+              createUTCDate(nextValidWorkdayUTC(editAnchor, holidaySet, dayOptsChain)) || editAnchor;
+          }
+        }
+        if (postingDate && approvalStartCursor.getTime() >= postingDate.getTime()) {
+          return {
+            ok: false,
+            status: 400,
+            error: "Cannot maintain post date",
+            details: { code: "POST_DATE_LOCKED", postingDate: toYMD(postingDate), reason: "approval_chain" },
+          };
+        }
         const maxApprSlots = postingDate
           ? maxConsecutiveWorkdaysBeforePost(
-              chainCursor,
+              approvalStartCursor,
               postingDate,
               holidaySet,
               dayOptsChain,
@@ -869,7 +881,7 @@ async function runManagerDragTask({
         let apprOut = await tryBufferWeekendFallback(
           "manager",
           apprSt.assignedUser,
-          chainCursor,
+          approvalStartCursor,
           apprNDays,
           "manager"
         );
@@ -878,7 +890,7 @@ async function runManagerDragTask({
           apprOut = await tryBufferWeekendFallback(
             "manager",
             apprSt.assignedUser,
-            chainCursor,
+            approvalStartCursor,
             apprNDays,
             "manager"
           );
@@ -917,7 +929,14 @@ async function runManagerDragTask({
 
     const apprSt = stages.find((s) => String(s?.name) === "Approval");
     if (apprSt?.assignedUser) {
-      if (postingDate && chainCursor.getTime() >= postingDate.getTime()) {
+      let approvalStartCursor = chainCursor;
+      if (postingDate && approvalStartCursor.getTime() >= postingDate.getTime()) {
+        const sameDayEdit = createUTCDate(nextValidWorkdayUTC(editEnd, holidaySet, dayOptsChain)) || editEnd;
+        if (sameDayEdit && sameDayEdit.getTime() < postingDate.getTime()) {
+          approvalStartCursor = sameDayEdit;
+        }
+      }
+      if (postingDate && approvalStartCursor.getTime() >= postingDate.getTime()) {
         return {
           ok: false,
           status: 400,
@@ -927,7 +946,7 @@ async function runManagerDragTask({
       }
       const maxApprSlotsEdit = postingDate
         ? maxConsecutiveWorkdaysBeforePost(
-            chainCursor,
+            approvalStartCursor,
             postingDate,
             holidaySet,
             dayOptsChain,
@@ -950,7 +969,7 @@ async function runManagerDragTask({
       let apprOut = await tryBufferWeekendFallback(
         "manager",
         apprSt.assignedUser,
-        chainCursor,
+        approvalStartCursor,
         apprNDaysEdit,
         "manager"
       );
@@ -959,7 +978,7 @@ async function runManagerDragTask({
         apprOut = await tryBufferWeekendFallback(
           "manager",
           apprSt.assignedUser,
-          chainCursor,
+          approvalStartCursor,
           apprNDaysEdit,
           "manager"
         );
@@ -988,7 +1007,7 @@ async function runManagerDragTask({
         if (lastM) apprSt.assignedUser = lastM;
       }
     }
-  } else {
+  } else if (allowDownstreamChainAdjust) {
     const deltaMs = oldTargetDate ? resolvedTargetDate.getTime() - oldTargetDate.getTime() : 0;
 
     for (let i = stageIndex + 1; i < stages.length; i++) {

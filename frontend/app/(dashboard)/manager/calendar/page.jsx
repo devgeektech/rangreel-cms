@@ -549,14 +549,11 @@ export default function ManagerGlobalCalendarPage() {
     return day === 0 || day === 6;
   };
 
-  const canDropOnCell = (row, ymd) => {
-    const onLeave = leaveByUserDay.has(`${row.userId}::${ymd}`);
-    const isHoliday = holidayByDay.has(ymd);
-    const totalCapacity = Number(capacityByRole[row.role] || DEFAULT_ROLE_CAPACITY);
-    const used = Number(usedByUserDay.get(`${row.userId}::${ymd}`) || 0);
-    const isFull = used >= totalCapacity;
+  const canDropOnCell = (_row, ymd) => {
+    // Manager global calendar should not hard-block leave/holiday/capacity in UI.
+    // Backend managerDragTask is the authority (borrowing/replacement/simulation).
     const weekendBlocked = !weekendMode && isWeekendYmd(ymd);
-    return !(onLeave || isHoliday || isFull || weekendBlocked);
+    return !weekendBlocked;
   };
 
   const handleDrop = async (e, row, ymd) => {
@@ -574,7 +571,7 @@ export default function ManagerGlobalCalendarPage() {
       );
     if (!task) return;
     if (!canDropOnCell(row, ymd)) {
-      const msg = "Cannot move: blocked by leave/holiday/capacity/weekend rule";
+      const msg = "Cannot move: weekend blocked (Weekend is OFF)";
       setDropError(msg);
       toast.error(msg);
       return;
