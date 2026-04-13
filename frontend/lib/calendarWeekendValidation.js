@@ -67,6 +67,31 @@ export function draftItemTouchesWeekend(draft, contentId) {
   return false;
 }
 
+function mapStagesByName(item) {
+  const m = new Map();
+  for (const s of item?.stages || []) {
+    const name = String(s?.name || "");
+    if (!name) continue;
+    m.set(name, String(s?.date || "").slice(0, 10));
+  }
+  return m;
+}
+
+function movedStagesIntroduceWeekend(beforeDraft, afterDraft, contentId) {
+  const beforeItem = (beforeDraft?.items || []).find((it) => String(it.contentId) === String(contentId));
+  const afterItem = (afterDraft?.items || []).find((it) => String(it.contentId) === String(contentId));
+  if (!afterItem) return false;
+  const beforeMap = mapStagesByName(beforeItem);
+  const afterMap = mapStagesByName(afterItem);
+  for (const [stageName, afterYmd] of afterMap.entries()) {
+    const beforeYmd = beforeMap.get(stageName) || "";
+    if (afterYmd !== beforeYmd && afterYmd && isWeekendYmd(afterYmd)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function getStageDurationDaysFromSchedule(schedule, contentId, stageName) {
   const item = (schedule?.items || []).find((it) => String(it.contentId) === String(contentId));
   const stage = (item?.stages || []).find((s) => String(s?.name) === String(stageName));
@@ -102,23 +127,12 @@ export function classifyWeekendStageMove(params) {
   }
 
   if (isCustomizationMode) {
-    // Draft/customization rule:
-    // - Dragging Post with weekend OFF should auto-skip weekends (no confirmation modal).
-    // - Other stages can still use weekend on explicit confirmation.
-    if (String(stageName || "") === "Post") {
-      const movedWeekday = applyCust(schedule, contentId, stageName, newYmd, {
-        ...customizationOpts,
-        weekendEnabled: false,
-      });
-      if (movedWeekday.blocked) return { kind: "error", message: movedWeekday.reason || "Invalid move" };
-      return { kind: "proceed" };
-    }
     const moved = applyCust(schedule, contentId, stageName, newYmd, {
       ...customizationOpts,
       weekendEnabled: true,
     });
     if (moved.blocked) return { kind: "error", message: moved.reason || "Invalid move" };
-    if (draftItemTouchesWeekend(moved.draft, contentId)) return { kind: "confirm" };
+    if (movedStagesIntroduceWeekend(schedule, moved.draft, contentId)) return { kind: "confirm" };
     return { kind: "proceed" };
   }
 

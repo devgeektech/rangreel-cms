@@ -5,10 +5,10 @@ const Leave = require("../models/Leave");
 const {
   getNextAvailableDate,
   countActiveStagesOnDay,
-  resolveRoleCapacity,
+  computeThresholdForUser,
   MAX_SEARCH_DAYS: CAPACITY_MAX_SEARCH_DAYS,
 } = require("./capacityAvailability.service");
-const TeamCapacity = require("../models/TeamCapacity");
+const { normalizeContentTypeForCapacity } = require("../constants/roleCapacityMap");
 const { getAvailableUsers } = require("./availability.service");
 const { ROLE_RULES } = require("../config/roleRules");
 const { tryBorrowOneDayFromNextStage } = require("./durationBorrowing.service");
@@ -307,6 +307,8 @@ const getTeamForContentType = (team, type) => {
 async function scheduleStageDay(role, userId, fromDate, holidaySet, schedulingOptions = {}) {
   const dayOpts = { allowWeekend: schedulingOptions.allowWeekend === true };
   const flexCapDelta = schedulingOptions.allowFlexibleAdjustment === true ? 1 : 0;
+  const contentType =
+    schedulingOptions.contentType || schedulingOptions.contentTypeForTasks || "reel";
   let anchor = createUTCDate(nextValidWorkdayUTC(fromDate, holidaySet, dayOpts));
   if (!anchor) throw new Error("Invalid anchor date");
   if (!userId) return anchor;
@@ -319,6 +321,8 @@ async function scheduleStageDay(role, userId, fromDate, holidaySet, schedulingOp
       excludeContentItemId: schedulingOptions.excludeContentItemId,
       leaves: schedulingOptions.leaves,
       schedulingPlanType: schedulingOptions.schedulingPlanType,
+      contentType,
+      contentTypeForTasks: contentType,
     });
     const d = createUTCDate(raw);
     const aligned = createUTCDate(nextValidWorkdayUTC(d, holidaySet, dayOpts));
@@ -360,6 +364,9 @@ async function countStagesForUserDay(
 ) {
   const uid = userId?._id || userId;
   if (!uid) return 0;
+  const ctNorm =
+    normalizeContentTypeForCapacity(countOptions.contentType || countOptions.contentTypeForTasks) ||
+    "reel";
   const db = await countActiveStagesOnDay(workflowRole, uid, workday, countOptions);
   const dayStart = createUTCDate(workday);
   if (!dayStart) return db;
@@ -367,6 +374,8 @@ async function countStagesForUserDay(
   for (const row of pendingSynthetic || []) {
     if (String(row.assignedUser?._id || row.assignedUser) !== String(uid)) continue;
     if (row.role !== workflowRole) continue;
+    const rowCt = normalizeContentTypeForCapacity(row.contentType) || "reel";
+    if (rowCt !== ctNorm) continue;
     if (isSameUtcDay(row.dueDate, dayStart)) extra += 1;
   }
   return db + extra;
@@ -379,14 +388,24 @@ async function pickAssigneeForBufferDay({
   workflowRole,
   primaryUserId,
   workday,
-  threshold,
+  contentType,
+  capacityDelta,
+  flexThresholdBoost,
   pendingSynthetic,
   leaves,
   excludeContentItemId,
 }) {
-  const countOpts = excludeContentItemId ? { excludeContentItemId } : {};
+  const countOpts = {
+    ...(excludeContentItemId ? { excludeContentItemId } : {}),
+    contentType,
+    contentTypeForTasks: contentType,
+  };
   const tryCapacity = async (uid) => {
     if (!uid) return null;
+    const threshold = await computeThresholdForUser(uid, workflowRole, contentType, {
+      capacityDelta,
+      flexThresholdBoost,
+    });
     const n = await countStagesForUserDay(
       workflowRole,
       uid,
@@ -430,15 +449,25 @@ async function pickAssigneeForSplitDay({
   workflowRole,
   primaryUserId,
   workday,
-  threshold,
+  contentType,
+  capacityDelta,
+  flexThresholdBoost,
   pendingSynthetic,
   leaves,
   previousAssigneeId,
   excludeContentItemId,
 }) {
-  const countOpts = excludeContentItemId ? { excludeContentItemId } : {};
+  const countOpts = {
+    ...(excludeContentItemId ? { excludeContentItemId } : {}),
+    contentType,
+    contentTypeForTasks: contentType,
+  };
   const tryCapacity = async (uid) => {
     if (!uid) return null;
+    const threshold = await computeThresholdForUser(uid, workflowRole, contentType, {
+      capacityDelta,
+      flexThresholdBoost,
+    });
     const n = await countStagesForUserDay(
       workflowRole,
       uid,
@@ -468,7 +497,9 @@ async function pickAssigneeForSplitDay({
       workflowRole,
       primaryUserId,
       workday,
-      threshold,
+      contentType,
+      capacityDelta,
+      flexThresholdBoost,
       pendingSynthetic,
       leaves,
       excludeContentItemId,
@@ -545,9 +576,6 @@ async function fillMultiDaySlotsWithBuffer(
   const contentTypeForTasks = options.contentType || "reel";
   const flexThresholdBoost = allowFlexibleAdjustment ? 1 : 0;
 
-  const capDoc = await TeamCapacity.findOne({ role }).select("dailyCapacity").lean();
-  const threshold = resolveRoleCapacity(capDoc) + capacityDelta + flexThresholdBoost;
-
   const dates = [];
   const assignees = [];
   const pendingSynthetic = [...seedTasks];
@@ -587,7 +615,9 @@ async function fillMultiDaySlotsWithBuffer(
           workflowRole: role,
           primaryUserId: userId,
           workday,
-          threshold,
+          contentType: contentTypeForTasks,
+          capacityDelta,
+          flexThresholdBoost,
           pendingSynthetic,
           leaves,
           previousAssigneeId: assignees.length ? assignees[assignees.length - 1] : null,
@@ -597,7 +627,9 @@ async function fillMultiDaySlotsWithBuffer(
           workflowRole: role,
           primaryUserId: userId,
           workday,
-          threshold,
+          contentType: contentTypeForTasks,
+          capacityDelta,
+          flexThresholdBoost,
           pendingSynthetic,
           leaves,
           excludeContentItemId: options.excludeContentItemId,
@@ -730,6 +762,8 @@ async function computeReelStageDatesForGeneration({
   const reelSchedulingOpts = {
     ...schedulingOpts,
     schedulingPlanType: isUrgent ? "urgent" : "normal",
+    contentType: "reel",
+    contentTypeForTasks: "reel",
   };
   const staggerOffset = isUrgent ? (i - 1) * 1 : (i - 1) * 2;
   const reelStartSeed = strategistStartDate || addDaysUTC(baseStartDate, staggerOffset);
@@ -756,6 +790,8 @@ async function computeReelStageDatesForGeneration({
     allowFlexibleAdjustment: !isUrgent && schedulingOpts.allowFlexibleAdjustment,
     leaves: schedulingOpts.leaves,
     splitAcrossUsers: !isUrgent,
+    contentType: "reel",
+    contentTypeForTasks: "reel",
   };
 
   const reelDurationPlan = {
@@ -910,8 +946,14 @@ async function computePostLikeStageDatesForGeneration({
   usedPostingDayKeys,
   allowPostingDayStacking = false,
   postingWindow,
+  contentType = "static_post",
 }) {
-  const postLikeOpts = { ...schedulingOpts, schedulingPlanType: "normal" };
+  const postLikeOpts = {
+    ...schedulingOpts,
+    schedulingPlanType: "normal",
+    contentType,
+    contentTypeForTasks: contentType,
+  };
 
   const planDue = await scheduleStageDay(
     "strategist",
@@ -938,6 +980,8 @@ async function computePostLikeStageDatesForGeneration({
       leaves: postLikeOpts.leaves,
       splitAcrossUsers: true,
       tryBorrowFromNextStage: borrowPost("graphicDesigner"),
+      contentType,
+      contentTypeForTasks: contentType,
     }
   );
   const designLast = designOut.dates[designOut.dates.length - 1];
@@ -956,6 +1000,8 @@ async function computePostLikeStageDatesForGeneration({
       leaves: postLikeOpts.leaves,
       splitAcrossUsers: true,
       tryBorrowFromNextStage: borrowPost("manager"),
+      contentType,
+      contentTypeForTasks: contentType,
     }
   );
   const approvalDue = managerOut.dates[managerOut.dates.length - 1];
@@ -1129,6 +1175,7 @@ async function buildPostItemForCalendarDraft({
     usedPostingDayKeys: usedPostPostingDayKeys,
     allowPostingDayStacking: schedulingOpts.allowPostingDayStacking === true,
     postingWindow: postingWindow ? { ...postingWindow, typeLabel: "posts" } : undefined,
+    contentType: "static_post",
   });
 
   const postingDate = ymdUTC(postDue);
@@ -1219,6 +1266,7 @@ async function buildCarouselItemForCalendarDraft({
     usedPostingDayKeys: usedCarouselPostingDayKeys,
     allowPostingDayStacking: schedulingOpts.allowPostingDayStacking === true,
     postingWindow: postingWindow ? { ...postingWindow, typeLabel: "carousels" } : undefined,
+    contentType: "carousel",
   });
 
   const postingDate = ymdUTC(postDue);
@@ -1500,6 +1548,7 @@ async function generateClientReels(client, options = {}) {
       managerId: postManagerId,
       postingExecutiveId: postPostingExecutiveId,
       usedPostingDayKeys: usedPostPostingDayKeys,
+      contentType: "static_post",
     });
 
     const postingDate = createUTCDate(postDue);
@@ -1567,6 +1616,7 @@ async function generateClientReels(client, options = {}) {
       managerId: carouselManagerId,
       postingExecutiveId: carouselPostingExecutiveId,
       usedPostingDayKeys: usedCarouselPostingDayKeys,
+      contentType: "carousel",
     });
 
     const postingDate = createUTCDate(postDue);

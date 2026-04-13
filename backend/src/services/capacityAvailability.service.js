@@ -1,13 +1,22 @@
 const mongoose = require("mongoose");
 const ContentItem = require("../models/ContentItem");
-const TeamCapacity = require("../models/TeamCapacity");
 const { isUserOnLeaveForDay } = require("./availability.service");
+const {
+  normalizeContentTypeForCapacity,
+} = require("../constants/roleCapacityMap");
+const { getEffectiveCapacity } = require("../utils/capacityResolver");
 
 /** Prompt 51: max forward search; prevents infinite loops when permanently overloaded. */
 const MAX_SEARCH_DAYS = 365;
 
-/** Prompt 51: when no TeamCapacity row or invalid value, treat cap as 5. */
-const DEFAULT_DAILY_CAPACITY = 5;
+function contentTypeInMatch(normalizedCt) {
+  if (normalizedCt === "reel") return { $in: ["reel"] };
+  if (normalizedCt === "carousel") return { $in: ["carousel"] };
+  if (normalizedCt === "static_post") {
+    return { $in: ["static_post", "gmb_post", "campaign"] };
+  }
+  return { $in: [] };
+}
 
 function startOfDayUTC(date) {
   const d = date instanceof Date ? date : new Date(date);
@@ -37,41 +46,67 @@ function toObjectId(userId) {
   return new mongoose.Types.ObjectId(s);
 }
 
+/**
+ * @deprecated Legacy single-field capacity; use getEffectiveCapacity (Prompt 207).
+ */
 function resolveRoleCapacity(capDoc) {
-  if (
-    capDoc &&
-    Number.isFinite(capDoc.dailyCapacity) &&
-    capDoc.dailyCapacity >= 0
-  ) {
-    return capDoc.dailyCapacity;
-  }
-  return DEFAULT_DAILY_CAPACITY;
+  if (!capDoc || typeof capDoc !== "object") return 0;
+  const a = Number(capDoc.reelCapacity);
+  const b = Number(capDoc.postCapacity);
+  const c = Number(capDoc.carouselCapacity);
+  const nums = [a, b, c].filter((n) => Number.isFinite(n) && n > 0);
+  if (nums.length) return Math.max(...nums);
+  return 0;
+}
+
+async function computeThresholdForUser(userId, role, contentType, options = {}) {
+  const ct = normalizeContentTypeForCapacity(contentType);
+  if (!ct) return 0;
+  const base = await getEffectiveCapacity(userId, role, ct);
+  if (base < 0) return 0;
+  if (base === 0) return Number.POSITIVE_INFINITY;
+  const capacityDelta = Number.isFinite(options?.capacityDelta)
+    ? Math.max(0, options.capacityDelta)
+    : 0;
+  const flex = Number.isFinite(options?.flexThresholdBoost)
+    ? Math.max(0, options.flexThresholdBoost)
+    : 0;
+  return base + capacityDelta + flex;
 }
 
 /**
- * Count workflow stages for this user + role on the given UTC calendar day.
- * Prompt 49: scans ALL content items — no clientId filter — so one editor on five clients still shares one daily cap.
- * Only stages with status !== "completed" are counted.
+ * Count workflow stages for this user + role + content-type bucket on the given UTC calendar day.
+ * Prompt 207: filters by ContentItem.contentType bucket (reel / carousel / static_post family).
  */
 async function countActiveStagesOnDay(role, userId, dayStartUTC, options = {}) {
   const uid = toObjectId(userId);
   if (!uid) {
     throw new Error("Invalid assignedUser");
   }
+  const normalizedCt =
+    normalizeContentTypeForCapacity(options.contentType) ||
+    normalizeContentTypeForCapacity(options.contentTypeForTasks);
+  if (!normalizedCt) {
+    throw new Error("contentType is required for capacity counting");
+  }
+
   const dayEnd = addDaysUTC(dayStartUTC, 1);
   const excludeId = options.excludeContentItemId
     ? toObjectId(options.excludeContentItemId)
     : null;
 
+  const match = { contentType: contentTypeInMatch(normalizedCt) };
+  if (excludeId) match._id = { $ne: excludeId };
+
   const [row] = await ContentItem.aggregate([
-    { $match: excludeId ? { _id: { $ne: excludeId } } : {} },
+    { $match: match },
     { $unwind: "$workflowStages" },
     {
       $match: {
         "workflowStages.role": role,
         "workflowStages.assignedUser": uid,
         "workflowStages.dueDate": { $gte: dayStartUTC, $lt: dayEnd },
-        "workflowStages.status": { $ne: "completed" },
+        "workflowStages.status": { $nin: ["completed", "posted"] },
       },
     },
     { $count: "n" },
@@ -80,28 +115,30 @@ async function countActiveStagesOnDay(role, userId, dayStartUTC, options = {}) {
   return row?.n ?? 0;
 }
 
-/**
- * When scheduling a **normal** plan task, defer if a same user+role already has an **urgent**
- * stage on that UTC day (multi-client priority: urgent wins the slot).
- */
 async function hasUrgentStageBlockingNormal(role, userId, dayStartUTC, options = {}) {
   const uid = toObjectId(userId);
   if (!uid) return false;
+  const normalizedCt =
+    normalizeContentTypeForCapacity(options.contentType) ||
+    normalizeContentTypeForCapacity(options.contentTypeForTasks) ||
+    "reel";
   const dayEnd = addDaysUTC(dayStartUTC, 1);
   const excludeId = options.excludeContentItemId
     ? toObjectId(options.excludeContentItemId)
     : null;
 
+  const match = { contentType: contentTypeInMatch(normalizedCt), planType: "urgent" };
+  if (excludeId) match._id = { $ne: excludeId };
+
   const [row] = await ContentItem.aggregate([
-    { $match: excludeId ? { _id: { $ne: excludeId } } : {} },
-    { $match: { planType: "urgent" } },
+    { $match: match },
     { $unwind: "$workflowStages" },
     {
       $match: {
         "workflowStages.role": role,
         "workflowStages.assignedUser": uid,
         "workflowStages.dueDate": { $gte: dayStartUTC, $lt: dayEnd },
-        "workflowStages.status": { $ne: "completed" },
+        "workflowStages.status": { $nin: ["completed", "posted"] },
       },
     },
     { $limit: 1 },
@@ -112,28 +149,22 @@ async function hasUrgentStageBlockingNormal(role, userId, dayStartUTC, options =
 }
 
 /**
- * First UTC calendar day on or after startDate where active stage count for user+role is below capacity.
- * Counts workload from every client (multi-client safe).
- *
- * Prompt 51: default capacity 5 if unconfigured; max 365-day search; if still overloaded, returns fallback
- * date and logs a warning instead of throwing.
- *
- * @param {string} role
- * @param {import("mongoose").Types.ObjectId|string} assignedUser
- * @param {Date|string|number} startDate
- * @returns {Promise<Date>} UTC midnight
+ * First UTC calendar day on or after startDate where active stage count for user+role+content type is below capacity.
  */
 async function getNextAvailableDate(role, assignedUser, startDate, options = {}) {
   if (!role || typeof role !== "string") {
     throw new Error("role is required");
   }
 
-  const capDoc = await TeamCapacity.findOne({ role }).select("dailyCapacity").lean();
-  const roleCapacity = resolveRoleCapacity(capDoc);
+  const contentType =
+    options.contentType || options.contentTypeForTasks || "reel";
+
   const capacityDelta = Number.isFinite(options?.capacityDelta)
     ? options.capacityDelta
     : 0;
-  const threshold = roleCapacity + Math.max(0, capacityDelta);
+  const flexThresholdBoost = Number.isFinite(options?.flexThresholdBoost)
+    ? options.flexThresholdBoost
+    : 0;
   const leaves = Array.isArray(options?.leaves) ? options.leaves : [];
 
   let d = startOfDayUTC(startDate);
@@ -148,14 +179,22 @@ async function getNextAvailableDate(role, assignedUser, startDate, options = {})
     if (schedulingPlanType === "normal") {
       const blockedByUrgent = await hasUrgentStageBlockingNormal(role, assignedUser, d, {
         excludeContentItemId: options.excludeContentItemId,
+        contentType,
+        contentTypeForTasks: contentType,
       });
       if (blockedByUrgent) {
         d = addDaysUTC(d, 1);
         continue;
       }
     }
+    const threshold = await computeThresholdForUser(assignedUser, role, contentType, {
+      capacityDelta,
+      flexThresholdBoost,
+    });
     const count = await countActiveStagesOnDay(role, assignedUser, d, {
       excludeContentItemId: options.excludeContentItemId,
+      contentType,
+      contentTypeForTasks: contentType,
     });
     if (count < threshold) {
       return d;
@@ -163,6 +202,7 @@ async function getNextAvailableDate(role, assignedUser, startDate, options = {})
     d = addDaysUTC(d, 1);
   }
 
+  const baseCap = await getEffectiveCapacity(assignedUser, role, contentType);
   console.warn(
     "[capacity] search window exceeded — using fallback day (may exceed daily cap)",
     JSON.stringify({
@@ -170,25 +210,13 @@ async function getNextAvailableDate(role, assignedUser, startDate, options = {})
       userId: String(toObjectId(assignedUser)),
       maxSearchDays: MAX_SEARCH_DAYS,
       fallbackDate: d.toISOString().slice(0, 10),
-      capacity: roleCapacity,
-      usingDefaultCapacity:
-        !capDoc || !Number.isFinite(capDoc.dailyCapacity),
+      capacity: baseCap,
     })
   );
 
   return d;
 }
 
-/**
- * Prompt 76: suggest up to 3 fallback dates within the next 7 days.
- * - If requestedDate has capacity, return [requestedDate]
- * - Else, scan requestedDate+1 ... requestedDate+7 and collect available days.
- *
- * @param {string} role
- * @param {import("mongoose").Types.ObjectId|string} userId
- * @param {Date|string|number} requestedDate
- * @returns {Promise<string[]>} YYYY-MM-DD suggestions
- */
 async function suggestNextAvailableSlots(role, userId, requestedDate, options = {}) {
   if (!role || typeof role !== "string") {
     throw new Error("role is required");
@@ -198,12 +226,15 @@ async function suggestNextAvailableSlots(role, userId, requestedDate, options = 
     throw new Error("Invalid assignedUser");
   }
 
-  const capDoc = await TeamCapacity.findOne({ role }).select("dailyCapacity").lean();
-  const roleCapacity = resolveRoleCapacity(capDoc);
+  const contentType =
+    options.contentType || options.contentTypeForTasks || "reel";
+
   const capacityDelta = Number.isFinite(options?.capacityDelta)
     ? options.capacityDelta
     : 0;
-  const threshold = roleCapacity + Math.max(0, capacityDelta);
+  const flexThresholdBoost = Number.isFinite(options?.flexThresholdBoost)
+    ? options.flexThresholdBoost
+    : 0;
   const leaves = Array.isArray(options?.leaves) ? options.leaves : [];
   const schedulingPlanType = String(options?.schedulingPlanType || "").toLowerCase();
   const requested = startOfDayUTC(requestedDate);
@@ -213,11 +244,19 @@ async function suggestNextAvailableSlots(role, userId, requestedDate, options = 
     if (schedulingPlanType === "normal") {
       const blocked = await hasUrgentStageBlockingNormal(role, uid, workday, {
         excludeContentItemId: options.excludeContentItemId,
+        contentType,
+        contentTypeForTasks: contentType,
       });
       if (blocked) return false;
     }
+    const threshold = await computeThresholdForUser(uid, role, contentType, {
+      capacityDelta,
+      flexThresholdBoost,
+    });
     const count = await countActiveStagesOnDay(role, uid, workday, {
       excludeContentItemId: options.excludeContentItemId,
+      contentType,
+      contentTypeForTasks: contentType,
     });
     return count < threshold;
   };
@@ -232,12 +271,13 @@ async function suggestNextAvailableSlots(role, userId, requestedDate, options = 
     if (await isDayOpen(nextDate)) {
       const count = await countActiveStagesOnDay(role, uid, nextDate, {
         excludeContentItemId: options.excludeContentItemId,
+        contentType,
+        contentTypeForTasks: contentType,
       });
       candidates.push({ date: nextDate, count, offset: i });
     }
   }
 
-  // Prompt 80: sort by closest date first (offset asc), then least load (count asc).
   candidates.sort((a, b) => {
     if (a.offset !== b.offset) return a.offset - b.offset;
     return a.count - b.count;
@@ -252,6 +292,7 @@ module.exports = {
   countActiveStagesOnDay,
   hasUrgentStageBlockingNormal,
   resolveRoleCapacity,
+  computeThresholdForUser,
   MAX_SEARCH_DAYS,
-  DEFAULT_DAILY_CAPACITY,
+  DEFAULT_DAILY_CAPACITY: 0,
 };
