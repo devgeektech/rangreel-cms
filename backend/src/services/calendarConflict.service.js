@@ -1,10 +1,10 @@
 const mongoose = require("mongoose");
 const ContentItem = require("../models/ContentItem");
-const TeamCapacity = require("../models/TeamCapacity");
 const {
   countActiveStagesOnDay,
-  DEFAULT_DAILY_CAPACITY,
+  computeThresholdForUser,
 } = require("./capacityAvailability.service");
+const { normalizeContentTypeForCapacity } = require("../constants/roleCapacityMap");
 
 function startOfDayUTC(ymd) {
   const m = String(ymd).match(/^(\d{4})-(\d{2})-(\d{2})$/);
@@ -26,26 +26,29 @@ function addDaysUTC(d, days) {
   return x;
 }
 
-async function resolveRoleCapacity(role) {
-  const capDoc = await TeamCapacity.findOne({ role }).select("dailyCapacity").lean();
-  if (capDoc && Number.isFinite(capDoc.dailyCapacity) && capDoc.dailyCapacity >= 0) {
-    return capDoc.dailyCapacity;
-  }
-  return DEFAULT_DAILY_CAPACITY;
+function resolveItemContentType(item) {
+  const t = item?.type || item?.contentType;
+  return normalizeContentTypeForCapacity(t) || "reel";
 }
 
 /**
  * Active workflow stages for one client on a UTC calendar day (same rules as global count).
  */
-async function countClientStagesOnDay(clientId, role, userId, dayStartUTC) {
+async function countClientStagesOnDay(clientId, role, userId, dayStartUTC, contentType) {
   const uid = toObjectId(userId);
   const cid = toObjectId(clientId);
   if (!uid || !cid) return 0;
 
   const dayEnd = addDaysUTC(dayStartUTC, 1);
 
+  const ct = normalizeContentTypeForCapacity(contentType) || "reel";
+  const match = { client: cid };
+  if (ct === "reel") match.contentType = { $in: ["reel"] };
+  else if (ct === "carousel") match.contentType = { $in: ["carousel"] };
+  else match.contentType = { $in: ["static_post", "gmb_post", "campaign"] };
+
   const [row] = await ContentItem.aggregate([
-    { $match: { client: cid } },
+    { $match: match },
     { $unwind: "$workflowStages" },
     {
       $match: {
@@ -70,17 +73,18 @@ function extractAssignedUserId(assignedUser) {
 }
 
 /**
- * Aggregate proposed draft stages: one row per (userId, role, ymd).
+ * Aggregate proposed draft stages: one row per (userId, role, ymd, contentType).
  */
 function flattenProposedStages(items) {
   const map = new Map();
   for (const item of items || []) {
+    const itemCt = resolveItemContentType(item);
     for (const s of item.stages || []) {
       const uid = extractAssignedUserId(s.assignedUser);
       if (!uid || !s.role || !s.date) continue;
       const ymd = String(s.date).slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
-      const key = `${uid}|${s.role}|${ymd}`;
+      const key = `${uid}|${s.role}|${ymd}|${itemCt}`;
       map.set(key, (map.get(key) || 0) + 1);
     }
   }
@@ -88,11 +92,8 @@ function flattenProposedStages(items) {
 }
 
 /**
- * Effective load for one (user, role, day): DB total minus this client's current load plus proposed.
- *
  * @param {string} clientId
- * @param {Map<string, number>} proposedMap - keys `${userId}|${role}|${ymd}`
- * @returns {Promise<{ warnings: object[], byDay: Record<string, object[]> }>}
+ * @param {Map<string, number>} proposedMap - keys `${userId}|${role}|${ymd}|${contentType}`
  */
 async function detectCapacityConflicts(clientId, items) {
   const proposedMap = flattenProposedStages(items);
@@ -100,27 +101,36 @@ async function detectCapacityConflicts(clientId, items) {
 
   const evaluated = await Promise.all(
     entries.map(async ([key, proposedCount]) => {
-      const [userId, role, ymd] = key.split("|");
+      const [userId, role, ymd, itemCt] = key.split("|");
       const dayStart = startOfDayUTC(ymd);
       if (!dayStart) return null;
 
-      const [totalDb, clientDb, capacity] = await Promise.all([
-        countActiveStagesOnDay(role, userId, dayStart),
-        countClientStagesOnDay(clientId, role, userId, dayStart),
-        resolveRoleCapacity(role),
+      const uid = toObjectId(userId);
+      if (!uid) return null;
+
+      const threshold = await computeThresholdForUser(uid, role, itemCt, {
+        capacityDelta: 0,
+        flexThresholdBoost: 0,
+      });
+
+      const [totalDb, clientDb] = await Promise.all([
+        countActiveStagesOnDay(role, userId, dayStart, { contentType: itemCt, contentTypeForTasks: itemCt }),
+        countClientStagesOnDay(clientId, role, userId, dayStart, itemCt),
       ]);
 
       const effective = totalDb - clientDb + proposedCount;
-      if (effective < capacity) return null;
+      if (effective < threshold) return null;
 
       return {
         userId,
         role,
         date: ymd,
         effectiveCount: effective,
-        capacity,
+        capacity: threshold === Number.POSITIVE_INFINITY ? 0 : threshold,
         proposedCount,
-        message: `${role} on ${ymd}: ${effective} active tasks vs daily capacity ${capacity} (warn only)`,
+        message: `${role} on ${ymd}: ${effective} active tasks vs daily capacity (${
+          threshold === Number.POSITIVE_INFINITY ? "unlimited" : threshold
+        }) (warn only)`,
       };
     })
   );

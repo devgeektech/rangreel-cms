@@ -1,6 +1,5 @@
 const mongoose = require("mongoose");
-
-const CAP_DEFAULT = 7;
+const { TEAM_CAPACITY_ROLES } = require("../constants/roleCapacityMap");
 
 const userCapacitySchema = new mongoose.Schema(
   {
@@ -10,13 +9,14 @@ const userCapacitySchema = new mongoose.Schema(
       required: true,
       unique: true,
     },
-    dailyReelEditCap: { type: Number, default: CAP_DEFAULT, min: 0 },
-    dailyReelShootCap: { type: Number, default: CAP_DEFAULT, min: 0 },
-    dailyDesignCap: { type: Number, default: CAP_DEFAULT, min: 0 },
-    dailyPlanCap: { type: Number, default: CAP_DEFAULT, min: 0 },
-    dailyPostCap: { type: Number, default: CAP_DEFAULT, min: 0 },
-    dailyApproveCap: { type: Number, default: CAP_DEFAULT, min: 0 },
-    dailyGeneralCap: { type: Number, default: CAP_DEFAULT, min: 0 },
+    role: {
+      type: String,
+      required: true,
+      enum: TEAM_CAPACITY_ROLES,
+    },
+    reelCapacity: { type: Number, default: 0, min: 0 },
+    postCapacity: { type: Number, default: 0, min: 0 },
+    carouselCapacity: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
 );

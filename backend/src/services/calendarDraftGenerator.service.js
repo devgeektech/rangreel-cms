@@ -292,10 +292,12 @@ async function generateCalendarDraft({
   let carouselGlobalIndex = 0;
   for (let cycle = 0; cycle < PREVIEW_CYCLE_COUNT; cycle += 1) {
     const nominalCycleEnd = addDaysUTC(cycleStart, 29);
+    const weekendAllowed = allowWeekend === true;
     const attemptConfigs = [
-      { allowWeekend: allowWeekend === true, allowFlexibleAdjustment: allowFlexibleAdjustment === true },
-      { allowWeekend: true, allowFlexibleAdjustment: allowFlexibleAdjustment === true },
-      { allowWeekend: true, allowFlexibleAdjustment: true },
+      { allowWeekend: weekendAllowed, allowFlexibleAdjustment: allowFlexibleAdjustment === true },
+      // Keep weekend policy fixed to the manager toggle for initial generation.
+      // If weekend is OFF, retries must still avoid Sat/Sun.
+      { allowWeekend: weekendAllowed, allowFlexibleAdjustment: true },
     ];
     let picked = null;
     for (const cfg of attemptConfigs) {

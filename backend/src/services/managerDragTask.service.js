@@ -3,7 +3,6 @@ const User = require("../models/User");
 const mongoose = require("mongoose");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 const ContentItem = require("../models/ContentItem");
-const TeamCapacity = require("../models/TeamCapacity");
 const Leave = require("../models/Leave");
 const GlobalEditLock = require("../models/GlobalEditLock");
 const { validateStagesNotAfterPosting, isAfterDate } = require("./stageBoundary.service");
@@ -12,7 +11,6 @@ const {
   normalizeStageToDurationTask,
 } = require("./taskNormalizer.service");
 const { tryBorrowOneDayFromNextStage, getMinDaysForWorkflowRole } = require("./durationBorrowing.service");
-const { resolveRoleCapacity } = require("./capacityAvailability.service");
 const {
   scheduleStageDay,
   nextValidWorkdayUTC,
@@ -359,7 +357,11 @@ async function runManagerDragTask({
 
   const itemType = String(item.type || contentItemLean.type || "").toLowerCase();
   const isReel = itemType === "reel";
-  const contentTypeForTasks = isReel ? "reel" : itemType === "carousel" ? "carousel" : "post";
+  const rawCt = String(contentItemLean.contentType || "").toLowerCase();
+  let contentTypeForTasks = "static_post";
+  if (rawCt === "reel" || itemType === "reel") contentTypeForTasks = "reel";
+  else if (rawCt === "carousel" || itemType === "carousel") contentTypeForTasks = "carousel";
+  else contentTypeForTasks = "static_post";
 
   const estimateStart = addDaysUTC(requested, -120);
   const estimateEnd = addDaysUTC(requested, 120);
@@ -381,6 +383,8 @@ async function runManagerDragTask({
     excludeContentItemId: contentId,
     leaves,
     schedulingPlanType: isUrgent ? "urgent" : "normal",
+    contentType: contentTypeForTasks,
+    contentTypeForTasks,
   };
 
   const bufferBase = {
@@ -590,15 +594,14 @@ async function runManagerDragTask({
       resolvedAssignee = lastAssignee;
     }
   } else {
-    const capDoc = await TeamCapacity.findOne({ role }).select("dailyCapacity").lean();
-    const threshold = resolveRoleCapacity(capDoc) + urgentCapacityDelta + 1;
-
     const pickForDay = (workday) =>
       pickAssigneeForBufferDay({
         workflowRole: role,
         primaryUserId,
         workday,
-        threshold,
+        contentType: contentTypeForTasks,
+        capacityDelta: urgentCapacityDelta,
+        flexThresholdBoost: allowFlexibleAdjustment ? 1 : 0,
         pendingSynthetic: [],
         leaves,
         excludeContentItemId: contentId,

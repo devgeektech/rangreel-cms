@@ -219,6 +219,14 @@ export const api = {
       method: "PATCH",
       body,
     }),
+  getUserCapacity: (id) =>
+    requestJson(`/admin/users/${encodeURIComponent(id)}/capacity`, { method: "GET" }),
+  patchUserCapacity: (id, body) =>
+    requestJson(`/admin/users/${encodeURIComponent(id)}/capacity`, {
+      method: "PATCH",
+      body,
+    }),
+  getCapacityOverview: () => requestJson("/admin/capacity-overview", { method: "GET" }),
 
   // Manager clients
   getMyClients: () => requestJson("/manager/clients", { method: "GET" }),

@@ -175,10 +175,15 @@ const updateInternalCalendarStage = async (req, res) => {
 
     // Prompt 80: urgent reels get a slight priority boost.
     const contentItemForPlan = await ContentItem.findById(contentId)
-      .select("planType")
+      .select("planType contentType type")
       .lean();
     const planType = String(contentItemForPlan?.planType || "normal").toLowerCase();
     const capacityDelta = planType === "urgent" ? 1 : 0;
+    const rawCt = String(contentItemForPlan?.contentType || "").toLowerCase();
+    let scheduleContentType = "static_post";
+    if (rawCt === "reel") scheduleContentType = "reel";
+    else if (rawCt === "carousel") scheduleContentType = "carousel";
+    else scheduleContentType = "static_post";
 
     // Prompt 71: manager-controlled leave integration.
     // Fetch leave entries that overlap the search window so scheduler steps respect leave.
@@ -200,7 +205,7 @@ const updateInternalCalendarStage = async (req, res) => {
         targetStage.role,
         assignedUser,
         requested,
-        { capacityDelta, leaves }
+        { capacityDelta, leaves, contentType: scheduleContentType, contentTypeForTasks: scheduleContentType }
       )
     );
     // Prompt 74: manual drag/edit must not overload capacity.
@@ -210,7 +215,12 @@ const updateInternalCalendarStage = async (req, res) => {
         targetStage.role,
         assignedUser,
         requested,
-        { capacityDelta, leaves }
+        {
+          capacityDelta,
+          leaves,
+          contentType: scheduleContentType,
+          contentTypeForTasks: scheduleContentType,
+        }
       );
       return res.status(409).json({
         success: false,
@@ -244,6 +254,8 @@ const updateInternalCalendarStage = async (req, res) => {
         await getNextAvailableDate(s.role, s.assignedUser, shiftedByDelta, {
           capacityDelta,
           leaves,
+          contentType: scheduleContentType,
+          contentTypeForTasks: scheduleContentType,
         })
       );
       if (postingDate && next && next.getTime() > postingDate.getTime()) {
