@@ -6,7 +6,7 @@ const packageController = require("../controllers/package.controller");
 const router = express.Router();
 
 router.use(auth);
-router.use(roleGuard("admin"));
+router.use(roleGuard(["admin", "manager"]));
 
 router.get("/", packageController.getPackages);
 router.post("/", packageController.createPackage);

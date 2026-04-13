@@ -299,14 +299,7 @@ async function runManagerDragTask({
     .select("planType workflowStages clientPostingDate type contentType isCustomCalendar")
     .lean();
   if (!contentItemLean) return { ok: false, status: 404, error: "Content item not found" };
-  if (!contentItemLean.isCustomCalendar) {
-    return {
-      ok: false,
-      status: 400,
-      error: "Editing not allowed in global calendar",
-      details: { code: "GLOBAL_CALENDAR_PROTECTED" },
-    };
-  }
+  // Global manager calendar remains editable for all scheduled items.
 
   const planType = String(contentItemLean.planType || "normal").toLowerCase();
   const isUrgent = planType === "urgent";

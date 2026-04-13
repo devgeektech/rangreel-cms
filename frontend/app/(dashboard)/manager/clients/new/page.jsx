@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Package as PackageIcon,
   Plus,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -691,17 +692,35 @@ export default function NewClientPage() {
   }, [clientStartDateYmd]);
 
   useEffect(() => {
-    if (step !== 2) return;
-    if (!selectedPackageId) return;
-    if (!startDateWatch) return;
+    if (step !== 2) {
+      setCalendarDraftLoading(false);
+      return;
+    }
+    if (!selectedPackageId) {
+      setCalendarDraftLoading(false);
+      return;
+    }
+    if (!startDateWatch) {
+      setCalendarDraftLoading(false);
+      return;
+    }
 
     const pkg = packagesRef.current.find((p) => String(p._id) === String(selectedPackageId));
-    if (!pkg) return;
+    if (!pkg) {
+      setCalendarDraftLoading(false);
+      return;
+    }
 
     const ce = getContentEnabledFromPackage(pkg);
-    if (!ce.reels && !ce.posts && !ce.carousel) return;
+    if (!ce.reels && !ce.posts && !ce.carousel) {
+      setCalendarDraftLoading(false);
+      return;
+    }
 
-    if (!teamAssignmentComplete) return;
+    if (!teamAssignmentComplete) {
+      setCalendarDraftLoading(false);
+      return;
+    }
 
     let mounted = true;
     setCalendarDraftLoading(true);
@@ -765,6 +784,17 @@ export default function NewClientPage() {
     }
   };
 
+  const handlePackageSelect = (packageId) => {
+    setValue("packageId", packageId, { shouldValidate: true });
+    // When package changes, force fresh team selection on step 3.
+    setValue("teamAssignment", { ...emptyTeamAssignment }, { shouldValidate: false, shouldDirty: true });
+    setCalendarDraft(null);
+    setCalendarDraftError("");
+    setCalendarDraftLoading(false);
+    setCustomizingSchedule(false);
+    setScheduleSubmitted(false);
+  };
+
   const loadUsers = async () => {
     try {
       setUsersLoading(true);
@@ -815,6 +845,31 @@ export default function NewClientPage() {
       setCreatePackageError(err?.message || "Failed to create package");
     } finally {
       setCreatePackageSubmitting(false);
+    }
+  };
+
+  const handleDeletePackage = async (pkg) => {
+    if (!pkg?._id) return;
+    if (pkg?.isInUse) {
+      toast.error("Cannot delete — package is assigned to clients");
+      return;
+    }
+    const ok = window.confirm(`Are you sure you want to delete "${pkg.name || "this package"}"?`);
+    if (!ok) return;
+    try {
+      await api.deletePackage(pkg._id);
+      toast.success("Package deleted successfully");
+      if (String(selectedPackageId) === String(pkg._id)) {
+        setValue("packageId", "", { shouldValidate: true });
+      }
+      await loadPackages();
+    } catch (error) {
+      const msg = String(error?.message || "");
+      if (msg.includes("Package cannot be deleted")) {
+        toast.error("Cannot delete — package is assigned to clients");
+      } else {
+        toast.error(msg || "Delete failed");
+      }
     }
   };
 
@@ -1794,7 +1849,7 @@ export default function NewClientPage() {
                       <button
                         key={pkg._id}
                         type="button"
-                        onClick={() => setValue("packageId", pkg._id, { shouldValidate: true })}
+                        onClick={() => handlePackageSelect(pkg._id)}
                         className="text-left"
                       >
                         <Card className={selected ? "border-primary ring-2 ring-primary/20" : ""}>
@@ -1814,7 +1869,27 @@ export default function NewClientPage() {
                                   ) : null}
                                 </div>
                               </div>
-                              {selected ? <CheckCircle2 className="h-5 w-5 shrink-0 text-primary" /> : null}
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon-sm"
+                                  disabled={Boolean(pkg?.isInUse)}
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleDeletePackage(pkg);
+                                  }}
+                                  title={
+                                    pkg?.isInUse
+                                      ? "Cannot delete — package is assigned to clients"
+                                      : "Delete package"
+                                  }
+                                >
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                </Button>
+                                {selected ? <CheckCircle2 className="h-5 w-5 shrink-0 text-primary" /> : null}
+                              </div>
                             </div>
                           </CardHeader>
                           <CardContent className="space-y-3 text-sm">

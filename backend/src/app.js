@@ -82,6 +82,7 @@ app.get("/api/health", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/user", userRoutes);
+app.use("/api/packages", packageRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin/packages", packageRoutes);
 app.use("/api/admin/holidays", holidayRoutes);
