@@ -185,9 +185,11 @@ export default function ManagerGlobalCalendarPage() {
     carousel: true,
   });
   const gridScrollRef = useRef(null);
+  const overflowCarouselRef = useRef(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
   const lastDragEndRef = useRef({ taskId: "", at: 0 });
   const [isPanningGrid, setIsPanningGrid] = useState(false);
+  const [overflowSlideIndex, setOverflowSlideIndex] = useState(0);
 
   const handleGridMouseDown = (e) => {
     // Left mouse pans only when starting from non-interactive background.
@@ -242,6 +244,28 @@ export default function ManagerGlobalCalendarPage() {
       window.removeEventListener("mouseup", stopPan);
     };
   }, [isPanningGrid]);
+
+  useEffect(() => {
+    setOverflowSlideIndex(0);
+    const el = overflowCarouselRef.current;
+    if (el) el.scrollTo({ left: 0, behavior: "auto" });
+  }, [cellOverflow]);
+
+  const scrollOverflowCarousel = (direction) => {
+    const el = overflowCarouselRef.current;
+    if (!el) return;
+    const step = Math.max(260, Math.round(el.clientWidth * 0.88));
+    const nextLeft = direction === "next" ? el.scrollLeft + step : el.scrollLeft - step;
+    el.scrollTo({ left: nextLeft, behavior: "smooth" });
+  };
+
+  const handleOverflowCarouselScroll = () => {
+    const el = overflowCarouselRef.current;
+    if (!el) return;
+    const step = Math.max(260, Math.round(el.clientWidth * 0.88));
+    const idx = Math.max(0, Math.round(el.scrollLeft / step));
+    setOverflowSlideIndex(idx);
+  };
 
   const loadCalendar = async () => {
     try {
@@ -1258,7 +1282,43 @@ export default function ManagerGlobalCalendarPage() {
               Select a task to open full details.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 px-6 py-4">
+          <div className="border-b border-border/60 px-6 py-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                Card {Math.min((cellOverflow?.tasks || []).length, overflowSlideIndex + 1)} of{" "}
+                {(cellOverflow?.tasks || []).length || 0}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="h-7 w-7"
+                  onClick={() => scrollOverflowCarousel("prev")}
+                  disabled={!(cellOverflow?.tasks || []).length}
+                  title="Previous task"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="outline"
+                  className="h-7 w-7"
+                  onClick={() => scrollOverflowCarousel("next")}
+                  disabled={!(cellOverflow?.tasks || []).length}
+                  title="Next task"
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          </div>
+          <div
+            ref={overflowCarouselRef}
+            onScroll={handleOverflowCarouselScroll}
+            className="flex snap-x snap-mandatory gap-3 overflow-x-auto overflow-y-hidden px-6 py-4"
+          >
             {(cellOverflow?.tasks || []).map((task, idx) => {
               const ctLabel = contentTypeLabel(task.contentType);
               const urgent = String(task.priority || "").toLowerCase() === "urgent";
@@ -1285,7 +1345,7 @@ export default function ManagerGlobalCalendarPage() {
                 <button
                   key={`${String(task.taskId || idx)}-${idx}`}
                   type="button"
-                  className={`w-full rounded-xl border px-4 py-3 text-left text-sm shadow-sm transition hover:opacity-95 ${
+                  className={`min-w-[85%] snap-start rounded-xl border px-4 py-3 text-left text-sm shadow-sm transition hover:opacity-95 sm:min-w-[78%] ${
                     hasConflict
                       ? "border-red-600/70 bg-red-500/10 text-red-900 dark:text-red-100"
                       : "border-border bg-card text-foreground"
