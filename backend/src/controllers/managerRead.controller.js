@@ -4,6 +4,8 @@ const Client = require("../models/Client");
 const ContentItem = require("../models/ContentItem");
 const Leave = require("../models/Leave");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
+const Schedule = require("../models/Schedule");
+const mongoose = require("mongoose");
 const { normalizeDraftItemToDurationTasks } = require("../services/taskNormalizer.service");
 
 function pad2(n) {
@@ -80,6 +82,22 @@ function roleToStageName(role) {
   if (r === "manager") return "Approval";
   if (r === "postingExecutive") return "Post";
   return "Task";
+}
+
+function resolvePostingExecutiveForType(clientDoc, contentType) {
+  const team = clientDoc?.team || {};
+  const typed = team.reels || team.posts || team.carousel ? team : null;
+  if (!typed) {
+    return team?.postingExecutive?._id || team?.postingExecutive || null;
+  }
+  const t = String(contentType || "").toLowerCase();
+  if (t === "reel") {
+    return typed?.reels?.postingExecutive?._id || typed?.reels?.postingExecutive || null;
+  }
+  if (t === "carousel") {
+    return typed?.carousel?.postingExecutive?._id || typed?.carousel?.postingExecutive || null;
+  }
+  return typed?.posts?.postingExecutive?._id || typed?.posts?.postingExecutive || null;
 }
 
 const success = (res, data, statusCode = 200) =>
@@ -193,7 +211,7 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
     const monthEnd = new Date(Date.UTC(year, monthIndex + 1, 0));
 
     const clientDocs = await Client.find({ manager: req.user.id })
-      .select("_id clientName")
+      .select("_id clientName team")
       .lean();
 
     const clientIds = (clientDocs || []).map((c) => c._id);
@@ -224,6 +242,7 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
     const clientNameById = new Map(
       (clientDocs || []).map((c) => [String(c._id), c.clientName || c.clientName])
     );
+    const clientById = new Map((clientDocs || []).map((c) => [String(c._id), c]));
 
     const updatedTasks = [];
     let taskIdx = 0;
@@ -288,6 +307,64 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
       }
     }
 
+    // Include saved custom-month schedule rows so "create next month" is visible in global calendar.
+    const scheduleRows = await Schedule.find({
+      clientId: { $in: clientIds },
+      isDraft: false,
+      startDate: { $lte: monthEnd },
+      endDate: { $gte: monthStart },
+    })
+      .select("clientId monthIndex items")
+      .lean();
+    for (const row of scheduleRows || []) {
+      const clientIdStr = String(row?.clientId || "");
+      const clientName = clientNameById.get(clientIdStr) || "Client";
+      const list = Array.isArray(row?.items) ? row.items : [];
+      for (let i = 0; i < list.length; i += 1) {
+        const it = list[i] || {};
+        const pd = toYMDUTC(it.postingDate);
+        if (!pd || pd < toYMDUTC(monthStart) || pd > toYMDUTC(monthEnd)) continue;
+        const meta = contentById.get(String(it?.contentItem || "")) || {};
+        const inferred = String(it?.title || "").toLowerCase();
+        const contentTypeRaw = String(meta?.type || meta?.contentType || "").toLowerCase();
+        const contentType = contentTypeRaw
+          ? contentTypeRaw === "static_post"
+            ? "post"
+            : contentTypeRaw
+          : inferred.includes("reel")
+            ? "reel"
+            : inferred.includes("carousel")
+              ? "carousel"
+              : "post";
+        const clientDoc = clientById.get(clientIdStr) || null;
+        const assignedPostingExec = resolvePostingExecutiveForType(clientDoc, contentType);
+        const assignedUserId = assignedPostingExec ? String(assignedPostingExec) : "unassigned";
+        updatedTasks.push({
+          taskId: `schedule::${clientIdStr}::${row.monthIndex}::${i}`,
+          contentItemId: String(it?.contentItem || `schedule-${row.monthIndex}-${i}`),
+          clientId: clientIdStr,
+          clientName,
+          title: it?.title || "",
+          contentType,
+          role: "postingExecutive",
+          stageName: "Post",
+          stageId: "",
+          status: "assigned",
+          planType: "normal",
+          priority: "normal",
+          startDate: pd,
+          endDate: pd,
+          finalDate: pd,
+          durationDays: 1,
+          finalDuration: 1,
+          dates: [pd],
+          assignedUsers: [assignedUserId],
+          assignedUsersPerDay: { [pd]: assignedUserId },
+          isEditable: true,
+        });
+      }
+    }
+
     // Leave highlights: prefetch leaves for all task assigned users overlapping month.
     const allAssignedUserIds = new Set();
     for (const t of updatedTasks) {
@@ -296,7 +373,9 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
         allAssignedUserIds.add(uid);
       }
     }
-    const userIds = [...allAssignedUserIds];
+    const userIds = [...allAssignedUserIds].filter((id) =>
+      mongoose.Types.ObjectId.isValid(String(id || ""))
+    );
 
     const leaveDocs = userIds.length
       ? await Leave.find({

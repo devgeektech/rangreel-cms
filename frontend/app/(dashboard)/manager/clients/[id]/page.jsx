@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   Calendar,
@@ -409,8 +410,17 @@ export default function ManagerClientDetailPage() {
           <div className="grid gap-4 lg:grid-cols-3">
             <Card className="lg:col-span-2 xl:col-span-2">
               <CardHeader>
-                <CardTitle>Client info</CardTitle>
-                <CardDescription>Onboarding details, positioning, and production preferences.</CardDescription>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <CardTitle>Client info</CardTitle>
+                    <CardDescription>Onboarding details, positioning, and production preferences.</CardDescription>
+                  </div>
+                  <Link href={`/manager/internal-calendar/${id}`}>
+                    <Button type="button" size="sm" variant="secondary">
+                      Edit Schedule
+                    </Button>
+                  </Link>
+                </div>
               </CardHeader>
               <CardContent className="space-y-4 text-sm">
                 <div className="grid gap-2 sm:grid-cols-2">

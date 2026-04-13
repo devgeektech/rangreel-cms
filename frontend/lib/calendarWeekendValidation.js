@@ -102,6 +102,17 @@ export function classifyWeekendStageMove(params) {
   }
 
   if (isCustomizationMode) {
+    // Draft/customization rule:
+    // - Dragging Post with weekend OFF should auto-skip weekends (no confirmation modal).
+    // - Other stages can still use weekend on explicit confirmation.
+    if (String(stageName || "") === "Post") {
+      const movedWeekday = applyCust(schedule, contentId, stageName, newYmd, {
+        ...customizationOpts,
+        weekendEnabled: false,
+      });
+      if (movedWeekday.blocked) return { kind: "error", message: movedWeekday.reason || "Invalid move" };
+      return { kind: "proceed" };
+    }
     const moved = applyCust(schedule, contentId, stageName, newYmd, {
       ...customizationOpts,
       weekendEnabled: true,

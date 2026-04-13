@@ -338,6 +338,24 @@ export const api = {
       body: { clientId },
     }),
 
+  extendClientSchedules: (clientId, numberOfCycles, options = {}) =>
+    requestJson("/manager/schedule/extend", {
+      method: "POST",
+      body: { clientId, numberOfCycles, startMonthIndex: options.startMonthIndex },
+    }),
+
+  saveClientSchedules: (clientId, schedules) =>
+    requestJson("/manager/schedule/save", {
+      method: "POST",
+      body: { clientId, schedules },
+    }),
+
+  previewExtendClientSchedules: (clientId, numberOfCycles, options = {}) =>
+    requestJson("/manager/schedule/preview-extend", {
+      method: "POST",
+      body: { clientId, numberOfCycles, startMonthIndex: options.startMonthIndex },
+    }),
+
   /** Smart scheduling: capacity warnings only (does not block saves). */
   checkCalendarConflicts: (body) =>
     requestJson("/calendar/check-conflicts", {

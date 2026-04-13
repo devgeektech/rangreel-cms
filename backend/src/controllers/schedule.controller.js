@@ -2,6 +2,9 @@ const Client = require("../models/Client");
 const {
   listSchedulesForClient,
   createNextMonthSchedule,
+  extendSchedules,
+  previewExtendSchedules,
+  saveExtendedSchedules,
 } = require("../services/clientScheduleMonths.service");
 
 const success = (res, data, statusCode = 200) =>
@@ -38,7 +41,63 @@ const createNextMonth = async (req, res) => {
   }
 };
 
+const extendSchedule = async (req, res) => {
+  try {
+    if (req.user?.roleType !== "manager") {
+      return failure(res, "Unauthorized", 403);
+    }
+    const { clientId, numberOfCycles, startMonthIndex } = req.body || {};
+    if (!clientId) return failure(res, "clientId is required", 400);
+    if (!Number.isFinite(Number(numberOfCycles)) || Number(numberOfCycles) <= 0) {
+      return failure(res, "numberOfCycles must be a positive number", 400);
+    }
+    const schedules = await extendSchedules(clientId, req.user.id, Number(numberOfCycles), {
+      startMonthIndex,
+    });
+    return success(res, { schedules, isDraftMode: true });
+  } catch (err) {
+    return failure(res, err.message || "Failed to extend schedule", 400);
+  }
+};
+
+const previewExtend = async (req, res) => {
+  try {
+    if (req.user?.roleType !== "manager") {
+      return failure(res, "Unauthorized", 403);
+    }
+    const { clientId, numberOfCycles, startMonthIndex } = req.body || {};
+    if (!clientId) return failure(res, "clientId is required", 400);
+    if (!Number.isFinite(Number(numberOfCycles)) || Number(numberOfCycles) <= 0) {
+      return failure(res, "numberOfCycles must be a positive number", 400);
+    }
+    const schedules = await previewExtendSchedules(clientId, req.user.id, Number(numberOfCycles), {
+      startMonthIndex,
+    });
+    return success(res, { schedules });
+  } catch (err) {
+    return failure(res, err.message || "Failed to preview schedule extension", 400);
+  }
+};
+
+const saveSchedule = async (req, res) => {
+  try {
+    if (req.user?.roleType !== "manager") {
+      return failure(res, "Unauthorized", 403);
+    }
+    const { clientId, schedules } = req.body || {};
+    if (!clientId) return failure(res, "clientId is required", 400);
+    await saveExtendedSchedules(clientId, req.user.id, schedules);
+    const payload = await listSchedulesForClient(clientId);
+    return success(res, payload);
+  } catch (err) {
+    return failure(res, err.message || "Failed to save schedule", 400);
+  }
+};
+
 module.exports = {
   getSchedules,
   createNextMonth,
+  extendSchedule,
+  previewExtend,
+  saveSchedule,
 };
