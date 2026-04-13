@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { CalendarDays, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
@@ -25,6 +25,29 @@ function prettyDate(ymd) {
   }).format(d);
 }
 
+function toYmdUtc(value) {
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toISOString().slice(0, 10);
+}
+
+function postingInCustomRange(postingDate, start, end) {
+  const p = toYmdUtc(postingDate);
+  const s = toYmdUtc(start);
+  const e = toYmdUtc(end);
+  if (!p || !s || !e) return true;
+  return p >= s && p <= e;
+}
+
+/** requestJson returns full `{ success, data }` — normalize to schedule bundle */
+function normalizeScheduleApiPayload(res) {
+  if (!res || typeof res !== "object") return null;
+  const inner = res.data !== undefined ? res.data : res;
+  if (inner && Array.isArray(inner.schedules)) return inner;
+  if (inner?.data && Array.isArray(inner.data.schedules)) return inner.data;
+  return null;
+}
+
 export default function ManagerInternalCalendarPage() {
   const params = useParams();
   const router = useRouter();
@@ -33,19 +56,48 @@ export default function ManagerInternalCalendarPage() {
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState(null);
   const [roleCapMap, setRoleCapMap] = useState({});
-  const [weekendMode, setWeekendMode] = useState(true);
+  const [weekendMode, setWeekendMode] = useState(false);
   const [debugMeta, setDebugMeta] = useState(null);
+  const customCalendarEnabled = Boolean(draft?.isCustomCalendar);
+  const [scheduleBundle, setScheduleBundle] = useState(null);
+  const [selectedMonthIndex, setSelectedMonthIndex] = useState(0);
+  const [creatingMonth, setCreatingMonth] = useState(false);
+  const [isDraftMode, setIsDraftMode] = useState(false);
+  const [draftSchedules, setDraftSchedules] = useState([]);
 
   const load = useCallback(async () => {
     if (!clientId) return;
     try {
       setLoading(true);
-      const res = await api.getInternalCalendar(clientId);
-      const next = res?.data || res || null;
+      const calRes = await api.getInternalCalendar(clientId);
+      const next = calRes?.data || calRes || null;
       setDraft(next);
+      if (typeof next?.weekendEnabled === "boolean") {
+        setWeekendMode(Boolean(next.weekendEnabled));
+      }
+
+      let schedData = null;
+      try {
+        const schedRes = await api.getClientSchedules(clientId);
+        schedData = normalizeScheduleApiPayload(schedRes);
+      } catch (schedErr) {
+        console.error(schedErr);
+        toast.error(schedErr?.message || "Failed to load custom month schedules");
+      }
+      if (schedData && Array.isArray(schedData.schedules)) {
+        setScheduleBundle(schedData);
+        setSelectedMonthIndex(schedData.schedules[0]?.monthIndex ?? 0);
+        setIsDraftMode(false);
+        setDraftSchedules([]);
+      } else {
+        setScheduleBundle(null);
+        setIsDraftMode(false);
+        setDraftSchedules([]);
+      }
     } catch (err) {
       toast.error(err.message || "Failed to load internal calendar");
       setDraft(null);
+      setScheduleBundle(null);
     } finally {
       setLoading(false);
     }
@@ -54,6 +106,10 @@ export default function ManagerInternalCalendarPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    setSelectedMonthIndex(0);
+  }, [clientId]);
 
   useEffect(() => {
     let mounted = true;
@@ -78,19 +134,122 @@ export default function ManagerInternalCalendarPage() {
     };
   }, []);
 
-  const moveStage = async ({ contentId, stageName, newDateYmd, allowWeekend }) => {
-    const res = await api.managerDragTask({
-      contentId,
-      stageName,
-      newDate: newDateYmd,
-      allowWeekend,
-    });
-    setDebugMeta(res?.data?.scheduling || null);
-    const nextCalendar = res?.data?.calendar || null;
-    if (nextCalendar && Array.isArray(nextCalendar.items)) {
-      setDraft(nextCalendar);
-      return;
+  const selectedSchedule = useMemo(() => {
+    const list = scheduleBundle?.schedules || [];
+    if (!list.length) return null;
+    return list.find((s) => s.monthIndex === selectedMonthIndex) || list[0];
+  }, [scheduleBundle, selectedMonthIndex]);
+  const selectedScheduleIsDraft = Boolean(selectedSchedule?.isDraft);
+
+  const displayDraft = useMemo(() => {
+    if (!draft || !selectedSchedule) return draft;
+    let items = (draft.items || []).filter((it) =>
+      postingInCustomRange(it.postingDate, selectedSchedule.startDate, selectedSchedule.endDate)
+    );
+    if (items.length === 0 && Array.isArray(selectedSchedule.items) && selectedSchedule.items.length > 0) {
+      const inferType = (title) => {
+        const t = String(title || "").toLowerCase();
+        if (t.includes("reel")) return "reel";
+        if (t.includes("carousel")) return "carousel";
+        return "post";
+      };
+      items = selectedSchedule.items.map((row, idx) => ({
+        contentId: String(row?.contentItem || `preview-${selectedSchedule.monthIndex}-${idx + 1}`),
+        title: row?.title || `Item ${idx + 1}`,
+        type: row?.type || inferType(row?.title),
+        postingDate: toYmdUtc(row?.postingDate),
+        stages:
+          Array.isArray(row?.stages) && row.stages.length
+            ? row.stages.map((s) => ({
+                name: s?.name || s?.stageName || "",
+                role: s?.role || "",
+                assignedUser: s?.assignedUser || null,
+                date: toYmdUtc(s?.date || s?.dueDate || row?.postingDate),
+                status: s?.status || "assigned",
+              }))
+            : [
+                {
+                  name: "Post",
+                  role: "postingExecutive",
+                  date: toYmdUtc(row?.postingDate),
+                  status: "assigned",
+                },
+              ],
+      }));
     }
+    return { ...draft, items };
+  }, [draft, selectedSchedule]);
+
+  const handleCreateNextMonth = async () => {
+    if (!clientId) return;
+    try {
+      setCreatingMonth(true);
+      const currentMaxMonthIndex = Math.max(
+        -1,
+        ...((scheduleBundle?.schedules || []).map((s) => Number(s?.monthIndex)).filter(Number.isFinite))
+      );
+      const res = await api.extendClientSchedules(clientId, 1, {
+        startMonthIndex: currentMaxMonthIndex + 1,
+      });
+      const generated = Array.isArray(res?.data?.schedules) ? res.data.schedules : [];
+      if (!generated.length) {
+        toast.error("No month generated");
+        return;
+      }
+      const deduped = generated.filter(
+        (g) =>
+          !(scheduleBundle?.schedules || []).some(
+            (s) => Number(s?.monthIndex) === Number(g?.monthIndex)
+          )
+      );
+      if (!deduped.length) {
+        toast.error("This month draft already exists. Save or switch month.");
+        return;
+      }
+      setScheduleBundle((prev) => ({
+        ...(prev || {}),
+        schedules: [...(prev?.schedules || []), ...deduped].sort(
+          (a, b) => Number(a?.monthIndex) - Number(b?.monthIndex)
+        ),
+        totalMonths: Number(prev?.totalMonths || 0) + deduped.length,
+        canCreateNextMonth: true,
+      }));
+      setDraftSchedules((prev) => [...prev, ...deduped]);
+      setIsDraftMode(true);
+      setSelectedMonthIndex(deduped[deduped.length - 1]?.monthIndex ?? selectedMonthIndex);
+      toast.success("Next month generated in draft mode. Click Save Schedule to persist.");
+    } catch (err) {
+      toast.error(err?.message || "Failed to create month");
+    } finally {
+      setCreatingMonth(false);
+    }
+  };
+
+  const handleSaveDraftSchedules = async () => {
+    if (!clientId || !draftSchedules.length) return;
+    try {
+      setCreatingMonth(true);
+      await api.saveClientSchedules(clientId, draftSchedules);
+      toast.success("Schedule saved");
+      await load();
+    } catch (err) {
+      toast.error(err?.message || "Failed to save schedule");
+    } finally {
+      setCreatingMonth(false);
+    }
+  };
+
+  const moveStage = async ({ contentId, stageName, newDateYmd, allowWeekend }) => {
+    const item = (draft?.items || []).find((it) => String(it.contentId) === String(contentId));
+    const stage = (item?.stages || []).find((s) => String(s.name) === String(stageName));
+    const stageId = stage?.stageId ? String(stage.stageId) : "";
+    if (!stageId) throw new Error("Stage not found");
+    await api.moveContentStage(contentId, stageId, {
+      dueDate: newDateYmd,
+      allowWeekend,
+      fromGlobalCalendar: false,
+    });
+    setDebugMeta(null);
     await load();
   };
 
@@ -100,7 +259,7 @@ export default function ManagerInternalCalendarPage() {
         <div>
           <h2 className="text-2xl font-semibold">Internal calendar</h2>
           <p className="text-sm text-muted-foreground">
-            Edits are applied only via global scheduler (`/api/manager/drag-task`). No per-client local save flow.
+            Stage moves use `/api/content/:itemId/stage/:stageId/move`.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -118,10 +277,52 @@ export default function ManagerInternalCalendarPage() {
             Planning board
           </CardTitle>
           <CardDescription>
-            Month view with color-coded content types, filters, and capacity heatmap by day. Drag a stage to move it; only Plan, Shoot, Edit, and Approval can be moved.
+            Custom months follow your client start date (e.g. 9 Apr → 8 May), not calendar months. Each month is independent — edits do not propagate to other months. Drag stages when custom calendar is enabled.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          {scheduleBundle?.schedules?.length ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-muted-foreground">Custom month:</span>
+              {scheduleBundle.schedules.map((s) => (
+                <Button
+                  key={s.monthIndex}
+                  type="button"
+                  size="sm"
+                  variant={selectedMonthIndex === s.monthIndex ? "default" : "outline"}
+                  onClick={() => setSelectedMonthIndex(s.monthIndex)}
+                >
+                  M{s.monthIndex + 1}{" "}
+                  <span className="hidden sm:inline">
+                    ({prettyDate(toYmdUtc(s.startDate))} – {prettyDate(toYmdUtc(s.endDate))})
+                  </span>
+                </Button>
+              ))}
+              {scheduleBundle.canCreateNextMonth ? (
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={creatingMonth}
+                    onClick={() => void handleCreateNextMonth()}
+                  >
+                    {creatingMonth ? "Creating…" : "Create next month"}
+                  </Button>
+                  {isDraftMode ? (
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={creatingMonth || draftSchedules.length === 0}
+                      onClick={() => void handleSaveDraftSchedules()}
+                    >
+                      {creatingMonth ? "Saving…" : "Save Schedule"}
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {loading ? (
             <div className="space-y-2">
               {Array.from({ length: 6 }).map((_, i) => (
@@ -134,20 +335,62 @@ export default function ManagerInternalCalendarPage() {
               title="No draft items"
               description="No internal calendar schedule found for this client yet."
             />
+          ) : scheduleBundle?.schedules?.length && displayDraft && displayDraft.items.length === 0 ? (
+            <EmptyState
+              icon={CalendarDays}
+              title="No items in this custom month"
+              description="Switch to another month or create the next month when available."
+            />
           ) : (
             <ContentCalendarDnd
-              key={clientId}
+              key={`${clientId}-${selectedMonthIndex}`}
               clientId={clientId}
-              draft={draft}
-              onStageMove={moveStage}
+              draft={displayDraft}
+              onStageMove={selectedScheduleIsDraft ? undefined : moveStage}
+              editableStageNames={
+                selectedScheduleIsDraft
+                  ? ["Plan", "Shoot", "Edit", "Design", "Approval", "Post"]
+                  : undefined
+              }
               roleCapMap={roleCapMap}
               saving={loading}
-              canEdit
-              isCustomizationMode={false}
+              canEdit={selectedScheduleIsDraft ? true : customCalendarEnabled}
+              isCustomizationMode={selectedScheduleIsDraft}
               allowPostCreationEdit
-              lockPostStage
+              lockPostStage={!selectedScheduleIsDraft}
               weekendMode={weekendMode}
+              weekendBlockedConfirmEnabled={selectedScheduleIsDraft ? true : customCalendarEnabled}
               onToggleWeekend={setWeekendMode}
+              onCalendarStateChange={(nextDraft) => {
+                if (!selectedScheduleIsDraft) return;
+                const nextItems = (nextDraft?.items || []).map((it) => ({
+                  contentItem: it.contentId,
+                  title: it.title,
+                  type: it.type,
+                  postingDate: it.postingDate,
+                  stages: (it.stages || []).map((s) => ({
+                    name: s.name,
+                    role: s.role,
+                    assignedUser: s.assignedUser || null,
+                    date: s.date,
+                    status: s.status || "assigned",
+                  })),
+                }));
+                setScheduleBundle((prev) => {
+                  if (!prev?.schedules?.length) return prev;
+                  return {
+                    ...prev,
+                    schedules: prev.schedules.map((s) =>
+                      Number(s.monthIndex) === Number(selectedMonthIndex) ? { ...s, items: nextItems } : s
+                    ),
+                  };
+                });
+                setDraftSchedules((prev) =>
+                  prev.map((s) =>
+                    Number(s.monthIndex) === Number(selectedMonthIndex) ? { ...s, items: nextItems } : s
+                  )
+                );
+              }}
             />
           )}
         </CardContent>

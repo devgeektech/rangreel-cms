@@ -6,6 +6,7 @@ const {
   buildReelItemForCalendarDraft,
   buildPostItemForCalendarDraft,
   buildCarouselItemForCalendarDraft,
+  buildStrategistStartDates,
 } = require("./simpleCalendar.service");
 
 // Prompt 34: force date storage as pure UTC midnight.
@@ -116,9 +117,11 @@ async function generateCalendarDraft({
   allowWeekend = false,
   allowFlexibleAdjustment = false,
 }) {
+  const PREVIEW_CYCLE_COUNT = 3;
   let schedulingOpts = {
     allowWeekend: allowWeekend === true,
     allowFlexibleAdjustment: allowFlexibleAdjustment === true,
+    allowPostingDayStacking: true,
     leaves: [],
   };
   const reelsCount = contentEnabled.reels === false ? 0 : Number(packageCounts.noOfReels) || 0;
@@ -135,7 +138,7 @@ async function generateCalendarDraft({
     noOfCarousels: carouselsCount,
   };
 
-  const total = reelsCount + postsCount + carouselsCount;
+  const total = (reelsCount + postsCount + carouselsCount) * PREVIEW_CYCLE_COUNT;
   if (!Number.isFinite(total) || total <= 0) {
     return { items: [], endDate: null, activeContentCounts };
   }
@@ -169,10 +172,6 @@ async function generateCalendarDraft({
   const carouselTeam = getTeamForContentType(team, "carousel");
 
   let lastPostingDate = null;
-  const usedReelPostingDayKeys = new Set();
-  const usedPostPostingDayKeys = new Set();
-  const usedCarouselPostingDayKeys = new Set();
-
   const keepLatestPosting = (d) => {
     const cur = createUTCDate(d);
     if (!cur) return;
@@ -180,57 +179,163 @@ async function generateCalendarDraft({
   };
 
   const items = [];
+  const cycleRanges = [];
+
+  const buildCycleAttempt = async ({
+    cycleStart,
+    cycleIndex,
+    localSchedulingOpts,
+    reelOffset,
+    postOffset,
+    carouselOffset,
+  }) => {
+    const cycleBaseStartDate = addDaysUTC(cycleStart, 1);
+    const draftWorkUnits = buildSortedWorkUnitsDraft(
+      cycleBaseStartDate,
+      reelsCount,
+      postsCount,
+      carouselsCount,
+      reelsMaxOffset,
+      postMaxOffset,
+      addDaysUTC
+    );
+    const strategistStarts = buildStrategistStartDates({
+      baseStartDate: cycleBaseStartDate,
+      reelsCount,
+      postsCount,
+      carouselsCount,
+      holidaySet,
+      monthOffsets: [0],
+    });
+    const usedReelPostingDayKeysCycle = new Set();
+    const usedPostPostingDayKeysCycle = new Set();
+    const usedCarouselPostingDayKeysCycle = new Set();
+
+    const cycleItems = [];
+    let maxPosting = null;
+    let reelCursor = reelOffset;
+    let postCursor = postOffset;
+    let carouselCursor = carouselOffset;
+    for (const unit of draftWorkUnits) {
+      if (unit.kind === "reel") {
+        reelCursor += 1;
+        const i = unit.index;
+        const isUrgent = i <= 2;
+        const reelItem = await buildReelItemForCalendarDraft({
+          i,
+          isUrgent,
+          baseStartDate: cycleBaseStartDate,
+          strategistStartDate: strategistStarts.reel[i - 1],
+          holidaySet,
+          schedulingOpts: localSchedulingOpts,
+          reelTeam,
+          usedReelPostingDayKeys: usedReelPostingDayKeysCycle,
+        });
+        reelItem.contentId = `Reel #${reelCursor}`;
+        reelItem.title = `Reel #${reelCursor}`;
+        reelItem.cycleIndex = cycleIndex;
+        const post = createUTCDate(reelItem.postingDate);
+        if (post && (!maxPosting || post.getTime() > maxPosting.getTime())) maxPosting = post;
+        cycleItems.push(reelItem);
+      } else if (unit.kind === "post") {
+        postCursor += 1;
+        const i = unit.index;
+        const postItem = await buildPostItemForCalendarDraft({
+          i,
+          baseStartDate: cycleBaseStartDate,
+          strategistStartDate: strategistStarts.post[i - 1],
+          holidaySet,
+          schedulingOpts: localSchedulingOpts,
+          postTeam,
+          usedPostPostingDayKeys: usedPostPostingDayKeysCycle,
+        });
+        postItem.contentId = `Post #${postCursor}`;
+        postItem.title = `Post #${postCursor}`;
+        postItem.cycleIndex = cycleIndex;
+        const post = createUTCDate(postItem.postingDate);
+        if (post && (!maxPosting || post.getTime() > maxPosting.getTime())) maxPosting = post;
+        cycleItems.push(postItem);
+      } else {
+        carouselCursor += 1;
+        const i = unit.index;
+        const carouselItem = await buildCarouselItemForCalendarDraft({
+          i,
+          baseStartDate: cycleBaseStartDate,
+          strategistStartDate: strategistStarts.carousel[i - 1],
+          holidaySet,
+          schedulingOpts: localSchedulingOpts,
+          carouselTeam,
+          usedCarouselPostingDayKeys: usedCarouselPostingDayKeysCycle,
+        });
+        carouselItem.contentId = `Carousel #${carouselCursor}`;
+        carouselItem.title = `Carousel #${carouselCursor}`;
+        carouselItem.cycleIndex = cycleIndex;
+        const post = createUTCDate(carouselItem.postingDate);
+        if (post && (!maxPosting || post.getTime() > maxPosting.getTime())) maxPosting = post;
+        cycleItems.push(carouselItem);
+      }
+    }
+
+    return {
+      cycleItems,
+      maxPostingDate: maxPosting,
+      reelCursor,
+      postCursor,
+      carouselCursor,
+    };
+  };
 
   /** PROMPT 68 — same priority as `generateClientReels` (urgent → earliest posting cursor → normal). */
-  const draftWorkUnits = buildSortedWorkUnitsDraft(
-    baseStartDate,
-    reelsCount,
-    postsCount,
-    carouselsCount,
-    reelsMaxOffset,
-    postMaxOffset,
-    addDaysUTC
-  );
+  let cycleStart = createUTCDate(baseStart);
+  let reelGlobalIndex = 0;
+  let postGlobalIndex = 0;
+  let carouselGlobalIndex = 0;
+  for (let cycle = 0; cycle < PREVIEW_CYCLE_COUNT; cycle += 1) {
+    const nominalCycleEnd = addDaysUTC(cycleStart, 29);
+    const weekendAllowed = allowWeekend === true;
+    const attemptConfigs = [
+      { allowWeekend: weekendAllowed, allowFlexibleAdjustment: allowFlexibleAdjustment === true },
+      // Keep weekend policy fixed to the manager toggle for initial generation.
+      // If weekend is OFF, retries must still avoid Sat/Sun.
+      { allowWeekend: weekendAllowed, allowFlexibleAdjustment: true },
+    ];
+    let picked = null;
+    for (const cfg of attemptConfigs) {
+      const attempt = await buildCycleAttempt({
+        cycleStart,
+        cycleIndex: cycle,
+        localSchedulingOpts: { ...schedulingOpts, ...cfg },
+        reelOffset: reelGlobalIndex,
+        postOffset: postGlobalIndex,
+        carouselOffset: carouselGlobalIndex,
+      });
+      picked = attempt;
+      const maxDate = attempt.maxPostingDate;
+      if (maxDate && maxDate.getTime() <= nominalCycleEnd.getTime()) break;
+    }
 
-  for (const unit of draftWorkUnits) {
-    if (unit.kind === "reel") {
-      const i = unit.index;
-      const isUrgent = i <= 2;
-      const reelItem = await buildReelItemForCalendarDraft({
-        i,
-        isUrgent,
-        baseStartDate,
-        holidaySet,
-        schedulingOpts,
-        reelTeam,
-        usedReelPostingDayKeys,
-      });
-      keepLatestPosting(createUTCDate(reelItem.postingDate));
-      items.push(reelItem);
-    } else if (unit.kind === "post") {
-      const i = unit.index;
-      const postItem = await buildPostItemForCalendarDraft({
-        i,
-        baseStartDate,
-        holidaySet,
-        schedulingOpts,
-        postTeam,
-        usedPostPostingDayKeys,
-      });
-      keepLatestPosting(createUTCDate(postItem.postingDate));
-      items.push(postItem);
+    const cycleItems = picked?.cycleItems || [];
+    for (const it of cycleItems) {
+      keepLatestPosting(createUTCDate(it.postingDate));
+      items.push(it);
+    }
+    reelGlobalIndex = picked?.reelCursor ?? reelGlobalIndex;
+    postGlobalIndex = picked?.postCursor ?? postGlobalIndex;
+    carouselGlobalIndex = picked?.carouselCursor ?? carouselGlobalIndex;
+
+    const completedEnd = picked?.maxPostingDate || nominalCycleEnd;
+    cycleRanges.push({
+      monthIndex: cycle,
+      start: createUTCDate(cycleStart),
+      end: createUTCDate(completedEnd),
+      nominalEnd: createUTCDate(nominalCycleEnd),
+      overflowed: completedEnd.getTime() > nominalCycleEnd.getTime(),
+    });
+
+    if (completedEnd.getTime() <= nominalCycleEnd.getTime()) {
+      cycleStart = addDaysUTC(cycleStart, 30);
     } else {
-      const i = unit.index;
-      const carouselItem = await buildCarouselItemForCalendarDraft({
-        i,
-        baseStartDate,
-        holidaySet,
-        schedulingOpts,
-        carouselTeam,
-        usedCarouselPostingDayKeys,
-      });
-      keepLatestPosting(createUTCDate(carouselItem.postingDate));
-      items.push(carouselItem);
+      cycleStart = addDaysUTC(completedEnd, 1);
     }
   }
 
@@ -240,6 +345,7 @@ async function generateCalendarDraft({
     items,
     endDate,
     activeContentCounts,
+    cycleRanges,
   };
 }
 

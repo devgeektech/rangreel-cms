@@ -8,15 +8,14 @@ const Role = require("../src/models/Role");
 const User = require("../src/models/User");
 const TeamCapacity = require("../src/models/TeamCapacity");
 
-/** Prompt 45: global per-role daily capacity (admin-controlled defaults). */
+/** Prompt 207: global per-role content-type capacity defaults. */
 const teamCapacitySeed = [
-  { role: "strategist", dailyCapacity: 5 },
-  { role: "videographer", dailyCapacity: 3 },
-  { role: "videoEditor", dailyCapacity: 7 },
-  { role: "manager", dailyCapacity: 10 },
-  { role: "postingExecutive", dailyCapacity: 10 },
-  { role: "graphicDesigner", dailyCapacity: 6 },
-  { role: "photographer", dailyCapacity: 4 },
+  { role: "strategist", reelCapacity: 5, postCapacity: 5, carouselCapacity: 5 },
+  { role: "videographer", reelCapacity: 3, postCapacity: 3, carouselCapacity: 3 },
+  { role: "videoEditor", reelCapacity: 7, postCapacity: 7, carouselCapacity: 7 },
+  { role: "manager", reelCapacity: 10, postCapacity: 10, carouselCapacity: 10 },
+  { role: "postingExecutive", reelCapacity: 10, postCapacity: 10, carouselCapacity: 10 },
+  { role: "graphicDesigner", reelCapacity: 0, postCapacity: 6, carouselCapacity: 6 },
 ];
 
 const rolesToSeed = [
@@ -180,10 +179,18 @@ const seed = async () => {
     for (const row of teamCapacitySeed) {
       await TeamCapacity.updateOne(
         { role: row.role },
-        { $set: { dailyCapacity: row.dailyCapacity } },
+        {
+          $set: {
+            reelCapacity: row.reelCapacity,
+            postCapacity: row.postCapacity,
+            carouselCapacity: row.carouselCapacity,
+          },
+        },
         { upsert: true }
       );
-      console.log(`  ${row.role}: ${row.dailyCapacity}/day`);
+      console.log(
+        `  ${row.role}: reels=${row.reelCapacity}, posts=${row.postCapacity}, carousels=${row.carouselCapacity}`
+      );
     }
 
     console.log("Seed completed successfully.");

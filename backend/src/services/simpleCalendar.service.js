@@ -5,10 +5,10 @@ const Leave = require("../models/Leave");
 const {
   getNextAvailableDate,
   countActiveStagesOnDay,
-  resolveRoleCapacity,
+  computeThresholdForUser,
   MAX_SEARCH_DAYS: CAPACITY_MAX_SEARCH_DAYS,
 } = require("./capacityAvailability.service");
-const TeamCapacity = require("../models/TeamCapacity");
+const { normalizeContentTypeForCapacity } = require("../constants/roleCapacityMap");
 const { getAvailableUsers } = require("./availability.service");
 const { ROLE_RULES } = require("../config/roleRules");
 const { tryBorrowOneDayFromNextStage } = require("./durationBorrowing.service");
@@ -17,6 +17,7 @@ const {
   normalizeDraftItemToDurationTasks,
 } = require("./taskNormalizer.service");
 const { buildSortedWorkUnitsClientGeneration } = require("./schedulerPriority.service");
+const { getCustomMonthRange } = require("./customMonthRange.service");
 
 /** workflowStages[].role → ROLE_RULES key (Prompt 62). */
 const WORKFLOW_ROLE_TO_RULE_KEY = {
@@ -130,6 +131,141 @@ const nextValidWorkdayUTC = (date, holidaySet, options = {}) => {
   return d;
 };
 
+function getDaysBetween(start, end) {
+  const s = createUTCDate(start);
+  const e = createUTCDate(end);
+  if (!s || !e) return 0;
+  const diff = e.getTime() - s.getTime();
+  return Math.floor(diff / (1000 * 60 * 60 * 24)) + 1;
+}
+
+function buildCalendarDays(start, end) {
+  const days = [];
+  let current = createUTCDate(start);
+  const last = createUTCDate(end);
+  if (!current || !last) return days;
+  while (current.getTime() <= last.getTime()) {
+    days.push(createUTCDate(current));
+    current = addDaysUTC(current, 1);
+  }
+  return days;
+}
+
+function generateSchedule(totalItems, rangeStart, rangeEnd) {
+  const count = Number(totalItems) || 0;
+  if (count <= 0) return [];
+  const start = createUTCDate(rangeStart);
+  if (!start) return [];
+  const end = createUTCDate(rangeEnd) || addDaysUTC(start, 27);
+  const calendarDays = buildCalendarDays(start, end);
+  if (!calendarDays.length) return [];
+  const totalDays = getDaysBetween(start, end);
+  const gap = Math.max(1, Math.floor(totalDays / count));
+  const schedule = [];
+  let pointer = 0;
+  for (let i = 0; i < count; i += 1) {
+    const index = Math.min(pointer, calendarDays.length - 1);
+    schedule.push(createUTCDate(calendarDays[index]));
+    pointer += gap;
+  }
+  return schedule;
+}
+
+function interleaveContent(reels, posts, carousels) {
+  const result = [];
+  let i = 0;
+
+  while (i < reels.length || i < posts.length || i < carousels.length) {
+    if (reels[i]) result.push({ type: "reel", date: createUTCDate(reels[i]) });
+    if (posts[i]) result.push({ type: "post", date: createUTCDate(posts[i]) });
+    if (carousels[i]) result.push({ type: "carousel", date: createUTCDate(carousels[i]) });
+    i += 1;
+  }
+
+  return result;
+}
+
+/**
+ * Spread strategist anchor dates across the first three custom-month cycles (same anchor as internal calendar).
+ * `baseStartDate` is contract start + 1 day (see generateClientReels); we recover start-of-contract for ranges.
+ */
+function scheduleTypeAcrossThreeMonths(count, baseStartDate, options = {}) {
+  if (!Number.isFinite(count) || count <= 0) return [];
+  const base = createUTCDate(baseStartDate);
+  if (!base) return [];
+  const leadBufferDays = Math.max(0, Number(options.leadBufferDays) || 0);
+  const monthOffsets =
+    Array.isArray(options.monthOffsets) && options.monthOffsets.length
+      ? options.monthOffsets.map((x) => Number(x) || 0)
+      : [0, 1, 2];
+  const clientStart = addDaysUTC(base, -1);
+  const ranges = monthOffsets.map((k) => getCustomMonthRange(clientStart, k));
+  const result = new Array(count);
+  const byMonth = Array.from({ length: ranges.length }, () => []);
+  for (let i = 0; i < count; i += 1) {
+    byMonth[i % byMonth.length].push(i);
+  }
+  for (let m = 0; m < byMonth.length; m += 1) {
+    const idxs = byMonth[m];
+    if (!idxs.length) continue;
+    const monthStart = addDaysUTC(ranges[m].start, 1);
+    let monthEnd = createUTCDate(ranges[m].end);
+    if (leadBufferDays > 0) {
+      const capped = addDaysUTC(monthEnd, -leadBufferDays);
+      if (capped.getTime() >= monthStart.getTime()) monthEnd = capped;
+    }
+    const sched = generateSchedule(idxs.length, monthStart, monthEnd);
+    for (let j = 0; j < idxs.length; j += 1) {
+      result[idxs[j]] = sched[j];
+    }
+  }
+  return result;
+}
+
+function buildStrategistStartDates({
+  baseStartDate,
+  reelsCount,
+  postsCount,
+  carouselsCount,
+  holidaySet,
+  monthOffsets,
+}) {
+  // Keep strategist anchors early enough so downstream stage durations still finish inside each 30-day cycle.
+  const reels = scheduleTypeAcrossThreeMonths(reelsCount, baseStartDate, {
+    leadBufferDays: 14,
+    monthOffsets,
+  });
+  const posts = scheduleTypeAcrossThreeMonths(postsCount, baseStartDate, {
+    leadBufferDays: 8,
+    monthOffsets,
+  });
+  const carousels = scheduleTypeAcrossThreeMonths(carouselsCount, baseStartDate, {
+    leadBufferDays: 8,
+    monthOffsets,
+  });
+  const finalSchedule = interleaveContent(reels, posts, carousels);
+
+  const usedDates = new Set();
+  const byType = { reel: [], post: [], carousel: [] };
+
+  const avoidSameDay = (date) => {
+    let d = createUTCDate(date);
+    while (usedDates.has(ymdUTC(d))) {
+      d = addDaysUTC(d, 1);
+      d = nextValidWorkdayUTC(d, holidaySet, { allowWeekend: false });
+    }
+    usedDates.add(ymdUTC(d));
+    return d;
+  };
+
+  for (const entry of finalSchedule) {
+    const safeDate = nextValidWorkdayUTC(entry.date, holidaySet, { allowWeekend: false });
+    byType[entry.type].push(avoidSameDay(safeDate));
+  }
+
+  return byType;
+}
+
 const mapLegacyFlatTeamToTyped = (team) => {
   const flat = team || {};
   const reels = {
@@ -171,6 +307,8 @@ const getTeamForContentType = (team, type) => {
 async function scheduleStageDay(role, userId, fromDate, holidaySet, schedulingOptions = {}) {
   const dayOpts = { allowWeekend: schedulingOptions.allowWeekend === true };
   const flexCapDelta = schedulingOptions.allowFlexibleAdjustment === true ? 1 : 0;
+  const contentType =
+    schedulingOptions.contentType || schedulingOptions.contentTypeForTasks || "reel";
   let anchor = createUTCDate(nextValidWorkdayUTC(fromDate, holidaySet, dayOpts));
   if (!anchor) throw new Error("Invalid anchor date");
   if (!userId) return anchor;
@@ -183,6 +321,8 @@ async function scheduleStageDay(role, userId, fromDate, holidaySet, schedulingOp
       excludeContentItemId: schedulingOptions.excludeContentItemId,
       leaves: schedulingOptions.leaves,
       schedulingPlanType: schedulingOptions.schedulingPlanType,
+      contentType,
+      contentTypeForTasks: contentType,
     });
     const d = createUTCDate(raw);
     const aligned = createUTCDate(nextValidWorkdayUTC(d, holidaySet, dayOpts));
@@ -224,6 +364,9 @@ async function countStagesForUserDay(
 ) {
   const uid = userId?._id || userId;
   if (!uid) return 0;
+  const ctNorm =
+    normalizeContentTypeForCapacity(countOptions.contentType || countOptions.contentTypeForTasks) ||
+    "reel";
   const db = await countActiveStagesOnDay(workflowRole, uid, workday, countOptions);
   const dayStart = createUTCDate(workday);
   if (!dayStart) return db;
@@ -231,6 +374,8 @@ async function countStagesForUserDay(
   for (const row of pendingSynthetic || []) {
     if (String(row.assignedUser?._id || row.assignedUser) !== String(uid)) continue;
     if (row.role !== workflowRole) continue;
+    const rowCt = normalizeContentTypeForCapacity(row.contentType) || "reel";
+    if (rowCt !== ctNorm) continue;
     if (isSameUtcDay(row.dueDate, dayStart)) extra += 1;
   }
   return db + extra;
@@ -243,14 +388,24 @@ async function pickAssigneeForBufferDay({
   workflowRole,
   primaryUserId,
   workday,
-  threshold,
+  contentType,
+  capacityDelta,
+  flexThresholdBoost,
   pendingSynthetic,
   leaves,
   excludeContentItemId,
 }) {
-  const countOpts = excludeContentItemId ? { excludeContentItemId } : {};
+  const countOpts = {
+    ...(excludeContentItemId ? { excludeContentItemId } : {}),
+    contentType,
+    contentTypeForTasks: contentType,
+  };
   const tryCapacity = async (uid) => {
     if (!uid) return null;
+    const threshold = await computeThresholdForUser(uid, workflowRole, contentType, {
+      capacityDelta,
+      flexThresholdBoost,
+    });
     const n = await countStagesForUserDay(
       workflowRole,
       uid,
@@ -294,15 +449,25 @@ async function pickAssigneeForSplitDay({
   workflowRole,
   primaryUserId,
   workday,
-  threshold,
+  contentType,
+  capacityDelta,
+  flexThresholdBoost,
   pendingSynthetic,
   leaves,
   previousAssigneeId,
   excludeContentItemId,
 }) {
-  const countOpts = excludeContentItemId ? { excludeContentItemId } : {};
+  const countOpts = {
+    ...(excludeContentItemId ? { excludeContentItemId } : {}),
+    contentType,
+    contentTypeForTasks: contentType,
+  };
   const tryCapacity = async (uid) => {
     if (!uid) return null;
+    const threshold = await computeThresholdForUser(uid, workflowRole, contentType, {
+      capacityDelta,
+      flexThresholdBoost,
+    });
     const n = await countStagesForUserDay(
       workflowRole,
       uid,
@@ -332,7 +497,9 @@ async function pickAssigneeForSplitDay({
       workflowRole,
       primaryUserId,
       workday,
-      threshold,
+      contentType,
+      capacityDelta,
+      flexThresholdBoost,
       pendingSynthetic,
       leaves,
       excludeContentItemId,
@@ -409,9 +576,6 @@ async function fillMultiDaySlotsWithBuffer(
   const contentTypeForTasks = options.contentType || "reel";
   const flexThresholdBoost = allowFlexibleAdjustment ? 1 : 0;
 
-  const capDoc = await TeamCapacity.findOne({ role }).select("dailyCapacity").lean();
-  const threshold = resolveRoleCapacity(capDoc) + capacityDelta + flexThresholdBoost;
-
   const dates = [];
   const assignees = [];
   const pendingSynthetic = [...seedTasks];
@@ -451,7 +615,9 @@ async function fillMultiDaySlotsWithBuffer(
           workflowRole: role,
           primaryUserId: userId,
           workday,
-          threshold,
+          contentType: contentTypeForTasks,
+          capacityDelta,
+          flexThresholdBoost,
           pendingSynthetic,
           leaves,
           previousAssigneeId: assignees.length ? assignees[assignees.length - 1] : null,
@@ -461,7 +627,9 @@ async function fillMultiDaySlotsWithBuffer(
           workflowRole: role,
           primaryUserId: userId,
           workday,
-          threshold,
+          contentType: contentTypeForTasks,
+          capacityDelta,
+          flexThresholdBoost,
           pendingSynthetic,
           leaves,
           excludeContentItemId: options.excludeContentItemId,
@@ -572,11 +740,14 @@ async function fillMultiDaySlots(role, userId, startFrom, nDays, holidaySet, opt
 /**
  * Core reel pipeline dates — shared by `generateClientReels` and `generateCalendarDraft` so preview matches DB.
  * Forward from stagger anchor: urgent reels = one effective business day per stage (strategist → … → post).
+ * DO NOT MODIFY THIS LOGIC
+ * Custom calendar rules apply only during stage movement
  */
 async function computeReelStageDatesForGeneration({
   i,
   isUrgent,
   baseStartDate,
+  strategistStartDate,
   holidaySet,
   schedulingOpts,
   strategistId,
@@ -585,13 +756,17 @@ async function computeReelStageDatesForGeneration({
   managerId,
   postingExecutiveId,
   usedReelPostingDayKeys,
+  allowPostingDayStacking = false,
+  postingWindow,
 }) {
   const reelSchedulingOpts = {
     ...schedulingOpts,
     schedulingPlanType: isUrgent ? "urgent" : "normal",
+    contentType: "reel",
+    contentTypeForTasks: "reel",
   };
   const staggerOffset = isUrgent ? (i - 1) * 1 : (i - 1) * 2;
-  const reelStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+  const reelStartSeed = strategistStartDate || addDaysUTC(baseStartDate, staggerOffset);
   const reelStartDate = createUTCDate(
     nextValidWorkdayUTC(reelStartSeed, holidaySet, schedulingOpts)
   );
@@ -615,6 +790,8 @@ async function computeReelStageDatesForGeneration({
     allowFlexibleAdjustment: !isUrgent && schedulingOpts.allowFlexibleAdjustment,
     leaves: schedulingOpts.leaves,
     splitAcrossUsers: !isUrgent,
+    contentType: "reel",
+    contentTypeForTasks: "reel",
   };
 
   const reelDurationPlan = {
@@ -724,18 +901,28 @@ async function computeReelStageDatesForGeneration({
     postDue = postOut.dates[0];
   }
 
-  let postingKey = ymdUTC(postDue);
-  while (postingKey && usedReelPostingDayKeys.has(postingKey)) {
-    postDue = await scheduleStageDay(
-      "postingExecutive",
-      postingExecutiveId,
-      addDaysUTC(postDue, 1),
-      holidaySet,
-      reelSchedulingOpts
-    );
-    postingKey = ymdUTC(postDue);
+  if (!allowPostingDayStacking) {
+    let postingKey = ymdUTC(postDue);
+    while (postingKey && usedReelPostingDayKeys.has(postingKey)) {
+      postDue = await scheduleStageDay(
+        "postingExecutive",
+        postingExecutiveId,
+        addDaysUTC(postDue, 1),
+        holidaySet,
+        reelSchedulingOpts
+      );
+      postingKey = ymdUTC(postDue);
+    }
+    if (postingKey) usedReelPostingDayKeys.add(postingKey);
   }
-  if (postingKey) usedReelPostingDayKeys.add(postingKey);
+  if (postingWindow?.end) {
+    const end = createUTCDate(postingWindow.end);
+    if (end && postDue.getTime() > end.getTime()) {
+      console.warn(
+        `[scheduler] Cycle overflow for reels in ${postingWindow.label || "current cycle"}; continuing beyond cycle end`
+      );
+    }
+  }
 
   return { planDue, shootDue, editDue, approvalDue, postDue };
 }
@@ -757,8 +944,16 @@ async function computePostLikeStageDatesForGeneration({
   managerId,
   postingExecutiveId,
   usedPostingDayKeys,
+  allowPostingDayStacking = false,
+  postingWindow,
+  contentType = "static_post",
 }) {
-  const postLikeOpts = { ...schedulingOpts, schedulingPlanType: "normal" };
+  const postLikeOpts = {
+    ...schedulingOpts,
+    schedulingPlanType: "normal",
+    contentType,
+    contentTypeForTasks: contentType,
+  };
 
   const planDue = await scheduleStageDay(
     "strategist",
@@ -785,6 +980,8 @@ async function computePostLikeStageDatesForGeneration({
       leaves: postLikeOpts.leaves,
       splitAcrossUsers: true,
       tryBorrowFromNextStage: borrowPost("graphicDesigner"),
+      contentType,
+      contentTypeForTasks: contentType,
     }
   );
   const designLast = designOut.dates[designOut.dates.length - 1];
@@ -803,6 +1000,8 @@ async function computePostLikeStageDatesForGeneration({
       leaves: postLikeOpts.leaves,
       splitAcrossUsers: true,
       tryBorrowFromNextStage: borrowPost("manager"),
+      contentType,
+      contentTypeForTasks: contentType,
     }
   );
   const approvalDue = managerOut.dates[managerOut.dates.length - 1];
@@ -815,18 +1014,28 @@ async function computePostLikeStageDatesForGeneration({
     postLikeOpts
   );
 
-  let postingKey = ymdUTC(postDue);
-  while (postingKey && usedPostingDayKeys.has(postingKey)) {
-    postDue = await scheduleStageDay(
-      "postingExecutive",
-      postingExecutiveId,
-      addDaysUTC(postDue, 1),
-      holidaySet,
-      postLikeOpts
-    );
-    postingKey = ymdUTC(postDue);
+  if (!allowPostingDayStacking) {
+    let postingKey = ymdUTC(postDue);
+    while (postingKey && usedPostingDayKeys.has(postingKey)) {
+      postDue = await scheduleStageDay(
+        "postingExecutive",
+        postingExecutiveId,
+        addDaysUTC(postDue, 1),
+        holidaySet,
+        postLikeOpts
+      );
+      postingKey = ymdUTC(postDue);
+    }
+    if (postingKey) usedPostingDayKeys.add(postingKey);
   }
-  if (postingKey) usedPostingDayKeys.add(postingKey);
+  if (postingWindow?.end) {
+    const end = createUTCDate(postingWindow.end);
+    if (end && postDue.getTime() > end.getTime()) {
+      console.warn(
+        `[scheduler] Cycle overflow for ${postingWindow.typeLabel || "content"} in ${postingWindow.label || "current cycle"}; continuing beyond cycle end`
+      );
+    }
+  }
 
   return {
     planDue,
@@ -845,10 +1054,12 @@ async function buildReelItemForCalendarDraft({
   i,
   isUrgent,
   baseStartDate,
+  strategistStartDate,
   holidaySet,
   schedulingOpts,
   reelTeam,
   usedReelPostingDayKeys,
+  postingWindow,
 }) {
   const strategistId = reelTeam.strategist?._id || reelTeam.strategist;
   const videographerId = reelTeam.videographer?._id || reelTeam.videographer;
@@ -860,6 +1071,7 @@ async function buildReelItemForCalendarDraft({
     i,
     isUrgent,
     baseStartDate,
+    strategistStartDate,
     holidaySet,
     schedulingOpts,
     strategistId,
@@ -868,6 +1080,8 @@ async function buildReelItemForCalendarDraft({
     managerId,
     postingExecutiveId,
     usedReelPostingDayKeys,
+    allowPostingDayStacking: schedulingOpts.allowPostingDayStacking === true,
+    postingWindow,
   });
 
   const postingDate = ymdUTC(postDue);
@@ -922,10 +1136,12 @@ async function buildReelItemForCalendarDraft({
 async function buildPostItemForCalendarDraft({
   i,
   baseStartDate,
+  strategistStartDate,
   holidaySet,
   schedulingOpts,
   postTeam,
   usedPostPostingDayKeys,
+  postingWindow,
 }) {
   const postStrategistId = postTeam.strategist?._id || postTeam.strategist;
   const postDesignerId = postTeam.graphicDesigner?._id || postTeam.graphicDesigner;
@@ -933,7 +1149,7 @@ async function buildPostItemForCalendarDraft({
   const postPostingExecutiveId = postTeam.postingExecutive?._id || postTeam.postingExecutive;
 
   const staggerOffset = (i - 1) * 2;
-  const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+  const itemStartSeed = strategistStartDate || addDaysUTC(baseStartDate, staggerOffset);
   const itemStartDate = createUTCDate(
     nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
   );
@@ -957,6 +1173,9 @@ async function buildPostItemForCalendarDraft({
     managerId: postManagerId,
     postingExecutiveId: postPostingExecutiveId,
     usedPostingDayKeys: usedPostPostingDayKeys,
+    allowPostingDayStacking: schedulingOpts.allowPostingDayStacking === true,
+    postingWindow: postingWindow ? { ...postingWindow, typeLabel: "posts" } : undefined,
+    contentType: "static_post",
   });
 
   const postingDate = ymdUTC(postDue);
@@ -1008,10 +1227,12 @@ async function buildPostItemForCalendarDraft({
 async function buildCarouselItemForCalendarDraft({
   i,
   baseStartDate,
+  strategistStartDate,
   holidaySet,
   schedulingOpts,
   carouselTeam,
   usedCarouselPostingDayKeys,
+  postingWindow,
 }) {
   const carouselStrategistId = carouselTeam.strategist?._id || carouselTeam.strategist;
   const carouselDesignerId = carouselTeam.graphicDesigner?._id || carouselTeam.graphicDesigner;
@@ -1019,7 +1240,7 @@ async function buildCarouselItemForCalendarDraft({
   const carouselPostingExecutiveId = carouselTeam.postingExecutive?._id || carouselTeam.postingExecutive;
 
   const staggerOffset = (i - 1) * 2;
-  const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+  const itemStartSeed = strategistStartDate || addDaysUTC(baseStartDate, staggerOffset);
   const itemStartDate = createUTCDate(
     nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
   );
@@ -1043,6 +1264,9 @@ async function buildCarouselItemForCalendarDraft({
     managerId: carouselManagerId,
     postingExecutiveId: carouselPostingExecutiveId,
     usedPostingDayKeys: usedCarouselPostingDayKeys,
+    allowPostingDayStacking: schedulingOpts.allowPostingDayStacking === true,
+    postingWindow: postingWindow ? { ...postingWindow, typeLabel: "carousels" } : undefined,
+    contentType: "carousel",
   });
 
   const postingDate = ymdUTC(postDue);
@@ -1173,6 +1397,8 @@ async function generateClientReels(client, options = {}) {
     populatedClient.manager?._id ||
     populatedClient.manager;
   const createdBy = populatedClient.createdBy || managerId;
+  const isCustomCalendar = Boolean(populatedClient.isCustomCalendar);
+  const weekendEnabled = Boolean(populatedClient.weekendEnabled);
 
   const strategistId = reelTeam.strategist?._id || reelTeam.strategist;
   const videographerId = reelTeam.videographer?._id || reelTeam.videographer;
@@ -1216,6 +1442,13 @@ async function generateClientReels(client, options = {}) {
     carouselsCount,
     addDaysUTC
   );
+  const strategistStarts = buildStrategistStartDates({
+    baseStartDate,
+    reelsCount,
+    postsCount,
+    carouselsCount,
+    holidaySet,
+  });
 
   for (const unit of workUnits) {
     if (unit.kind === "reel") {
@@ -1231,6 +1464,7 @@ async function generateClientReels(client, options = {}) {
       i,
       isUrgent,
       baseStartDate,
+      strategistStartDate: strategistStarts.reel[i - 1],
       holidaySet,
       schedulingOpts,
       strategistId,
@@ -1292,13 +1526,15 @@ async function generateClientReels(client, options = {}) {
       month: toMonthStringUTC(postingDate),
       clientPostingDate: createUTCDate(postingDate),
       workflowStages,
+      isCustomCalendar,
+      weekendEnabled,
       createdBy,
     });
     insertedCount += 1;
     } else if (unit.kind === "post") {
     const i = unit.index;
     const staggerOffset = (i - 1) * 2;
-    const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+    const itemStartSeed = strategistStarts.post[i - 1] || addDaysUTC(baseStartDate, staggerOffset);
     const itemStartDate = createUTCDate(
       nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
     );
@@ -1312,6 +1548,7 @@ async function generateClientReels(client, options = {}) {
       managerId: postManagerId,
       postingExecutiveId: postPostingExecutiveId,
       usedPostingDayKeys: usedPostPostingDayKeys,
+      contentType: "static_post",
     });
 
     const postingDate = createUTCDate(postDue);
@@ -1356,13 +1593,16 @@ async function generateClientReels(client, options = {}) {
           status: "assigned",
         },
       ],
+      isCustomCalendar,
+      weekendEnabled,
       createdBy,
     });
     insertedCount += 1;
     } else {
     const i = unit.index;
     const staggerOffset = (i - 1) * 2;
-    const itemStartSeed = addDaysUTC(baseStartDate, staggerOffset);
+    const itemStartSeed =
+      strategistStarts.carousel[i - 1] || addDaysUTC(baseStartDate, staggerOffset);
     const itemStartDate = createUTCDate(
       nextValidWorkdayUTC(itemStartSeed, holidaySet, schedulingOpts)
     );
@@ -1376,6 +1616,7 @@ async function generateClientReels(client, options = {}) {
       managerId: carouselManagerId,
       postingExecutiveId: carouselPostingExecutiveId,
       usedPostingDayKeys: usedCarouselPostingDayKeys,
+      contentType: "carousel",
     });
 
     const postingDate = createUTCDate(postDue);
@@ -1420,6 +1661,8 @@ async function generateClientReels(client, options = {}) {
           status: "assigned",
         },
       ],
+      isCustomCalendar,
+      weekendEnabled,
       createdBy,
     });
     insertedCount += 1;
@@ -1449,6 +1692,7 @@ module.exports = {
   fillMultiDaySlotsWithBuffer,
   scheduleStageDay,
   nextValidWorkdayUTC,
+  buildStrategistStartDates,
   buildHolidaySetUTC,
   pickAssigneeForBufferDay,
   pickAssigneeForSplitDay,

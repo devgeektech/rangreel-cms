@@ -8,6 +8,7 @@ const { generateClientReels } = require("../services/simpleCalendar.service");
 const { persistCalendarDraft } = require("../services/calendarDraftPersistence.service");
 const ContentItem = require("../models/ContentItem");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
+const { createInitialScheduleForClient } = require("../services/clientScheduleMonths.service");
 
 const normalizeMonthTarget = (targetMonth) => {
   if (!targetMonth) return null;
@@ -294,6 +295,8 @@ const createClient = async (req, res) => {
       contentEnabled,
       calendarDraft,
       customStages,
+      isCustomCalendar,
+      weekendEnabled,
     } = req.body;
 
     if (!packageId) {
@@ -358,6 +361,8 @@ const createClient = async (req, res) => {
         noOfStaticPosts: effective.postsCount,
         noOfCarousels: effective.carouselsCount,
       },
+      isCustomCalendar: isCustomCalendar || false,
+      weekendEnabled: weekendEnabled || false,
       createdBy: req.user.id,
     });
 
@@ -453,6 +458,12 @@ const createClient = async (req, res) => {
       },
       { upsert: true, new: true, runValidators: true }
     );
+
+    try {
+      await createInitialScheduleForClient(client._id);
+    } catch (schedErr) {
+      console.warn("[createClient] createInitialScheduleForClient:", schedErr?.message || schedErr);
+    }
 
     const populated = await populateClientQuery(Client.findById(client._id));
     return success(res, populated, 201);

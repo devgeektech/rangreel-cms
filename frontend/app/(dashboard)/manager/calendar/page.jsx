@@ -524,12 +524,20 @@ export default function ManagerGlobalCalendarPage() {
     return !(onLeave || isHoliday || isFull || weekendBlocked);
   };
 
-  const handleDrop = async (row, ymd) => {
-    if (!draggingTaskId || dragBusy) return;
-    const task = taskById.get(String(draggingTaskId));
+  const handleDrop = async (e, row, ymd) => {
+    if (dragBusy) return;
+    const itemIdFromDrop = String(e?.dataTransfer?.getData("itemId") || "");
+    const stageIdFromDrop = String(e?.dataTransfer?.getData("stageId") || "");
+    const task =
+      taskById.get(String(draggingTaskId)) ||
+      (tasks || []).find(
+        (t) =>
+          String(t?.contentItemId || "") === itemIdFromDrop &&
+          String(t?.stageId || "") === stageIdFromDrop
+      );
     if (!task) return;
-    if (!task?.isEditable) {
-      const msg = "Task is not editable";
+    if (!task?.isCustomCalendar) {
+      const msg = "Editing not allowed in global calendar";
       setDropError(msg);
       toast.error(msg);
       return;
@@ -570,13 +578,12 @@ export default function ManagerGlobalCalendarPage() {
     try {
       setDragBusy(true);
       setDropError("");
-      await api.managerDragTask({
-        contentId: task.contentItemId,
-        stageName: task.stageName,
-        newDate: ymd,
-        allowWeekend: weekendMode,
+      if (!task.stageId) {
+        throw new Error("Stage id missing for this task");
+      }
+      await api.moveContentStage(task.contentItemId, task.stageId, {
+        dueDate: ymd,
         fromGlobalCalendar: true,
-        ...(sameRoleAsRow ? { targetUserId: row.userId } : {}),
       });
       // Backend is source of truth: replace entire calendar state from API.
       await loadCalendar();
@@ -866,7 +873,7 @@ export default function ManagerGlobalCalendarPage() {
                             }}
                             onDrop={(e) => {
                               e.preventDefault();
-                              handleDrop(row, day.ymd);
+                              handleDrop(e, row, day.ymd);
                             }}
                           >
                             {isFull ? (
@@ -925,11 +932,15 @@ export default function ManagerGlobalCalendarPage() {
                               return (
                                 <div
                                   key={`${task.taskId}-${day.ymd}`}
-                                  draggable={Boolean(task?.isEditable && !dragBusy)}
+                                  draggable={Boolean(task?.isCustomCalendar && !dragBusy)}
                                   onClick={() => {
                                     setSelectedTask({ task, day: day.ymd, userId: row.userId });
                                   }}
-                                  onDragStart={() => {
+                                  onDragStart={(e) => {
+                                    if (e?.dataTransfer) {
+                                      e.dataTransfer.setData("itemId", String(task.contentItemId || ""));
+                                      e.dataTransfer.setData("stageId", String(task.stageId || ""));
+                                    }
                                     setDraggingTaskId(String(task.taskId || ""));
                                     setHoveredDropCell("");
                                     setDropError("");
