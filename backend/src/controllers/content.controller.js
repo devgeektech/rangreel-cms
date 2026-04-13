@@ -139,10 +139,9 @@ const moveStage = async (req, res) => {
     const item = await ContentItem.findById(itemId);
     if (!item) return failure(res, "ContentItem not found", 404);
 
-    if (!item.isCustomCalendar) {
-      if (req.body?.fromGlobalCalendar) {
-        throw new Error("Editing not allowed in global calendar");
-      }
+    // Manager global calendar must remain editable under scheduler rules.
+    // Preserve legacy non-custom fallback only for non-global edit paths.
+    if (item.isCustomCalendar === false && !req.body?.fromGlobalCalendar) {
       const oldReshuffleLogic = () => {
         const mergedBody = {
           ...(req.body || {}),

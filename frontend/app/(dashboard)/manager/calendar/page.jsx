@@ -7,6 +7,7 @@ import {
   ChevronRight,
   AlertTriangle,
   MoreHorizontal,
+  GripVertical,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -185,13 +186,23 @@ export default function ManagerGlobalCalendarPage() {
   });
   const gridScrollRef = useRef(null);
   const panRef = useRef({ active: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
+  const lastDragEndRef = useRef({ taskId: "", at: 0 });
   const [isPanningGrid, setIsPanningGrid] = useState(false);
 
   const handleGridMouseDown = (e) => {
+    // Left mouse pans only when starting from non-interactive background.
     if (e.button !== 0) return;
-    const target = e.target;
-    if (target instanceof Element) {
-      const interactive = target.closest('button, input, select, textarea, a, [draggable="true"]');
+    const rawTarget = e.target;
+    const targetEl =
+      rawTarget instanceof Element
+        ? rawTarget
+        : rawTarget && rawTarget.parentElement instanceof Element
+          ? rawTarget.parentElement
+          : null;
+    if (targetEl) {
+      const interactive = targetEl.closest(
+        'button, input, select, textarea, a, [draggable="true"], [data-task-card="true"]'
+      );
       if (interactive) return;
     }
     const el = gridScrollRef.current;
@@ -526,9 +537,11 @@ export default function ManagerGlobalCalendarPage() {
 
   const handleDrop = async (e, row, ymd) => {
     if (dragBusy) return;
+    const taskIdFromDrop = String(e?.dataTransfer?.getData("taskId") || "");
     const itemIdFromDrop = String(e?.dataTransfer?.getData("itemId") || "");
     const stageIdFromDrop = String(e?.dataTransfer?.getData("stageId") || "");
     const task =
+      taskById.get(taskIdFromDrop) ||
       taskById.get(String(draggingTaskId)) ||
       (tasks || []).find(
         (t) =>
@@ -536,12 +549,6 @@ export default function ManagerGlobalCalendarPage() {
           String(t?.stageId || "") === stageIdFromDrop
       );
     if (!task) return;
-    if (!task?.isCustomCalendar) {
-      const msg = "Editing not allowed in global calendar";
-      setDropError(msg);
-      toast.error(msg);
-      return;
-    }
     if (!canDropOnCell(row, ymd)) {
       const msg = "Cannot move: blocked by leave/holiday/capacity/weekend rule";
       setDropError(msg);
@@ -578,12 +585,16 @@ export default function ManagerGlobalCalendarPage() {
     try {
       setDragBusy(true);
       setDropError("");
-      if (!task.stageId) {
-        throw new Error("Stage id missing for this task");
+      if (!task.contentItemId || !task.stageName) {
+        throw new Error("Task metadata missing for drag operation");
       }
-      await api.moveContentStage(task.contentItemId, task.stageId, {
-        dueDate: ymd,
+      await api.managerDragTask({
+        contentId: task.contentItemId,
+        stageName: task.stageName,
+        newDate: ymd,
+        allowWeekend: weekendMode === true,
         fromGlobalCalendar: true,
+        targetUserId: row.userId && row.userId !== "unassigned" ? row.userId : undefined,
       });
       // Backend is source of truth: replace entire calendar state from API.
       await loadCalendar();
@@ -932,20 +943,31 @@ export default function ManagerGlobalCalendarPage() {
                               return (
                                 <div
                                   key={`${task.taskId}-${day.ymd}`}
-                                  draggable={Boolean(task?.isCustomCalendar && !dragBusy)}
+                                  data-task-card="true"
+                                  draggable={Boolean(!dragBusy)}
                                   onClick={() => {
+                                    const recentlyDragged =
+                                      String(lastDragEndRef.current.taskId || "") === String(task.taskId || "") &&
+                                      Date.now() - Number(lastDragEndRef.current.at || 0) < 220;
+                                    if (recentlyDragged) return;
                                     setSelectedTask({ task, day: day.ymd, userId: row.userId });
                                   }}
                                   onDragStart={(e) => {
                                     if (e?.dataTransfer) {
+                                      e.dataTransfer.setData("taskId", String(task.taskId || ""));
                                       e.dataTransfer.setData("itemId", String(task.contentItemId || ""));
                                       e.dataTransfer.setData("stageId", String(task.stageId || ""));
+                                      e.dataTransfer.effectAllowed = "move";
                                     }
                                     setDraggingTaskId(String(task.taskId || ""));
                                     setHoveredDropCell("");
                                     setDropError("");
                                   }}
                                   onDragEnd={() => {
+                                    lastDragEndRef.current = {
+                                      taskId: String(task.taskId || ""),
+                                      at: Date.now(),
+                                    };
                                     setDraggingTaskId("");
                                     setHoveredDropCell("");
                                   }}
@@ -955,7 +977,7 @@ export default function ManagerGlobalCalendarPage() {
                                       : "text-foreground dark:text-slate-100"
                                   } ${isStart ? "rounded-l" : "rounded-l-none"} ${isEnd ? "rounded-r" : "rounded-r-none"} ${
                                     onLeave || isHoliday || isFull ? "cursor-not-allowed opacity-80" : ""
-                                  } ${dragBusy ? "opacity-70" : ""} cursor-pointer`}
+                                  } ${dragBusy ? "opacity-70" : ""} relative cursor-pointer select-none`}
                                   style={!hasConflict && !urgent ? normalStyle : undefined}
                                   title={
                                     isHoliday
@@ -969,6 +991,14 @@ export default function ManagerGlobalCalendarPage() {
                                       : `${task.clientName} • ${ctLabel} • ${task.title} • ${task.stageName}`
                                   }
                                 >
+                                  {task?.isCustomCalendar !== false && !dragBusy ? (
+                                    <span
+                                      className="pointer-events-none absolute left-1 top-1 z-10 inline-flex h-4 w-4 items-center justify-center rounded border border-border/60 bg-background/80 text-muted-foreground"
+                                      title="Drag this card"
+                                    >
+                                      <GripVertical className="h-3 w-3" />
+                                    </span>
+                                  ) : null}
                                   {isStart ? (
                                     <>
                                       <p className="truncate font-semibold inline-flex items-center gap-1">

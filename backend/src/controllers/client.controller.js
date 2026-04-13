@@ -303,7 +303,7 @@ const createClient = async (req, res) => {
       return failure(res, "package is required", 400);
     }
 
-    const pkg = await Package.findById(packageId)
+    const pkg = await Package.findOne({ _id: packageId, isDeleted: { $ne: true } })
       .select("noOfGoogleReviews noOfReels noOfPosts noOfStaticPosts noOfCarousels")
       .lean();
     if (!pkg) {

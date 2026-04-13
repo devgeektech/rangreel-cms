@@ -87,6 +87,7 @@ export default function AdminPackagesPage() {
   const [pendingDelete, setPendingDelete] = useState(null);
   const [gmbPostingState, setGmbPostingState] = useState(false);
   const [campaignManagementState, setCampaignManagementState] = useState(false);
+  const [canDeletePackage, setCanDeletePackage] = useState(false);
 
   const {
     control,
@@ -113,6 +114,24 @@ export default function AdminPackagesPage() {
 
   useEffect(() => {
     loadPackages();
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const me = await api.getMe();
+        const roleType = String(me?.user?.roleType || "").toLowerCase();
+        if (!mounted) return;
+        setCanDeletePackage(roleType === "admin" || roleType === "manager");
+      } catch {
+        if (!mounted) return;
+        setCanDeletePackage(false);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const openCreate = () => {
@@ -170,7 +189,12 @@ export default function AdminPackagesPage() {
       setPendingDelete(null);
       await loadPackages();
     } catch (error) {
-      toast.error(error.message || "Failed to delete package");
+      const msg = String(error?.message || "");
+      if (msg.includes("Package cannot be deleted")) {
+        toast.error("Cannot delete — package is assigned to clients");
+      } else {
+        toast.error(msg || "Failed to delete package");
+      }
     }
   };
 
@@ -198,13 +222,21 @@ export default function AdminPackagesPage() {
                       <Button variant="ghost" size="icon-sm" onClick={() => openEdit(pkg)}>
                         <Edit className="h-4 w-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => setPendingDelete(pkg)}
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
+                      {canDeletePackage ? (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          disabled={Boolean(pkg.isInUse)}
+                          onClick={() => setPendingDelete(pkg)}
+                          title={
+                            pkg.isInUse
+                              ? "Cannot delete — package is assigned to clients"
+                              : "Delete package"
+                          }
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 </CardHeader>

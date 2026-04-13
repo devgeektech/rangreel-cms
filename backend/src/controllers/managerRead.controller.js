@@ -111,12 +111,27 @@ const getPackages = async (req, res) => {
     const uid = req.user.id;
     const packages = await Package.find({
       isActive: true,
+      isDeleted: false,
       $or: [{ createdBy: uid }, { createdByRole: "admin" }, { createdBy: null }],
     })
       .populate("createdBy", "name")
       .sort({ createdAt: -1 })
       .lean();
-    return success(res, packages);
+    const packageIds = packages.map((p) => p._id);
+    const usageCounts = packageIds.length
+      ? await Client.aggregate([
+          { $match: { package: { $in: packageIds } } },
+          { $group: { _id: "$package", count: { $sum: 1 } } },
+        ])
+      : [];
+    const usageById = new Map(
+      usageCounts.map((row) => [String(row._id), Number(row.count) || 0])
+    );
+    const enriched = packages.map((pkg) => ({
+      ...pkg,
+      isInUse: (usageById.get(String(pkg._id)) || 0) > 0,
+    }));
+    return success(res, enriched);
   } catch (err) {
     return failure(res, "Failed to fetch packages", 500);
   }
@@ -300,8 +315,9 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
             assignedUsers,
             assignedUsersPerDay: perDay,
             isEditable: isEditableRole(role),
-            isCustomCalendar: Boolean(meta.isCustomCalendar),
-            weekendEnabled: Boolean(meta.weekendEnabled),
+            // Treat missing legacy flag as editable; only explicit false is blocked.
+            isCustomCalendar: meta?.isCustomCalendar !== false,
+            weekendEnabled: meta?.weekendEnabled === true,
           });
         }
       }
@@ -361,6 +377,7 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
           assignedUsers: [assignedUserId],
           assignedUsersPerDay: { [pd]: assignedUserId },
           isEditable: true,
+          isCustomCalendar: true,
         });
       }
     }

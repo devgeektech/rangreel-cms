@@ -173,19 +173,19 @@ export const api = {
       body: payload,
     }),
 
-  getPackages: () => requestJson("/admin/packages", { method: "GET" }),
+  getPackages: () => requestJson("/packages", { method: "GET" }),
   createPackage: (body) =>
-    requestJson("/admin/packages", {
+    requestJson("/packages", {
       method: "POST",
       body,
     }),
   updatePackage: (id, body) =>
-    requestJson(`/admin/packages/${id}`, {
+    requestJson(`/packages/${id}`, {
       method: "PATCH",
       body,
     }),
   deletePackage: (id) =>
-    requestJson(`/admin/packages/${id}`, {
+    requestJson(`/packages/${id}`, {
       method: "DELETE",
     }),
 
