@@ -120,7 +120,7 @@ function contentTypeChipClassName(raw) {
 function normalizeContentTypeFilterKey(raw) {
   const t = String(raw || "").toLowerCase();
   if (t === "reel") return "reel";
-  if (t === "static_post" || t === "post") return "static_post";
+  if (t === "static_post" || t === "post" || t === "gmb_post" || t === "campaign") return "static_post";
   if (t === "carousel") return "carousel";
   return "other";
 }
@@ -326,7 +326,7 @@ export default function ManagerGlobalCalendarPage() {
         api.getManagerLeave(),
         api.getHoliday(),
       ]);
-      const capRes = await api.getTeamCapacity().catch(() => ({ data: [] }));
+      const capRes = await api.getManagerTeamCapacity().catch(() => ({ data: [] }));
       const data = calendarRes?.data || calendarRes || {};
       setTasks(data?.updatedTasks || data?.tasks || []);
       setUsers(teamUsersRes?.data || []);
@@ -335,11 +335,20 @@ export default function ManagerGlobalCalendarPage() {
       setHolidays(holidayRes?.data || holidayRes || []);
       const capRows = capRes?.data || [];
       const capMap = {};
+      const parseCapacity = (value, fallback = DEFAULT_ROLE_CAPACITY) => {
+        const n = Number(value);
+        if (Number.isFinite(n) && n >= 0) return n;
+        return fallback;
+      };
       for (const row of capRows) {
         const role = normalizeRoleKey(row?.role);
-        const cap = Number(row?.dailyCapacity);
         if (!role) continue;
-        capMap[role] = Number.isFinite(cap) && cap > 0 ? cap : DEFAULT_ROLE_CAPACITY;
+        const dailyFallback = parseCapacity(row?.dailyCapacity, DEFAULT_ROLE_CAPACITY);
+        capMap[role] = {
+          reel: parseCapacity(row?.reelCapacity, dailyFallback),
+          static_post: parseCapacity(row?.postCapacity, dailyFallback),
+          carousel: parseCapacity(row?.carouselCapacity, dailyFallback),
+        };
       }
       setCapacityByRole(capMap);
       if (prevScroll) {
@@ -557,28 +566,38 @@ export default function ManagerGlobalCalendarPage() {
       .sort((a, b) => String(a.startDate).localeCompare(String(b.startDate)));
   }, [leaveEntries]);
 
-  const usedByUserDay = useMemo(() => {
+  const usedByUserDayType = useMemo(() => {
     const map = new Map();
-    const seen = new Set(); // user::day::taskId
-    for (const task of filteredTasks || []) {
+    const seen = new Set(); // user::day::bucket::taskId
+    // Capacity state must reflect all scheduled tasks for the month,
+    // not just currently visible filtered cards.
+    for (const task of tasks || []) {
       const perDay = task?.assignedUsersPerDay && typeof task.assignedUsersPerDay === "object"
         ? task.assignedUsersPerDay
         : {};
+      const bucket = normalizeContentTypeFilterKey(task?.contentType);
+      if (bucket === "other") continue;
       const fallbackTaskId = `${String(task?.contentItemId || "")}-${String(task?.stageName || "")}-${String(
         task?.startDate || task?.date || ""
       )}`;
       const taskIdKey = String(task?.taskId || fallbackTaskId);
       for (const [day, dayUser] of Object.entries(perDay)) {
         const userId = String(dayUser || "unassigned");
-        const dedupeKey = `${userId}::${day}::${taskIdKey}`;
+        const dedupeKey = `${userId}::${day}::${bucket}::${taskIdKey}`;
         if (seen.has(dedupeKey)) continue;
         seen.add(dedupeKey);
-        const key = `${userId}::${day}`;
+        const key = `${userId}::${day}::${bucket}`;
         map.set(key, (map.get(key) || 0) + 1);
       }
     }
     return map;
-  }, [filteredTasks]);
+  }, [tasks]);
+
+  const getRoleBucketCapacity = (role, bucket) => {
+    const byRole = capacityByRole?.[role];
+    const val = Number(byRole?.[bucket]);
+    return Number.isFinite(val) && val >= 0 ? val : DEFAULT_ROLE_CAPACITY;
+  };
 
   const taskById = useMemo(() => {
     const map = new Map();
@@ -957,10 +976,16 @@ export default function ManagerGlobalCalendarPage() {
                     <div key={`${group.role}-${row.userId}`} className="contents">
                       <div className="sticky left-0 z-10 border-b border-r border-border bg-card px-3 py-3 text-sm font-medium">
                         {(() => {
-                          const totalCapacity = Number(capacityByRole[row.role] || DEFAULT_ROLE_CAPACITY);
+                          const totalCapacity =
+                            getRoleBucketCapacity(row.role, "reel") +
+                            getRoleBucketCapacity(row.role, "static_post") +
+                            getRoleBucketCapacity(row.role, "carousel");
                           let peakUsed = 0;
                           for (const d of calendarDays) {
-                            const used = Number(usedByUserDay.get(`${row.userId}::${d.ymd}`) || 0);
+                            const used =
+                              Number(usedByUserDayType.get(`${row.userId}::${d.ymd}::reel`) || 0) +
+                              Number(usedByUserDayType.get(`${row.userId}::${d.ymd}::static_post`) || 0) +
+                              Number(usedByUserDayType.get(`${row.userId}::${d.ymd}::carousel`) || 0);
                             if (used > peakUsed) peakUsed = used;
                           }
                           return `${row.name} (${peakUsed}/${totalCapacity})`;
@@ -970,11 +995,40 @@ export default function ManagerGlobalCalendarPage() {
                         const dayTasks = row.byDay.get(day.ymd) || [];
                         const onLeave = leaveByUserDay.has(`${row.userId}::${day.ymd}`);
                         const isHoliday = holidayByDay.has(day.ymd);
-                        const totalCapacity = Number(capacityByRole[row.role] || DEFAULT_ROLE_CAPACITY);
-                        const used = Number(usedByUserDay.get(`${row.userId}::${day.ymd}`) || 0);
-                        const isFull = used >= totalCapacity;
-                        const isOverloaded = used > totalCapacity;
-                        const capacityReason = `${used}/${totalCapacity} tasks assigned (${isOverloaded ? "over capacity" : "at capacity"})`;
+                        const bucketKeys = ["reel", "static_post", "carousel"];
+                        const bucketStats = bucketKeys.map((bucket) => {
+                          const used = Number(
+                            usedByUserDayType.get(`${row.userId}::${day.ymd}::${bucket}`) || 0
+                          );
+                          const capacity = getRoleBucketCapacity(row.role, bucket);
+                          return { bucket, used, capacity };
+                        });
+                        const warningBuckets = bucketStats
+                          .filter((x) => x.used > 0 && x.capacity > 0 && x.used >= x.capacity)
+                          .map((x) => {
+                            const label =
+                              x.bucket === "reel"
+                                ? "Reel"
+                                : x.bucket === "static_post"
+                                  ? "Post"
+                                  : "Carousel";
+                            const overloaded = x.used > x.capacity;
+                            return {
+                              ...x,
+                              label,
+                              overloaded,
+                              reason: `${label} ${x.used}/${x.capacity} (${overloaded ? "over capacity" : "at capacity"})`,
+                            };
+                          });
+                        const overloadedBuckets = new Set(
+                          warningBuckets.filter((x) => x.overloaded).map((x) => x.bucket)
+                        );
+                        const fullBuckets = new Set(
+                          warningBuckets.filter((x) => !x.overloaded).map((x) => x.bucket)
+                        );
+                        const isOverloaded = warningBuckets.some((x) => x.overloaded);
+                        const isFull = !isOverloaded && warningBuckets.length > 0;
+                        const capacityReason = warningBuckets.map((x) => x.reason).join(" • ");
                         return (
                           <div
                             key={`${row.userId}-${day.ymd}`}
@@ -983,13 +1037,9 @@ export default function ManagerGlobalCalendarPage() {
                             className={`flex min-h-28 flex-col border-b border-r border-border p-2 ${
                               isHoliday
                                 ? "bg-gray-300/40 dark:bg-gray-700/40"
-                                : isOverloaded
-                                  ? "bg-red-500/15 ring-1 ring-red-500/50"
-                                  : isFull
-                                    ? "bg-blue-500/15 ring-1 ring-blue-500/50"
-                                    : onLeave
-                                      ? "bg-blue-500/15"
-                                      : ""
+                                : onLeave
+                                  ? "bg-blue-500/15"
+                                  : ""
                             } ${
                               draggingTaskId && hoveredDropCell === `${row.userId}::${day.ymd}`
                                 ? canDropOnCell(row, day.ymd)
@@ -1030,11 +1080,6 @@ export default function ManagerGlobalCalendarPage() {
                               handleDrop(e, row, day.ymd);
                             }}
                           >
-                            {isOverloaded ? (
-                              <p className="text-xs font-semibold text-red-700 dark:text-red-300">OVERLOADED</p>
-                            ) : isFull ? (
-                              <p className="text-xs font-semibold text-blue-700 dark:text-blue-300">FULL</p>
-                            ) : null}
                             {isHoliday ? (
                               <p className="text-xs text-muted-foreground">Holiday</p>
                             ) : null}
@@ -1049,6 +1094,21 @@ export default function ManagerGlobalCalendarPage() {
                               >
                               {dayTasks.map((task) => {
                               const ctLabel = contentTypeLabel(task.contentType);
+                              const taskBucket = normalizeContentTypeFilterKey(task.contentType);
+                              const taskUsed = Number(
+                                usedByUserDayType.get(`${row.userId}::${day.ymd}::${taskBucket}`) || 0
+                              );
+                              const taskCapacity = getRoleBucketCapacity(row.role, taskBucket);
+                              const taskIsOverloaded = overloadedBuckets.has(taskBucket);
+                              const taskIsFull = !taskIsOverloaded && fullBuckets.has(taskBucket);
+                              const taskCapacityReason =
+                                `${ctLabel} ${taskUsed}/${taskCapacity} (${taskIsOverloaded ? "over capacity" : "at capacity"})`;
+                              const taskLoadClass =
+                                taskIsOverloaded
+                                  ? "border-red-600/80 bg-red-500/20 text-red-900 dark:text-red-100"
+                                  : taskIsFull
+                                    ? "border-blue-600/80 bg-blue-500/20 text-blue-900 dark:text-blue-100"
+                                    : "";
                               const urgent = String(task.priority || "").toLowerCase() === "urgent";
                               const planType = urgent ? "URGENT" : "NORMAL";
                               const hasConflict = Boolean(
@@ -1119,11 +1179,15 @@ export default function ManagerGlobalCalendarPage() {
                                   className={`border px-2 py-1.5 text-xs leading-snug shadow-sm ${
                                     hasConflict
                                       ? "border-red-600/80 bg-red-500/10 text-red-700 dark:text-red-200"
+                                      : taskLoadClass
+                                        ? taskLoadClass
                                       : "text-foreground dark:text-slate-100"
                                   } ${isStart ? "rounded-l" : "rounded-l-none"} ${isEnd ? "rounded-r" : "rounded-r-none"} ${
-                                    onLeave || isHoliday || isFull || isOverloaded ? "cursor-not-allowed opacity-80" : ""
+                                    onLeave || isHoliday ? "cursor-not-allowed opacity-80" : ""
                                   } ${dragBusy ? "opacity-70" : ""} relative cursor-pointer select-none`}
-                                  style={!hasConflict && !urgent ? normalStyle : undefined}
+                                  style={
+                                    !hasConflict && !urgent && !taskLoadClass ? normalStyle : undefined
+                                  }
                                   title={
                                     isHoliday
                                       ? `${holidayByDay.get(day.ymd)} (Holiday)`
@@ -1133,6 +1197,10 @@ export default function ManagerGlobalCalendarPage() {
                                         ? `OVERLOADED — ${capacityReason}`
                                         : isFull
                                           ? `FULL — ${capacityReason}`
+                                      : taskIsOverloaded
+                                        ? `OVERLOADED — ${taskCapacityReason}`
+                                      : taskIsFull
+                                        ? `FULL — ${taskCapacityReason}`
                                       : hasConflict
                                       ? conflictReason || "Scheduling conflict"
                                       : `${task.clientName} • ${ctLabel} • ${task.title} • ${task.stageName}`
@@ -1150,6 +1218,11 @@ export default function ManagerGlobalCalendarPage() {
                                     <>
                                       <p className="truncate font-semibold inline-flex items-center gap-1">
                                         {task.clientName}
+                                        {taskIsOverloaded ? (
+                                          <AlertTriangle className="h-3 w-3 shrink-0 text-red-600" />
+                                        ) : taskIsFull ? (
+                                          <span className="text-[10px] leading-none">⛔</span>
+                                        ) : null}
                                         {hasConflict ? (
                                           <AlertTriangle className="h-3 w-3 shrink-0 text-red-600" />
                                         ) : null}
@@ -1178,6 +1251,11 @@ export default function ManagerGlobalCalendarPage() {
                                     </>
                                   ) : (
                                     <>
+                                      {taskIsOverloaded ? (
+                                        <AlertTriangle className="mb-0.5 h-3 w-3 shrink-0 text-red-600" />
+                                      ) : taskIsFull ? (
+                                        <span className="mb-0.5 text-[10px] leading-none text-blue-700 dark:text-blue-200">⛔</span>
+                                      ) : null}
                                       <span
                                         className={`mb-0.5 inline-block rounded px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide border ${contentTypeChipClassName(task.contentType)}`}
                                       >

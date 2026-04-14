@@ -3,6 +3,7 @@ const User = require("../models/User");
 const Client = require("../models/Client");
 const ContentItem = require("../models/ContentItem");
 const Leave = require("../models/Leave");
+const TeamCapacity = require("../models/TeamCapacity");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 const Schedule = require("../models/Schedule");
 const mongoose = require("mongoose");
@@ -209,6 +210,22 @@ const getTeamUsers = async (req, res) => {
     return success(res, filtered);
   } catch (err) {
     return failure(res, "Failed to fetch team users", 500);
+  }
+};
+
+const getManagerTeamCapacity = async (_req, res) => {
+  try {
+    const docs = await TeamCapacity.find({}).sort({ role: 1 }).lean();
+    const data = (docs || []).map((d) => ({
+      role: d.role,
+      reelCapacity: d.reelCapacity,
+      postCapacity: d.postCapacity,
+      carouselCapacity: d.carouselCapacity,
+      updatedAt: d.updatedAt,
+    }));
+    return success(res, data);
+  } catch (err) {
+    return failure(res, err.message || "Failed to fetch team capacity", 500);
   }
 };
 
@@ -457,6 +474,7 @@ module.exports = {
   getPackages,
   createManagerPackage,
   getTeamUsers,
+  getManagerTeamCapacity,
   getManagerGlobalCalendarFinal,
 };
 
