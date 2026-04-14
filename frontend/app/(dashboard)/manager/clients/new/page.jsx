@@ -193,36 +193,45 @@ const teamAssignmentShape = z.object({
   videographer: optionalTeamStr,
   editor: optionalTeamStr,
   graphicDesigner: optionalTeamStr,
-  manager: optionalTeamStr,
+  campaignManager: optionalTeamStr,
   postingExecutive: optionalTeamStr,
 });
 
 /** Same content-type flags as package counts (includes noOfPosts + noOfStaticPosts for static). */
 function packageTeamFlags(pkg) {
-  if (!pkg) return { hasReels: false, hasStatic: false, hasCarousels: false };
+  if (!pkg) {
+    return {
+      hasReels: false,
+      hasStatic: false,
+      hasCarousels: false,
+      hasCampaignManagement: false,
+    };
+  }
   return {
     hasReels: (Number(pkg.noOfReels) || 0) > 0,
     hasStatic: (Number(pkg.noOfStaticPosts) || 0) + (Number(pkg.noOfPosts) || 0) > 0,
     hasCarousels: (Number(pkg.noOfCarousels) || 0) > 0,
+    hasCampaignManagement: Boolean(pkg.campaignManagement),
   };
 }
 
-function deriveTeamRoleNeeds({ hasReels, hasStatic, hasCarousels }) {
+function deriveTeamRoleNeeds({ hasReels, hasStatic, hasCarousels, hasCampaignManagement }) {
   const anyContent = hasReels || hasStatic || hasCarousels;
   return {
     needsStrategist: anyContent,
     needsVideographer: hasReels,
     needsEditor: hasReels,
     needsGraphicDesigner: hasStatic || hasCarousels,
-    needsManager: anyContent,
+    needsCampaignManager: Boolean(hasCampaignManagement),
     needsPostingExecutive: anyContent,
   };
 }
 
 /** Maps flat teamAssignment to API shape expected by calendar + createClient. */
-function legacyTeamFromAssignment(ta, hasReels, hasStatic, hasCarousels) {
+function legacyTeamFromAssignment(ta, hasReels, hasStatic, hasCarousels, managerUserId) {
   const s = (v) => (filled(v) ? v : "");
   const a = ta || {};
+  const managerId = s(managerUserId);
   const reels = {
     strategist: "",
     videographer: "",
@@ -242,19 +251,19 @@ function legacyTeamFromAssignment(ta, hasReels, hasStatic, hasCarousels) {
     reels.strategist = s(a.strategist);
     reels.videographer = s(a.videographer);
     reels.videoEditor = s(a.editor);
-    reels.manager = s(a.manager);
+    reels.manager = managerId;
     reels.postingExecutive = s(a.postingExecutive);
   }
   if (hasStatic) {
     posts.strategist = s(a.strategist);
     posts.graphicDesigner = s(a.graphicDesigner);
-    posts.manager = s(a.manager);
+    posts.manager = managerId;
     posts.postingExecutive = s(a.postingExecutive);
   }
   if (hasCarousels) {
     carousel.strategist = s(a.strategist);
     carousel.graphicDesigner = s(a.graphicDesigner);
-    carousel.manager = s(a.manager);
+    carousel.manager = managerId;
     carousel.postingExecutive = s(a.postingExecutive);
   }
   return { reels, posts, carousel };
@@ -268,7 +277,7 @@ function buildTeamAssignmentPayload(ta, needs) {
     videographer: pick("videographer", needs.needsVideographer),
     editor: pick("editor", needs.needsEditor),
     graphicDesigner: pick("graphicDesigner", needs.needsGraphicDesigner),
-    manager: pick("manager", needs.needsManager),
+    campaignManager: pick("campaignManager", needs.needsCampaignManager),
     postingExecutive: pick("postingExecutive", needs.needsPostingExecutive),
   };
 }
@@ -278,7 +287,7 @@ const TEAM_FIELD_LABELS = {
   videographer: "Videographer",
   editor: "Editor",
   graphicDesigner: "Graphic Designer",
-  manager: "Manager",
+  campaignManager: "Campaign Manager",
   postingExecutive: "Posting Executive",
 };
 
@@ -287,7 +296,7 @@ const TEAM_SELECT_CONFIG = [
   { field: "videographer", label: "Videographer", needsKey: "needsVideographer", optionsKey: "videographer" },
   { field: "editor", label: "Editor", needsKey: "needsEditor", optionsKey: "videoEditor" },
   { field: "graphicDesigner", label: "Graphic Designer", needsKey: "needsGraphicDesigner", optionsKey: "graphicDesigner" },
-  { field: "manager", label: "Manager", needsKey: "needsManager", optionsKey: "manager" },
+  { field: "campaignManager", label: "Campaign Manager", needsKey: "needsCampaignManager", optionsKey: "campaignManager" },
   { field: "postingExecutive", label: "Posting Executive", needsKey: "needsPostingExecutive", optionsKey: "postingExecutive" },
 ];
 
@@ -447,7 +456,7 @@ const defaultValues = {
     videographer: "",
     editor: "",
     graphicDesigner: "",
-    manager: "",
+    campaignManager: "",
     postingExecutive: "",
   },
 };
@@ -732,7 +741,13 @@ export default function NewClientPage() {
         if (!pkgNow) throw new Error("Package not found");
         const ta = getValues("teamAssignment");
         const flags = packageTeamFlags(pkgNow);
-        const teamPayload = legacyTeamFromAssignment(ta, flags.hasReels, flags.hasStatic, flags.hasCarousels);
+        const teamPayload = legacyTeamFromAssignment(
+          ta,
+          flags.hasReels,
+          flags.hasStatic,
+          flags.hasCarousels,
+          currentUserId
+        );
 
         const res = await api.generateCalendarDraft({
           packageId: selectedPackageId,
@@ -900,8 +915,8 @@ export default function NewClientPage() {
       videographer: [],
       videoEditor: [],
       graphicDesigner: [],
+      campaignManager: [],
       postingExecutive: [],
-      manager: [],
     };
 
     (users || []).forEach((u) => {
@@ -912,7 +927,7 @@ export default function NewClientPage() {
       if (slug === "editor" || slug === "video-editor" || slug === "videoeditor") map.videoEditor.push(u);
       if (slug === "designer") map.graphicDesigner.push(u);
       if (slug === "posting") map.postingExecutive.push(u);
-      if (slug === "manager" || slug === "campaign-manager") map.manager.push(u);
+      if (slug === "campaign-manager") map.campaignManager.push(u);
     });
 
     return map;
@@ -958,7 +973,7 @@ export default function NewClientPage() {
   const back = () => setStep((prev) => Math.max(prev - 1, 0));
 
   const scrollToFirstTeamError = (formErrors) => {
-    const order = ["strategist", "videographer", "editor", "graphicDesigner", "manager", "postingExecutive"];
+    const order = ["strategist", "videographer", "editor", "graphicDesigner", "campaignManager", "postingExecutive"];
     for (const key of order) {
       if (formErrors.teamAssignment?.[key]) {
         document
@@ -1037,7 +1052,13 @@ export default function NewClientPage() {
         team: (() => {
           const pkgSubmit = (packages || []).find((p) => String(p._id) === String(values.packageId));
           const f = packageTeamFlags(pkgSubmit);
-          return legacyTeamFromAssignment(values.teamAssignment, f.hasReels, f.hasStatic, f.hasCarousels);
+          return legacyTeamFromAssignment(
+            values.teamAssignment,
+            f.hasReels,
+            f.hasStatic,
+            f.hasCarousels,
+            currentUserId
+          );
         })(),
         teamAssignment: (() => {
           const pkgSubmit = (packages || []).find((p) => String(p._id) === String(values.packageId));

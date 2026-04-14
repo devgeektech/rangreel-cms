@@ -5,6 +5,7 @@ const PUBLIC_PATHS = ["/login"];
 const ROLE_ROOTS = [
   "/admin",
   "/manager",
+  "/campaign-manager",
   "/strategist",
   "/videographer",
   "/editor",
