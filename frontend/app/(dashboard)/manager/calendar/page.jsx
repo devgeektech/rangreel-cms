@@ -973,13 +973,23 @@ export default function ManagerGlobalCalendarPage() {
                         const totalCapacity = Number(capacityByRole[row.role] || DEFAULT_ROLE_CAPACITY);
                         const used = Number(usedByUserDay.get(`${row.userId}::${day.ymd}`) || 0);
                         const isFull = used >= totalCapacity;
+                        const isOverloaded = used > totalCapacity;
+                        const capacityReason = `${used}/${totalCapacity} tasks assigned (${isOverloaded ? "over capacity" : "at capacity"})`;
                         return (
                           <div
                             key={`${row.userId}-${day.ymd}`}
                             data-gc-user={String(row.userId || "")}
                             data-gc-ymd={String(day.ymd || "")}
                             className={`flex min-h-28 flex-col border-b border-r border-border p-2 ${
-                              isHoliday ? "bg-gray-300/40 dark:bg-gray-700/40" : onLeave ? "bg-blue-500/15" : ""
+                              isHoliday
+                                ? "bg-gray-300/40 dark:bg-gray-700/40"
+                                : isOverloaded
+                                  ? "bg-red-500/15 ring-1 ring-red-500/50"
+                                  : isFull
+                                    ? "bg-blue-500/15 ring-1 ring-blue-500/50"
+                                    : onLeave
+                                      ? "bg-blue-500/15"
+                                      : ""
                             } ${
                               draggingTaskId && hoveredDropCell === `${row.userId}::${day.ymd}`
                                 ? canDropOnCell(row, day.ymd)
@@ -996,8 +1006,10 @@ export default function ManagerGlobalCalendarPage() {
                                 ? `${holidayByDay.get(day.ymd)} (Holiday)`
                                 : onLeave
                                 ? "User on leave"
+                                : isOverloaded
+                                ? `OVERLOADED — ${capacityReason}`
                                 : isFull
-                                ? "FULL"
+                                  ? `FULL — ${capacityReason}`
                                 : !weekendMode && isWeekendYmd(day.ymd)
                                 ? "Weekend blocked"
                                 : ""
@@ -1018,8 +1030,10 @@ export default function ManagerGlobalCalendarPage() {
                               handleDrop(e, row, day.ymd);
                             }}
                           >
-                            {isFull ? (
-                              <p className="text-xs font-semibold text-orange-700 dark:text-orange-300">FULL</p>
+                            {isOverloaded ? (
+                              <p className="text-xs font-semibold text-red-700 dark:text-red-300">OVERLOADED</p>
+                            ) : isFull ? (
+                              <p className="text-xs font-semibold text-blue-700 dark:text-blue-300">FULL</p>
                             ) : null}
                             {isHoliday ? (
                               <p className="text-xs text-muted-foreground">Holiday</p>
@@ -1107,7 +1121,7 @@ export default function ManagerGlobalCalendarPage() {
                                       ? "border-red-600/80 bg-red-500/10 text-red-700 dark:text-red-200"
                                       : "text-foreground dark:text-slate-100"
                                   } ${isStart ? "rounded-l" : "rounded-l-none"} ${isEnd ? "rounded-r" : "rounded-r-none"} ${
-                                    onLeave || isHoliday || isFull ? "cursor-not-allowed opacity-80" : ""
+                                    onLeave || isHoliday || isFull || isOverloaded ? "cursor-not-allowed opacity-80" : ""
                                   } ${dragBusy ? "opacity-70" : ""} relative cursor-pointer select-none`}
                                   style={!hasConflict && !urgent ? normalStyle : undefined}
                                   title={
@@ -1115,8 +1129,10 @@ export default function ManagerGlobalCalendarPage() {
                                       ? `${holidayByDay.get(day.ymd)} (Holiday)`
                                       : onLeave
                                       ? "User on leave"
-                                      : isFull
-                                      ? "FULL"
+                                      : isOverloaded
+                                        ? `OVERLOADED — ${capacityReason}`
+                                        : isFull
+                                          ? `FULL — ${capacityReason}`
                                       : hasConflict
                                       ? conflictReason || "Scheduling conflict"
                                       : `${task.clientName} • ${ctLabel} • ${task.title} • ${task.stageName}`
