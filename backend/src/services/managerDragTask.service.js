@@ -19,7 +19,11 @@ const {
   pickAssigneeForBufferDay,
 } = require("./simpleCalendar.service");
 
-const USER_EDITABLE_STAGES = new Set(["Plan", "Shoot", "Edit", "Approval"]);
+/** Reels: Plan → Shoot → Edit → Approval. Post/carousel: Plan → Design → Approval. Post stage never moved here. */
+const USER_EDITABLE_STAGES = new Set(["Plan", "Shoot", "Edit", "Design", "Approval"]);
+
+const REEL_STAGE_ORDER = ["Plan", "Shoot", "Edit", "Approval", "Post"];
+const POST_LIKE_STAGE_ORDER = ["Plan", "Design", "Approval", "Post"];
 const GLOBAL_DRAG_LOCK_KEY = "manager-global-drag-lock";
 const LOCK_TTL_MS = 60 * 1000;
 
@@ -273,7 +277,7 @@ async function runManagerDragTask({
     return {
       ok: false,
       status: 400,
-      error: "Only Plan, Shoot, Edit, and Approval stages can be moved",
+      error: "Only Plan, Shoot, Edit, Design, and Approval stages can be moved",
     };
   }
 
@@ -1053,9 +1057,8 @@ async function runManagerDragTask({
     };
   }
 
-  // Hard constraint: enforce strict stage sequence (Plan < Shoot < Edit < Approval < Post).
-  // We validate only the stages present in the draft payload.
-  const STAGE_ORDER = ["Plan", "Shoot", "Edit", "Approval", "Post"];
+  // Hard constraint: strict pipeline order (reel vs post/carousel). Post stage date is validated elsewhere.
+  const STAGE_ORDER = isReel ? REEL_STAGE_ORDER : POST_LIKE_STAGE_ORDER;
   const byName = new Map(
     (stages || []).map((s) => [String(s?.name || s?.stageName || ""), normalizeUTCDate(s?.date)])
   );
@@ -1071,7 +1074,12 @@ async function runManagerDragTask({
     if (!aDate || !bDate) continue;
     const yA = utcYmd(aDate);
     const yB = utcYmd(bDate);
-    if (yA === yB && aName === "Edit" && bName === "Approval") continue;
+    if (
+      yA === yB &&
+      ((aName === "Edit" && bName === "Approval") || (aName === "Design" && bName === "Approval"))
+    ) {
+      continue;
+    }
     if (aDate.getTime() >= bDate.getTime()) {
       return {
         ok: false,
