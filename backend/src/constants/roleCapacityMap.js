@@ -31,8 +31,6 @@ const ROLE_SLUG_TO_WORKFLOW_ROLE = {
   designer: "graphicDesigner",
   posting: "postingExecutive",
   manager: "manager",
-  /** Optional / legacy */
-  "campaign-manager": "manager",
 };
 
 function isRoleContentTypeAllowed(role, contentType) {
