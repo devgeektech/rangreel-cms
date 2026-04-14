@@ -256,7 +256,12 @@ function StageChip({
 }) {
   const meta = CONTENT_TYPE_META[entry.contentType] || CONTENT_TYPE_META.static_post;
   const postLocked = lockPostStage && entry.stageName === "Post";
-  const dragDisabled = entry.locked || saving || !canEdit || postLocked || !entry.isCustomCalendar;
+  const dragDisabled =
+    entry.locked ||
+    saving ||
+    !canEdit ||
+    postLocked ||
+    (!isCustomizationMode && !entry.isCustomCalendar);
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
     id: entry.id,
     disabled: dragDisabled,
