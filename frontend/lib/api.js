@@ -285,6 +285,7 @@ export const api = {
       body,
     }),
   getTeamUsers: () => requestJson("/manager/team-users", { method: "GET" }),
+  getManagerTeamCapacity: () => requestJson("/manager/team-capacity", { method: "GET" }),
 
   /** PROMPT 67 — Manager drag with full scheduler (replacement, buffer, duration, weekend). */
   managerDragTask: (body) =>
