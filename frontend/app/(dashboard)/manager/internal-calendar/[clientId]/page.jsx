@@ -157,6 +157,7 @@ export default function ManagerInternalCalendarPage() {
         contentId: String(row?.contentItem || `preview-${selectedSchedule.monthIndex}-${idx + 1}`),
         title: row?.title || `Item ${idx + 1}`,
         type: row?.type || inferType(row?.title),
+        isCustomCalendar: true,
         postingDate: toYmdUtc(row?.postingDate),
         stages:
           Array.isArray(row?.stages) && row.stages.length
@@ -177,8 +178,11 @@ export default function ManagerInternalCalendarPage() {
               ],
       }));
     }
+    if (selectedScheduleIsDraft) {
+      items = (items || []).map((it) => ({ ...it, isCustomCalendar: true }));
+    }
     return { ...draft, items };
-  }, [draft, selectedSchedule]);
+  }, [draft, selectedSchedule, selectedScheduleIsDraft]);
 
   const handleCreateNextMonth = async () => {
     if (!clientId) return;
@@ -390,6 +394,42 @@ export default function ManagerInternalCalendarPage() {
                     Number(s.monthIndex) === Number(selectedMonthIndex) ? { ...s, items: nextItems } : s
                   )
                 );
+                // Keep base draft in sync for this custom month window so DnD updates render immediately.
+                setDraft((prev) => {
+                  if (!prev || !selectedSchedule) return prev;
+                  const startYmd = toYmdUtc(selectedSchedule.startDate);
+                  const endYmd = toYmdUtc(selectedSchedule.endDate);
+                  const incomingById = new Map(
+                    (nextDraft?.items || []).map((it) => [String(it?.contentId || ""), it])
+                  );
+                  const untouched = (prev.items || []).filter((it) => {
+                    const p = toYmdUtc(it?.postingDate);
+                    return !(p && startYmd && endYmd && p >= startYmd && p <= endYmd);
+                  });
+                  const rewritten = (prev.items || [])
+                    .filter((it) => {
+                      const p = toYmdUtc(it?.postingDate);
+                      return p && startYmd && endYmd && p >= startYmd && p <= endYmd;
+                    })
+                    .map((it) => {
+                      const key = String(it?.contentId || "");
+                      const moved = incomingById.get(key);
+                      if (!moved) return it;
+                      return {
+                        ...it,
+                        postingDate: moved.postingDate || it.postingDate,
+                        stages: (moved.stages || []).map((s) => ({
+                          ...s,
+                          date: s?.date,
+                        })),
+                        isCustomCalendar: true,
+                      };
+                    });
+                  return {
+                    ...prev,
+                    items: [...untouched, ...rewritten],
+                  };
+                });
               }}
             />
           )}
