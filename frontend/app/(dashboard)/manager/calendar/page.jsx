@@ -975,21 +975,7 @@ export default function ManagerGlobalCalendarPage() {
                   {group.rows.map((row) => (
                     <div key={`${group.role}-${row.userId}`} className="contents">
                       <div className="sticky left-0 z-10 border-b border-r border-border bg-card px-3 py-3 text-sm font-medium">
-                        {(() => {
-                          const totalCapacity =
-                            getRoleBucketCapacity(row.role, "reel") +
-                            getRoleBucketCapacity(row.role, "static_post") +
-                            getRoleBucketCapacity(row.role, "carousel");
-                          let peakUsed = 0;
-                          for (const d of calendarDays) {
-                            const used =
-                              Number(usedByUserDayType.get(`${row.userId}::${d.ymd}::reel`) || 0) +
-                              Number(usedByUserDayType.get(`${row.userId}::${d.ymd}::static_post`) || 0) +
-                              Number(usedByUserDayType.get(`${row.userId}::${d.ymd}::carousel`) || 0);
-                            if (used > peakUsed) peakUsed = used;
-                          }
-                          return `${row.name} (${peakUsed}/${totalCapacity})`;
-                        })()}
+                        {row.name}
                       </div>
                       {calendarDays.map((day) => {
                         const dayTasks = row.byDay.get(day.ymd) || [];
@@ -1220,8 +1206,6 @@ export default function ManagerGlobalCalendarPage() {
                                         {task.clientName}
                                         {taskIsOverloaded ? (
                                           <AlertTriangle className="h-3 w-3 shrink-0 text-red-600" />
-                                        ) : taskIsFull ? (
-                                          <span className="text-[10px] leading-none">⛔</span>
                                         ) : null}
                                         {hasConflict ? (
                                           <AlertTriangle className="h-3 w-3 shrink-0 text-red-600" />
@@ -1253,8 +1237,6 @@ export default function ManagerGlobalCalendarPage() {
                                     <>
                                       {taskIsOverloaded ? (
                                         <AlertTriangle className="mb-0.5 h-3 w-3 shrink-0 text-red-600" />
-                                      ) : taskIsFull ? (
-                                        <span className="mb-0.5 text-[10px] leading-none text-blue-700 dark:text-blue-200">⛔</span>
                                       ) : null}
                                       <span
                                         className={`mb-0.5 inline-block rounded px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide border ${contentTypeChipClassName(task.contentType)}`}
