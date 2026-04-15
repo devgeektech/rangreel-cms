@@ -20,7 +20,7 @@ const {
 } = require("./simpleCalendar.service");
 
 /** Reels: Plan → Shoot → Edit → Approval. Post/carousel: Plan → Design → Approval. Post stage never moved here. */
-const USER_EDITABLE_STAGES = new Set(["Plan", "Shoot", "Edit", "Design", "Approval"]);
+const USER_EDITABLE_STAGES = new Set(["Plan", "Shoot", "Edit", "Design", "Approval", "Post"]);
 
 const REEL_STAGE_ORDER = ["Plan", "Shoot", "Edit", "Approval", "Post"];
 const POST_LIKE_STAGE_ORDER = ["Plan", "Design", "Approval", "Post"];
@@ -343,6 +343,15 @@ async function runManagerDragTask({
     if (targetUserExists) primaryUserId = targetUserIdInput;
   }
   if (!primaryUserId) return { ok: false, status: 400, error: "Stage has no assigned user" };
+
+  if (String(stageName) === "Post" && toYMD(requested) !== toYMD(oldTargetDate)) {
+    return {
+      ok: false,
+      status: 400,
+      error: "The posting date is locked. You can only move this task to reassign it to another available executive on the same day.",
+      details: { code: "POST_DATE_LOCKED" },
+    };
+  }
 
   const role = targetStage.role;
   if (!role) return { ok: false, status: 400, error: "Stage has no role" };

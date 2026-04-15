@@ -80,7 +80,7 @@ const CONTENT_TYPE_META = {
   },
 };
 
-const DEFAULT_EDITABLE = new Set(["Plan", "Shoot", "Edit", "Approval"]);
+const DEFAULT_EDITABLE = new Set(["Plan", "Shoot", "Edit", "Approval", "Post"]);
 
 function parseMonthStr(monthStr) {
   const m = String(monthStr).match(/^(\d{4})-(\d{2})$/);
