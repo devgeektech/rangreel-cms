@@ -242,9 +242,22 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
     const monthStart = new Date(Date.UTC(year, monthIndex, 1));
     const monthEnd = new Date(Date.UTC(year, monthIndex + 1, 0));
 
-    const clientDocs = await Client.find({ manager: req.user.id })
-      .select("_id clientName team")
-      .lean();
+    const me = await User.findById(req.user.id).populate("role", "slug").select("roleType role").lean();
+    const roleSlug = String(me?.role?.slug || "").toLowerCase();
+    const isStrategist = me?.roleType === "user" && roleSlug === "strategist";
+
+    const strategistAssignedFilter = {
+      $or: [
+        { "team.reels.strategist": req.user.id },
+        { "team.posts.strategist": req.user.id },
+        { "team.carousel.strategist": req.user.id },
+      ],
+    };
+
+    // Prompt 212: strategist must see full global calendar (all clients),
+    // but edit permissions remain restricted via assignedClientIds checks.
+    const clientQuery = isStrategist ? {} : { manager: req.user.id };
+    const clientDocs = await Client.find(clientQuery).select("_id clientName team").lean();
 
     const clientIds = (clientDocs || []).map((c) => c._id);
     if (!clientIds.length) {
@@ -464,7 +477,18 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
       clientName: c.clientName || "Client",
     }));
 
-    return success(res, { month, clients, updatedTasks, tasks: updatedTasks, leaveBlocks });
+    const assignedClientIds = isStrategist
+      ? (await Client.find(strategistAssignedFilter).select("_id").lean()).map((c) => String(c._id))
+      : [];
+
+    return success(res, {
+      month,
+      clients,
+      updatedTasks,
+      tasks: updatedTasks,
+      leaveBlocks,
+      assignedClientIds,
+    });
   } catch (err) {
     return failure(res, err.message || "Failed to fetch global manager calendar", 500);
   }

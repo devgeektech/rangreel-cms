@@ -152,8 +152,7 @@ function hashClientKey(input) {
   return Math.abs(h);
 }
 
-export function GlobalCalendarPage({ actor = "manager" }) {
-  const isStrategist = actor === "strategist";
+export default function StrategistGlobalCalendar() {
   const DEFAULT_ROLE_CAPACITY = 5;
   const [month, setMonth] = useState(() => toMonthStringUTC(new Date()));
   const [loading, setLoading] = useState(true);
@@ -163,7 +162,6 @@ export function GlobalCalendarPage({ actor = "manager" }) {
   const [leaveBlocks, setLeaveBlocks] = useState([]);
   const [holidays, setHolidays] = useState([]);
   const [capacityByRole, setCapacityByRole] = useState({});
-  const [assignedClientIds, setAssignedClientIds] = useState([]);
   const [weekendMode, setWeekendMode] = useState(true);
   const [draggingTaskId, setDraggingTaskId] = useState("");
   const [hoveredDropCell, setHoveredDropCell] = useState("");
@@ -321,20 +319,16 @@ export function GlobalCalendarPage({ actor = "manager" }) {
       : null;
     try {
       if (!silent) setLoading(true);
-      // Single global source for calendar; strategist has restricted edit permissions.
+      // Single global source for manager calendar.
       const [calendarRes, teamUsersRes, leaveRes, holidayRes] = await Promise.all([
-        isStrategist ? api.getStrategistGlobalCalendar(month) : api.getManagerGlobalCalendar(month),
-        isStrategist ? api.getStrategistTeamUsers() : api.getTeamUsers(),
-        isStrategist ? api.getStrategistLeave() : api.getManagerLeave(),
+        api.getStrategistGlobalCalendar(month),
+        api.getStrategistTeamUsers(),
+        api.getStrategistLeave(),
         api.getHoliday(),
       ]);
-      const capRes = await (isStrategist
-        ? api.getStrategistTeamCapacity()
-        : api.getManagerTeamCapacity()
-      ).catch(() => ({ data: [] }));
+      const capRes = await api.getStrategistTeamCapacity().catch(() => ({ data: [] }));
       const data = calendarRes?.data || calendarRes || {};
       setTasks(data?.updatedTasks || data?.tasks || []);
-      setAssignedClientIds(Array.isArray(data?.assignedClientIds) ? data.assignedClientIds : []);
       setUsers(teamUsersRes?.data || []);
       setLeaveEntries(leaveRes?.data || leaveRes || []);
       setLeaveBlocks(data?.leaveBlocks || []);
@@ -375,7 +369,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
   useEffect(() => {
     loadCalendar();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [month, isStrategist]);
+  }, [month]);
 
   useEffect(() => {
     const pendingSuccess = pendingLeaveSuccessRef.current;
@@ -655,12 +649,6 @@ export function GlobalCalendarPage({ actor = "manager" }) {
     return !weekendBlocked;
   };
 
-  const canEditTask = (task) => {
-    if (!isStrategist) return true;
-    const cid = String(task?.clientId || "");
-    return assignedClientIds.includes(cid);
-  };
-
   const handleDrop = async (e, row, ymd) => {
     if (dragBusy) return;
     const taskIdFromDrop = String(e?.dataTransfer?.getData("taskId") || "");
@@ -675,12 +663,6 @@ export function GlobalCalendarPage({ actor = "manager" }) {
           String(t?.stageId || "") === stageIdFromDrop
       );
     if (!task) return;
-    if (!canEditTask(task)) {
-      const msg = "Access denied: You can only modify tasks of assigned clients";
-      setDropError(msg);
-      toast.error(msg);
-      return;
-    }
     if (!canDropOnCell(row, ymd)) {
       const msg = "Cannot move: weekend blocked (Weekend is OFF)";
       setDropError(msg);
@@ -720,7 +702,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
       if (!task.contentItemId || !task.stageName) {
         throw new Error("Task metadata missing for drag operation");
       }
-      await (isStrategist ? api.strategistDragTask : api.managerDragTask)({
+      await api.strategistDragTask({
         contentId: task.contentItemId,
         stageName: task.stageName,
         newDate: ymd,
@@ -772,9 +754,9 @@ export function GlobalCalendarPage({ actor = "manager" }) {
       const successStartDate = startDate;
       // Update = delete + create (current API set has no PATCH leave endpoint).
       if (editingLeaveId) {
-        await api.deleteManagerLeave(editingLeaveId);
+        await api.deleteStrategistLeave(editingLeaveId);
       }
-      await api.addManagerLeave({ userId, startDate, endDate, reason });
+      await api.addStrategistLeave({ userId, startDate, endDate, reason });
       toast.success(editingLeaveId ? "Leave updated" : "Leave added");
       resetLeaveForm();
       await loadCalendar({ silent: true });
@@ -830,7 +812,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
     if (!leaveId) return;
     try {
       setLeaveBusy(true);
-      await api.deleteManagerLeave(leaveId);
+      await api.deleteStrategistLeave(leaveId);
       toast.success("Leave deleted");
       if (String(editingLeaveId) === String(leaveId)) resetLeaveForm();
       await loadCalendar();
@@ -846,8 +828,8 @@ export function GlobalCalendarPage({ actor = "manager" }) {
     <section className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold">Global Calendar</h2>
-          <p className="text-sm text-muted-foreground">Single global view across all clients, grouped by role then user.</p>
+          <h2 className="text-2xl font-semibold">Strategist Global Calendar</h2>
+          <p className="text-sm text-muted-foreground">Global view across all roles. You can drag only for assigned clients.</p>
         </div>
 
         <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2">
@@ -1153,9 +1135,8 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                 <div
                                   key={`${task.taskId}-${day.ymd}`}
                                   data-task-card="true"
-                                  draggable={Boolean(!dragBusy && canEditTask(task))}
+                                  draggable={Boolean(!dragBusy)}
                                   onClick={() => {
-                                    if (!canEditTask(task)) return;
                                     const recentlyDragged =
                                       String(lastDragEndRef.current.taskId || "") === String(task.taskId || "") &&
                                       Date.now() - Number(lastDragEndRef.current.at || 0) < 220;
@@ -1163,10 +1144,6 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                     setSelectedTask({ task, day: day.ymd, userId: row.userId });
                                   }}
                                   onDragStart={(e) => {
-                                    if (!canEditTask(task)) {
-                                      e.preventDefault();
-                                      return;
-                                    }
                                     if (e?.dataTransfer) {
                                       e.dataTransfer.setData("taskId", String(task.taskId || ""));
                                       e.dataTransfer.setData("itemId", String(task.contentItemId || ""));
@@ -1193,20 +1170,12 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                       : "text-foreground dark:text-slate-100"
                                   } ${isStart ? "rounded-l" : "rounded-l-none"} ${isEnd ? "rounded-r" : "rounded-r-none"} ${
                                     onLeave || isHoliday ? "cursor-not-allowed opacity-80" : ""
-                                  } ${dragBusy ? "opacity-70" : ""} relative ${
-                                    canEditTask(task)
-                                      ? "cursor-pointer"
-                                      : isStrategist
-                                        ? "disabled-task pointer-events-none opacity-40 grayscale-[80%] cursor-not-allowed"
-                                        : "cursor-pointer"
-                                  } select-none`}
+                                  } ${dragBusy ? "opacity-70" : ""} relative cursor-pointer select-none`}
                                   style={
                                     !hasConflict && !urgent && !taskLoadClass ? normalStyle : undefined
                                   }
                                   title={
-                                    !canEditTask(task)
-                                      ? "You can only modify tasks of your assigned clients"
-                                      : isHoliday
+                                    isHoliday
                                       ? `${holidayByDay.get(day.ymd)} (Holiday)`
                                       : onLeave
                                       ? "User on leave"
@@ -1338,7 +1307,6 @@ export function GlobalCalendarPage({ actor = "manager" }) {
               </span>
             </CardContent>
           </Card>
-          {!isStrategist ? (
           <Card
             ref={leaveSectionRef}
             className={highlightLeaveSection ? "ring-2 ring-amber-500/80 bg-amber-500/10 transition-colors duration-300" : ""}
@@ -1428,7 +1396,6 @@ export function GlobalCalendarPage({ actor = "manager" }) {
               </div>
             </CardContent>
           </Card>
-          ) : null}
         </>
       )}
       {dropError ? <p className="text-sm text-destructive whitespace-pre-line">{dropError}</p> : null}
@@ -1621,9 +1588,5 @@ export function GlobalCalendarPage({ actor = "manager" }) {
       </Dialog>
     </section>
   );
-}
-
-export default function ManagerGlobalCalendarPage() {
-  return <GlobalCalendarPage actor="manager" />;
 }
 

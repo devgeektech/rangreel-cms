@@ -47,6 +47,11 @@ const ymdUTC = (date) => {
   ).padStart(2, "0")}`;
 };
 
+function getMonthKey(date) {
+  if (!date) return "";
+  return new Date(date).toISOString().slice(0, 7); // YYYY-MM
+}
+
 const buildHolidaySetUTC = async (startDate, endDate) => {
   const start = createUTCDate(startDate);
   const end = createUTCDate(endDate);
@@ -197,7 +202,8 @@ async function generateCalendarDraft({
       carouselsCount,
       reelsMaxOffset,
       postMaxOffset,
-      addDaysUTC
+      addDaysUTC,
+      startDate // Prompt 209
     );
     const strategistStarts = buildStrategistStartDates({
       baseStartDate: cycleBaseStartDate,
@@ -220,7 +226,9 @@ async function generateCalendarDraft({
       if (unit.kind === "reel") {
         reelCursor += 1;
         const i = unit.index;
-        const isUrgent = i <= 2;
+        const reelMonth = getMonthKey(cycleBaseStartDate);
+        const firstMonth = getMonthKey(startDate);
+        const isUrgent = reelMonth === firstMonth && i <= 2;
         const reelItem = await buildReelItemForCalendarDraft({
           i,
           isUrgent,

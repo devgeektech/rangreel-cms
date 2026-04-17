@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CalendarDays,
+  Calendar,
   CheckCircle2,
   ClipboardList,
   Film,
@@ -29,7 +30,10 @@ import {
 } from "@/lib/roleDashboardTasks";
 import { cn } from "@/lib/utils";
 
-const navItems = [{ href: "/strategist", label: "Dashboard", icon: LayoutDashboard }];
+const navItems = [
+  { href: "/strategist", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/strategist/global-calendar", label: "Calendar", icon: Calendar },
+];
 
 const accent = "#0EA5E9";
 

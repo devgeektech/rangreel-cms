@@ -81,6 +81,10 @@ const ymdUTC = (date) => {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 };
 
+function getMonthKey(date) {
+  return new Date(date).toISOString().slice(0, 7); // YYYY-MM
+}
+
 const isWeekendUTC = (d) => {
   const day = d.getUTCDay();
   return day === 0 || day === 6;
@@ -1342,6 +1346,7 @@ async function generateClientReels(client, options = {}) {
     .lean();
 
   if (!populatedClient?.startDate) return { insertedCount: 0, endDate: null };
+  const firstMonth = getMonthKey(populatedClient.startDate);
 
   const plan = populatedClient.activeContentCounts;
   const hasPlan =
@@ -1440,7 +1445,8 @@ async function generateClientReels(client, options = {}) {
     reelsCount,
     postsCount,
     carouselsCount,
-    addDaysUTC
+    addDaysUTC,
+    populatedClient.startDate // Prompt 209
   );
   const strategistStarts = buildStrategistStartDates({
     baseStartDate,
@@ -1453,7 +1459,9 @@ async function generateClientReels(client, options = {}) {
   for (const unit of workUnits) {
     if (unit.kind === "reel") {
     const i = unit.index;
-    const isUrgent = i <= 2;
+    const reelMonth = getMonthKey(unit.anchorDate);
+    const isFirstMonth = reelMonth === firstMonth;
+    const isUrgent = isFirstMonth && i <= 2;
     const {
       planDue,
       shootDue,

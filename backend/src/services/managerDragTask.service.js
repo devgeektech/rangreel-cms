@@ -236,6 +236,9 @@ function getManagerApprovalTaskWindow(item) {
  */
 async function runManagerDragTask({
   managerUserId,
+  actorUserId,
+  actorRole = "manager",
+  assignedClientIds = [],
   contentId,
   stageName,
   newDate: newDateInput,
@@ -243,8 +246,9 @@ async function runManagerDragTask({
   fromGlobalCalendar = false,
   targetUserId: targetUserIdInput,
 }) {
+  const effectiveActorUserId = actorUserId || managerUserId;
   const weekendEnabled = allowWeekend === true;
-  const lockAcquired = await acquireGlobalDragLock(managerUserId);
+  const lockAcquired = await acquireGlobalDragLock(effectiveActorUserId);
   if (!lockAcquired) {
     return {
       ok: false,
@@ -287,8 +291,24 @@ async function runManagerDragTask({
   const draft = await ClientScheduleDraft.findOne({ "items.contentId": contentId });
   if (!draft) return { ok: false, status: 404, error: "Schedule draft not found" };
 
-  const client = await Client.findOne({ _id: draft.clientId, manager: managerUserId }).select("_id").lean();
-  if (!client) return { ok: false, status: 403, error: "Client not found or access denied" };
+  let client = null;
+  if (String(actorRole) === "manager") {
+    client = await Client.findOne({ _id: draft.clientId, manager: effectiveActorUserId }).select("_id").lean();
+    if (!client) return { ok: false, status: 403, error: "Client not found or access denied" };
+  } else if (String(actorRole) === "strategist") {
+    client = await Client.findById(draft.clientId).select("_id").lean();
+    const allowed = new Set((assignedClientIds || []).map((id) => String(id)));
+    if (!client || !allowed.has(String(client._id))) {
+      return {
+        ok: false,
+        status: 403,
+        error: "Access denied: You can only modify tasks of assigned clients",
+      };
+    }
+  } else {
+    client = await Client.findById(draft.clientId).select("_id").lean();
+    if (!client) return { ok: false, status: 403, error: "Client not found or access denied" };
+  }
 
   const item = (draft.items || []).find(
     (it) => it?.contentId && String(it.contentId) === String(contentId)

@@ -24,12 +24,12 @@ function isItemActive(pathname, href) {
   return pathname.startsWith(`${href}/`);
 }
 
-export default function DashboardShell({ children, navItems = [] }) {
+export default function DashboardShell({ children, navItems = [], defaultCollapsed = false }) {
   const pathname = usePathname();
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const clearUser = useAuthStore((state) => state.clearUser);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(Boolean(defaultCollapsed));
 
   const mobileItems = useMemo(() => navItems.slice(0, 5), [navItems]);
 

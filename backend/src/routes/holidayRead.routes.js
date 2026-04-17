@@ -5,8 +5,8 @@ const holidayController = require("../controllers/holiday.controller");
 
 const router = express.Router();
 
-// PROMPT 95: manager calendar reads holidays from admin-managed source.
-router.use(auth, roleGuard(["manager", "admin"]));
+// Admin manages holidays; manager/strategist calendars read them.
+router.use(auth, roleGuard(["manager", "admin", "user"]));
 router.get("/", holidayController.getHolidays);
 
 module.exports = router;

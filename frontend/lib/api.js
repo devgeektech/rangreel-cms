@@ -286,6 +286,32 @@ export const api = {
     }),
   getTeamUsers: () => requestJson("/manager/team-users", { method: "GET" }),
   getManagerTeamCapacity: () => requestJson("/manager/team-capacity", { method: "GET" }),
+  getStrategistGlobalCalendar: (month) =>
+    requestJson(`/user/strategist/global-calendar?month=${encodeURIComponent(month)}`, {
+      method: "GET",
+    }),
+  getStrategistTeamUsers: () => requestJson("/user/strategist/team-users", { method: "GET" }),
+  getStrategistTeamCapacity: () =>
+    requestJson("/user/strategist/team-capacity", { method: "GET" }),
+  getStrategistLeave: (userId) =>
+    requestJson(
+      `/user/strategist/leave${userId ? `?userId=${encodeURIComponent(userId)}` : ""}`,
+      { method: "GET" }
+    ),
+  addStrategistLeave: (body) =>
+    requestJson("/user/strategist/leave", {
+      method: "POST",
+      body,
+    }),
+  deleteStrategistLeave: (leaveId) =>
+    requestJson(`/user/strategist/leave/${encodeURIComponent(leaveId)}`, {
+      method: "DELETE",
+    }),
+  strategistDragTask: (body) =>
+    requestJson("/user/strategist/drag-task", {
+      method: "PATCH",
+      body,
+    }),
 
   /** PROMPT 67 — Manager drag with full scheduler (replacement, buffer, duration, weekend). */
   managerDragTask: (body) =>
@@ -422,6 +448,22 @@ export const api = {
   getMyTasks: (month) =>
     requestJson(`/user/my-tasks?month=${encodeURIComponent(month)}`, {
       method: "GET",
+    }),
+  getStrategistGlobalCalendar: (month) =>
+    requestJson(`/user/global-calendar?month=${encodeURIComponent(month)}`, {
+      method: "GET",
+    }),
+  getStrategistTeamUsers: () => requestJson("/user/team-users", { method: "GET" }),
+  getStrategistTeamCapacity: () => requestJson("/user/team-capacity", { method: "GET" }),
+  getStrategistLeave: (userId) =>
+    requestJson(
+      `/user/leave${userId ? `?userId=${encodeURIComponent(userId)}` : ""}`,
+      { method: "GET" }
+    ),
+  strategistDragTask: (body) =>
+    requestJson("/user/drag-task", {
+      method: "PATCH",
+      body,
     }),
   getTeamClient: (id) =>
     requestJson(`/user/clients/${encodeURIComponent(id)}`, {

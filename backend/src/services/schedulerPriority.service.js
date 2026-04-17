@@ -9,16 +9,35 @@
  * Tie-break: reel → post → carousel when anchors match.
  */
 
-const KIND_ORDER = { reel: 0, post: 1, carousel: 2 };
+const KIND_ORDER = {
+  reel: 0,
+  post: 1,
+  carousel: 2,
+};
+
+function getMonthKey(date) {
+  if (!date) return "";
+  return new Date(date).toISOString().slice(0, 7); // YYYY-MM
+}
 
 /**
  * Used by `generateClientReels`: anchors match reel/post/carousel stagger from `baseStartDate` (same as loop seeds).
  */
-function buildSortedWorkUnitsClientGeneration(baseStartDate, reelsCount, postsCount, carouselsCount, addDaysUTC) {
+function buildSortedWorkUnitsClientGeneration(
+  baseStartDate,
+  reelsCount,
+  postsCount,
+  carouselsCount,
+  addDaysUTC,
+  clientStartDate // Prompt 209
+) {
   const units = [];
+  const firstMonth = getMonthKey(clientStartDate);
+  const currentBatchMonth = getMonthKey(baseStartDate);
+  const isFirstMonth = !!firstMonth && !!currentBatchMonth && firstMonth === currentBatchMonth;
 
   for (let i = 1; i <= reelsCount; i++) {
-    const isUrgent = i <= 2;
+    const isUrgent = isFirstMonth && i <= 2;
     const staggerOffset = isUrgent ? (i - 1) * 1 : (i - 1) * 2;
     units.push({
       kind: "reel",
@@ -62,12 +81,16 @@ function buildSortedWorkUnitsDraft(
   carouselsCount,
   reelsMaxOffset,
   postMaxOffset,
-  addDaysUTC
+  addDaysUTC,
+  clientStartDate // Prompt 209
 ) {
   const units = [];
+  const firstMonth = getMonthKey(clientStartDate);
+  const currentBatchMonth = getMonthKey(baseStartDate);
+  const isFirstMonth = !!firstMonth && !!currentBatchMonth && firstMonth === currentBatchMonth;
 
   for (let i = 1; i <= reelsCount; i++) {
-    const isUrgent = i <= 2;
+    const isUrgent = isFirstMonth && i <= 2;
     const staggerOffset = isUrgent ? (i - 1) * 1 : (i - 1) * 2;
     units.push({
       kind: "reel",

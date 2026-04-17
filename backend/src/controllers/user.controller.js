@@ -1,6 +1,11 @@
 const User = require("../models/User");
 const ContentItem = require("../models/ContentItem");
 const Role = require("../models/Role");
+const Client = require("../models/Client");
+const Leave = require("../models/Leave");
+const TeamCapacity = require("../models/TeamCapacity");
+const managerReadController = require("./managerRead.controller");
+const { runManagerDragTask } = require("../services/managerDragTask.service");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -291,9 +296,129 @@ const getTeamClient = async (req, res) => {
   }
 };
 
+const getUserRoleSlug = async (userId) => {
+  const me = await User.findById(userId).populate("role", "slug").select("role roleType").lean();
+  return String(me?.role?.slug || "").toLowerCase();
+};
+
+const getStrategistAssignedClientIds = async (userId) => {
+  const docs = await Client.find({
+    $or: [
+      { "team.reels.strategist": userId },
+      { "team.posts.strategist": userId },
+      { "team.carousel.strategist": userId },
+    ],
+  })
+    .select("_id")
+    .lean();
+  return (docs || []).map((d) => String(d._id));
+};
+
+const ensureStrategistUser = async (req) => {
+  const dashboardRoute = String(req.user?.dashboardRoute || "").toLowerCase();
+  if (dashboardRoute.startsWith("/strategist")) return true;
+  const roleSlug = await getUserRoleSlug(req.user.id);
+  return roleSlug === "strategist";
+};
+
+const getStrategistGlobalCalendar = async (req, res) => {
+  const ok = await ensureStrategistUser(req);
+  if (!ok) return failure(res, "Only strategist can access this endpoint", 403);
+  return managerReadController.getManagerGlobalCalendarFinal(req, res);
+};
+
+const getStrategistTeamUsers = async (req, res) => {
+  try {
+    const ok = await ensureStrategistUser(req);
+    if (!ok) return failure(res, "Only strategist can access this endpoint", 403);
+    const users = await User.find({ roleType: "user" }).populate("role").sort({ createdAt: -1 }).lean();
+    const filtered = users.filter((u) => u.role && !u.role.isSystem);
+    return success(res, filtered);
+  } catch (error) {
+    return failure(res, error.message || "Failed to fetch team users", 500);
+  }
+};
+
+const getStrategistTeamCapacity = async (req, res) => {
+  try {
+    const ok = await ensureStrategistUser(req);
+    if (!ok) return failure(res, "Only strategist can access this endpoint", 403);
+    const docs = await TeamCapacity.find({}).sort({ role: 1 }).lean();
+    const data = (docs || []).map((d) => ({
+      role: d.role,
+      reelCapacity: d.reelCapacity,
+      postCapacity: d.postCapacity,
+      carouselCapacity: d.carouselCapacity,
+      updatedAt: d.updatedAt,
+    }));
+    return success(res, data);
+  } catch (error) {
+    return failure(res, error.message || "Failed to fetch team capacity", 500);
+  }
+};
+
+const getStrategistLeaves = async (req, res) => {
+  try {
+    const ok = await ensureStrategistUser(req);
+    if (!ok) return failure(res, "Only strategist can access this endpoint", 403);
+    const leaves = await Leave.find({}).select("userId startDate endDate reason").lean();
+    const normalized = (leaves || []).map((l) => ({
+      leaveId: String(l._id),
+      userId: String(l.userId),
+      startDate: l.startDate,
+      endDate: l.endDate,
+      reason: l.reason || "",
+    }));
+    return success(res, normalized);
+  } catch (error) {
+    return failure(res, error.message || "Failed to fetch leaves", 500);
+  }
+};
+
+const strategistDragTask = async (req, res) => {
+  try {
+    const ok = await ensureStrategistUser(req);
+    if (!ok) {
+      return failure(res, "Only strategist can use this endpoint", 403);
+    }
+
+    const { contentId, stageName, newDate, allowWeekend, fromGlobalCalendar, targetUserId } =
+      req.body || {};
+    const assignedClientIds = await getStrategistAssignedClientIds(req.user.id);
+
+    const result = await runManagerDragTask({
+      actorUserId: req.user.id,
+      actorRole: "strategist",
+      assignedClientIds,
+      contentId,
+      stageName,
+      newDate,
+      allowWeekend,
+      fromGlobalCalendar: fromGlobalCalendar === true,
+      targetUserId,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 400).json({
+        success: false,
+        error: result.error,
+        details: result.details,
+      });
+    }
+    return success(res, result.data);
+  } catch (error) {
+    return failure(res, error.message || "Drag task failed", 500);
+  }
+};
+
 module.exports = {
   getMe,
   getMyTasks,
   updateMyTaskStatus,
   getTeamClient,
+  getStrategistGlobalCalendar,
+  getStrategistTeamUsers,
+  getStrategistTeamCapacity,
+  getStrategistLeaves,
+  strategistDragTask,
 };
