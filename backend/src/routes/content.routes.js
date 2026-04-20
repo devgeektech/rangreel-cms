@@ -8,6 +8,12 @@ const contentReadController = require("../controllers/contentRead.controller");
 const router = express.Router();
 
 router.get(
+  "/share/:id",
+  auth,
+  asyncHandler(contentController.getSharedContentDetails)
+);
+
+router.get(
   "/:id",
   auth,
   asyncHandler(contentReadController.getContentById)

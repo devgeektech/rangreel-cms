@@ -6,6 +6,51 @@ const ReminderEmailLog = require("../models/ReminderEmailLog");
 const { sendNotification } = require("../services/notification.service");
 const { sendEmail } = require("../services/email.service");
 
+const resolveAppBaseUrl = () => {
+  const raw =
+    process.env.APP_URL ||
+    process.env.FRONTEND_URL ||
+    process.env.CLIENT_URL ||
+    "http://localhost:5001";
+  const first = String(raw)
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean)[0];
+  return first.replace(/\/+$/, "");
+};
+
+const buildReminderEmailHtml = ({ userName, title, message, shareUrl }) => {
+  const safeName = String(userName || "there");
+  const safeTitle = String(title || "Reminder");
+  const safeMessage = String(message || "");
+  const safeShare = String(shareUrl || "").trim();
+  return `
+    <div style="background:#f6f8fb;padding:24px;font-family:Arial,sans-serif;color:#111827;">
+      <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+        <div style="padding:16px 20px;background:#111827;color:#ffffff;font-size:16px;font-weight:600;">
+          Rangreel Reminder
+        </div>
+        <div style="padding:20px;">
+          <p style="margin:0 0 12px 0;font-size:14px;color:#374151;">Hi ${safeName},</p>
+          <h2 style="margin:0 0 12px 0;font-size:18px;color:#111827;">${safeTitle}</h2>
+          <p style="margin:0 0 16px 0;font-size:14px;line-height:1.6;color:#374151;">${safeMessage}</p>
+          ${
+            safeShare
+              ? `<div style="margin:0 0 16px 0;">
+                  <a href="${safeShare}" style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600;">
+                    Open Task Details
+                  </a>
+                  <p style="margin:8px 0 0 0;font-size:12px;color:#6b7280;word-break:break-all;">${safeShare}</p>
+                </div>`
+              : ""
+          }
+          <p style="margin:0;font-size:12px;color:#6b7280;">Please login to Rangreel and take action.</p>
+        </div>
+      </div>
+    </div>
+  `;
+};
+
 const startReminderCron = () => {
   // Daily at 9 AM server time.
   cron.schedule("0 9 * * *", async () => {
@@ -70,10 +115,16 @@ const startReminderCron = () => {
             emailedToday.add(emailKey);
             const user = await User.findById(userId).select("email name").lean();
             if (!user?.email) continue;
+            const shareUrl = `${resolveAppBaseUrl()}/shared/content/${String(item._id)}`;
             await sendEmail({
               to: { email: user.email, name: user.name || "" },
               subject: title,
-              html: `<p>${message}</p>`,
+              html: buildReminderEmailHtml({
+                userName: user.name || "",
+                title,
+                message,
+                shareUrl,
+              }),
             });
             await ReminderEmailLog.create({
               contentItem: item._id,

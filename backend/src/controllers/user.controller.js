@@ -276,6 +276,7 @@ const updateMyTaskStatus = async (req, res) => {
           title: "Task Handoff",
           message: `${titleText} ready for shoot`,
           type: "task",
+          contentId: contentItem._id,
         });
       } else if (n === "shoot") {
         const target = client?.team?.reels?.videoEditor;
@@ -284,6 +285,7 @@ const updateMyTaskStatus = async (req, res) => {
           title: "Task Handoff",
           message: `${titleText} ready for editing`,
           type: "task",
+          contentId: contentItem._id,
         });
       } else if (n === "edit") {
         const target = client?.manager;
@@ -292,6 +294,7 @@ const updateMyTaskStatus = async (req, res) => {
           title: "Approval Ready",
           message: `${titleText} ready for approval`,
           type: "approval",
+          contentId: contentItem._id,
         });
       } else if (n === "post") {
         const strategistIds = [
@@ -306,6 +309,7 @@ const updateMyTaskStatus = async (req, res) => {
           title: "Post Completed",
           message: `${titleText} has been posted successfully`,
           type: "completion",
+          contentId: contentItem._id,
         });
       }
     }
@@ -343,6 +347,7 @@ const updateMyTaskStatus = async (req, res) => {
             title: "Overload Alert",
             message: "User is overloaded with tasks",
             type: "overload",
+            contentId: contentItem._id,
           });
         }
       }

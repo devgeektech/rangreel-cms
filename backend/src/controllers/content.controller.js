@@ -116,6 +116,52 @@ const getContentById = async (req, res) => {
   }
 };
 
+const getSharedContentDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    let item = await ContentItem.findById(id)
+      .populate("client", "clientName brandName")
+      .populate("workflowStages.assignedUser", "name role");
+
+    // Fallback: allow links built from stage-level ids to still resolve the parent content item.
+    if (!item) {
+      item = await ContentItem.findOne({ "workflowStages._id": id })
+        .populate("client", "clientName brandName")
+        .populate("workflowStages.assignedUser", "name role");
+    }
+
+    if (!item) {
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
+
+    const planStage = (item.workflowStages || []).find(
+      (stage) => String(stage?.stageName || "").toLowerCase() === "plan"
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        _id: item._id,
+        title: item.title,
+        contentBrief: item.contentBrief || planStage?.contentBrief || [],
+        videoUrl: item.videoUrl || "",
+        client: item.client,
+        stages: (item.workflowStages || []).map((stage) => ({
+          _id: stage._id,
+          stageName: stage.stageName,
+          role: stage.role,
+          status: stage.status,
+          dueDate: stage.dueDate,
+          assignedUser: stage.assignedUser || null,
+        })),
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+};
+
 const getStageIndexById = (stages, stageId) => {
   if (!stageId) return -1;
   return stages.findIndex((s) => s._id && s._id.toString() === String(stageId));
@@ -561,6 +607,7 @@ const updateStageStatus = async (req, res) => {
         title: "Approval Rejected",
         message: `${titleText} rejected. Please rework.`,
         type: "approval",
+        contentId: contentItem._id,
       });
     }
 
@@ -570,6 +617,7 @@ const updateStageStatus = async (req, res) => {
         title: "Approval Granted",
         message: `${titleText} approved. Ready to post.`,
         type: "approval",
+        contentId: contentItem._id,
       });
     }
 
@@ -770,6 +818,7 @@ const patchContentItemStages = async (req, res) => {
 
 module.exports = {
   getContentById,
+  getSharedContentDetails,
   moveStage,
   reshuffleStage,
   updateStageStatus,

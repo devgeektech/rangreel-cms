@@ -7,6 +7,12 @@ const contentController = require("../controllers/content.controller");
 
 const router = express.Router();
 
+router.get(
+  "/share/:id",
+  auth,
+  asyncHandler(contentController.getSharedContentDetails)
+);
+
 // Prompt 25: unified reel detail read API (includes strategist plan fields).
 router.get("/:id", auth, asyncHandler(contentReadController.getContentById));
 router.patch(

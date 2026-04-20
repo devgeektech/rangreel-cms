@@ -426,6 +426,8 @@ export const api = {
 
   // Content detail (Prompt 25)
   getContent: (id) => requestJson(`/content/${encodeURIComponent(id)}`, { method: "GET" }),
+  getSharedContent: (id) =>
+    requestJson(`/content/share/${encodeURIComponent(id)}`, { method: "GET" }),
   moveContentStage: (itemId, stageId, body) =>
     requestJson(`/content/${encodeURIComponent(itemId)}/stage/${encodeURIComponent(stageId)}/move`, {
       method: "PATCH",

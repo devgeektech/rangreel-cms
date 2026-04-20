@@ -39,6 +39,7 @@ const getContentById = async (req, res) => {
     );
 
     return success(res, {
+      _id: item._id,
       title: item.title,
       contentType: item.contentType || "",
       type: item.type || "",

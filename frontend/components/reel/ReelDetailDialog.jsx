@@ -207,6 +207,33 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
     designStage?.videoUrl || designStage?.designFileLink || data?.designFileLink || ""
   ).trim();
 
+  const handleCopyShareLink = async () => {
+    const targetId = String(data?._id || contentId || "").trim();
+    if (!targetId) {
+      toast.error("Share link unavailable");
+      return;
+    }
+    const shareLink = `${window.location.origin}/shared/content/${targetId}`;
+    try {
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareLink);
+      } else {
+        const el = document.createElement("textarea");
+        el.value = shareLink;
+        el.setAttribute("readonly", "true");
+        el.style.position = "absolute";
+        el.style.left = "-9999px";
+        document.body.appendChild(el);
+        el.select();
+        document.execCommand("copy");
+        document.body.removeChild(el);
+      }
+      toast.success("Share link copied");
+    } catch {
+      toast.error("Failed to copy share link");
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden p-0">
@@ -233,7 +260,12 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
           <div className="space-y-4">
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-base">{data.title}</CardTitle>
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="text-base">{data.title}</CardTitle>
+                  <Button type="button" variant="outline" size="sm" onClick={handleCopyShareLink}>
+                    Copy Share Link
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex flex-wrap items-center gap-2">
