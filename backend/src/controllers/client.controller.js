@@ -6,6 +6,7 @@ const Package = require("../models/Package");
 const { uploadsRoot, BRIEF_UPLOAD_FIELDS } = require("../multer/clientBriefUpload");
 const { generateClientReels } = require("../services/simpleCalendar.service");
 const { persistCalendarDraft } = require("../services/calendarDraftPersistence.service");
+const { notifyUsers } = require("../services/workflowNotification.service");
 const ContentItem = require("../models/ContentItem");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 const { createInitialScheduleForClient } = require("../services/clientScheduleMonths.service");
@@ -56,6 +57,20 @@ const dedupeById = (docs) => {
     out.push(d);
   }
   return out;
+};
+
+const getAllTeamUserIds = (team) => {
+  const out = new Set();
+  const pushIf = (v) => {
+    if (!v) return;
+    out.add(String(v._id || v));
+  };
+  const groups = [team?.reels, team?.posts, team?.carousel];
+  for (const group of groups) {
+    if (!group || typeof group !== "object") continue;
+    Object.values(group).forEach(pushIf);
+  }
+  return [...out];
 };
 
 const dedupeByStageId = (stages) => {
@@ -466,6 +481,31 @@ const createClient = async (req, res) => {
     }
 
     const populated = await populateClientQuery(Client.findById(client._id));
+
+    const teamUserIds = getAllTeamUserIds(client.team || {});
+    const strategistIds = [
+      client?.team?.reels?.strategist,
+      client?.team?.posts?.strategist,
+      client?.team?.carousel?.strategist,
+    ]
+      .filter(Boolean)
+      .map((id) => String(id));
+    const brand = client.brandName || client.clientName || "client";
+
+    await notifyUsers({
+      userIds: teamUserIds,
+      title: "New Client Assigned",
+      message: `You have been assigned to ${brand}`,
+      type: "onboarding",
+    });
+
+    await notifyUsers({
+      userIds: strategistIds,
+      title: "Start Strategy",
+      message: `Start planning for ${brand}`,
+      type: "task",
+    });
+
     return success(res, populated, 201);
   } catch (err) {
     return failure(res, err.message || "Failed to create client", 500);

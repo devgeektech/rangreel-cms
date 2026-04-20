@@ -9,6 +9,7 @@ import {
   Calendar,
   SlidersHorizontal,
   Settings,
+  Bell,
 } from "lucide-react";
 import DashboardShell from "@/components/layout/DashboardShell";
 
@@ -20,6 +21,7 @@ const adminNavItems = [
   { href: "/admin/holidays", label: "Holidays", icon: CalendarOff },
   { href: "/admin/calendar", label: "Global Calendar", icon: Calendar },
   { href: "/admin/team-capacity", label: "Role capacity", icon: SlidersHorizontal },
+  { href: "/admin/notifications", label: "Notifications", icon: Bell },
   { href: "/admin/settings", label: "Settings", icon: Settings },
 ];
 

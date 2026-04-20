@@ -1,11 +1,13 @@
 const User = require("../models/User");
 const ContentItem = require("../models/ContentItem");
+const Notification = require("../models/Notification");
 const Role = require("../models/Role");
 const Client = require("../models/Client");
 const Leave = require("../models/Leave");
 const TeamCapacity = require("../models/TeamCapacity");
 const managerReadController = require("./managerRead.controller");
 const { runManagerDragTask } = require("../services/managerDragTask.service");
+const { notifyUsers } = require("../services/workflowNotification.service");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -29,6 +31,20 @@ const normalizeMonthTarget = (targetMonth) => {
   if (Number.isNaN(year) || Number.isNaN(month) || month < 1 || month > 12)
     return null;
   return { year, month };
+};
+
+const normalizeContentBucket = (contentType) => {
+  const t = String(contentType || "").toLowerCase();
+  if (t === "reel") return "reel";
+  if (t === "carousel") return "carousel";
+  return "post";
+};
+
+const getRoleCapacityForBucket = (capacityDoc, bucket) => {
+  if (!capacityDoc) return 0;
+  if (bucket === "reel") return Number(capacityDoc.reelCapacity) || 0;
+  if (bucket === "carousel") return Number(capacityDoc.carouselCapacity) || 0;
+  return Number(capacityDoc.postCapacity) || 0;
 };
 
 const getMe = async (req, res) => {
@@ -247,6 +263,91 @@ const updateMyTaskStatus = async (req, res) => {
 
     await contentItem.save();
 
+    const client = await Client.findById(contentItem.client).select("brandName clientName manager team").lean();
+    const titleText = contentItem?.title || "Content item";
+    const ctBucket = normalizeContentBucket(contentItem?.contentType || contentItem?.type);
+
+    if (nextStatus === "completed") {
+      const n = stageNameNormalized;
+      if (n === "plan") {
+        const target = client?.team?.reels?.videographer;
+        await notifyUsers({
+          userIds: target ? [target] : [],
+          title: "Task Handoff",
+          message: `${titleText} ready for shoot`,
+          type: "task",
+        });
+      } else if (n === "shoot") {
+        const target = client?.team?.reels?.videoEditor;
+        await notifyUsers({
+          userIds: target ? [target] : [],
+          title: "Task Handoff",
+          message: `${titleText} ready for editing`,
+          type: "task",
+        });
+      } else if (n === "edit") {
+        const target = client?.manager;
+        await notifyUsers({
+          userIds: target ? [target] : [],
+          title: "Approval Ready",
+          message: `${titleText} ready for approval`,
+          type: "approval",
+        });
+      } else if (n === "post") {
+        const strategistIds = [
+          client?.team?.reels?.strategist,
+          client?.team?.posts?.strategist,
+          client?.team?.carousel?.strategist,
+        ]
+          .filter(Boolean)
+          .map((id) => String(id));
+        await notifyUsers({
+          userIds: [client?.manager, ...strategistIds],
+          title: "Post Completed",
+          message: `${titleText} has been posted successfully`,
+          type: "completion",
+        });
+      }
+    }
+
+    // Case 10: overload alert.
+    if (stage?.assignedUser && stage?.dueDate) {
+      const roleKey = canonicalRoleKey(stage.role);
+      const dayStart = new Date(new Date(stage.dueDate).setUTCHours(0, 0, 0, 0));
+      const dayEnd = new Date(new Date(stage.dueDate).setUTCHours(23, 59, 59, 999));
+      const capDoc = await TeamCapacity.findOne({ role: roleKey }).lean();
+      const capacity = getRoleCapacityForBucket(capDoc, ctBucket);
+      if (capacity > 0) {
+        const count = await ContentItem.countDocuments({
+          "workflowStages.assignedUser": stage.assignedUser,
+          contentType:
+            ctBucket === "post" ? { $in: ["post", "static_post", "gmb_post", "campaign"] } : ctBucket,
+          workflowStages: {
+            $elemMatch: {
+              assignedUser: stage.assignedUser,
+              dueDate: { $gte: dayStart, $lte: dayEnd },
+              status: { $nin: ["completed", "approved", "posted"] },
+            },
+          },
+        });
+        if (count > capacity) {
+          const strategistIds = [
+            client?.team?.reels?.strategist,
+            client?.team?.posts?.strategist,
+            client?.team?.carousel?.strategist,
+          ]
+            .filter(Boolean)
+            .map((id) => String(id));
+          await notifyUsers({
+            userIds: [stage.assignedUser, client?.manager, ...strategistIds],
+            title: "Overload Alert",
+            message: "User is overloaded with tasks",
+            type: "overload",
+          });
+        }
+      }
+    }
+
     return success(res, {
       itemId: contentItem._id,
       stage,
@@ -325,6 +426,33 @@ const getStrategistGlobalCalendar = async (req, res) => {
   const ok = await ensureStrategistUser(req);
   if (!ok) return failure(res, "Only strategist can access this endpoint", 403);
   return managerReadController.getManagerGlobalCalendarFinal(req, res);
+};
+
+const getMyNotifications = async (req, res) => {
+  try {
+    const docs = await Notification.find({ user: req.user.id })
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean();
+    return success(res, docs);
+  } catch (error) {
+    return failure(res, error.message || "Failed to fetch notifications", 500);
+  }
+};
+
+const markNotificationRead = async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    const updated = await Notification.findOneAndUpdate(
+      { _id: notificationId, user: req.user.id },
+      { $set: { isRead: true } },
+      { new: true }
+    ).lean();
+    if (!updated) return failure(res, "Notification not found", 404);
+    return success(res, updated);
+  } catch (error) {
+    return failure(res, error.message || "Failed to update notification", 500);
+  }
 };
 
 const getStrategistTeamUsers = async (req, res) => {
@@ -416,6 +544,8 @@ module.exports = {
   getMyTasks,
   updateMyTaskStatus,
   getTeamClient,
+  getMyNotifications,
+  markNotificationRead,
   getStrategistGlobalCalendar,
   getStrategistTeamUsers,
   getStrategistTeamCapacity,

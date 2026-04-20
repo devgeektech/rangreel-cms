@@ -115,6 +115,11 @@ export const api = {
     }),
 
   getMe: () => requestJson("/user/me", { method: "GET" }),
+  getMyNotifications: () => requestJson("/user/notifications", { method: "GET" }),
+  markNotificationRead: (notificationId) =>
+    requestJson(`/user/notifications/${encodeURIComponent(notificationId)}/read`, {
+      method: "PATCH",
+    }),
 
   getRoles: () => requestJson("/admin/roles", { method: "GET" }),
   createRole: (payload) =>

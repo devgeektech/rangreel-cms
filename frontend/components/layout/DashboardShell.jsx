@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight } from "lucide-react";
@@ -8,6 +8,7 @@ import Navbar from "./Navbar";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 import AppLogo from "@/components/shared/AppLogo";
+import { toast } from "sonner";
 
 function isItemActive(pathname, href) {
   if (href === "/") return pathname === "/";
@@ -30,6 +31,7 @@ export default function DashboardShell({ children, navItems = [], defaultCollaps
   const user = useAuthStore((state) => state.user);
   const clearUser = useAuthStore((state) => state.clearUser);
   const [collapsed, setCollapsed] = useState(Boolean(defaultCollapsed));
+  const socketRef = useRef(null);
 
   const mobileItems = useMemo(() => navItems.slice(0, 5), [navItems]);
 
@@ -43,6 +45,64 @@ export default function DashboardShell({ children, navItems = [], defaultCollaps
       router.push("/login");
     }
   };
+
+  useEffect(() => {
+    let mounted = true;
+    const userId = String(user?._id || "");
+    if (!userId) return undefined;
+
+    const baseApiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+    const socketBase = baseApiUrl.replace(/\/api\/?$/, "");
+    if (!socketBase) return undefined;
+
+    const connectSocket = async () => {
+      try {
+        if (!window.io) {
+          await new Promise((resolve, reject) => {
+            const id = "socket-io-client-script";
+            const existing = document.getElementById(id);
+            if (existing) {
+              existing.addEventListener("load", () => resolve(), { once: true });
+              existing.addEventListener("error", () => reject(new Error("Socket script failed")), { once: true });
+              return;
+            }
+            const script = document.createElement("script");
+            script.id = id;
+            script.src = `${socketBase}/socket.io/socket.io.js`;
+            script.async = true;
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error("Socket script failed"));
+            document.head.appendChild(script);
+          });
+        }
+        if (!mounted || !window.io) return;
+        const socket = window.io(socketBase, { withCredentials: true });
+        socketRef.current = socket;
+        socket.emit("join", userId);
+        socket.on("notification", (data) => {
+          const message = String(data?.message || "New notification");
+          toast(message);
+          window.dispatchEvent(new Event("rr:notification"));
+          try {
+            localStorage.setItem("rr:lastNotificationAt", String(Date.now()));
+          } catch {
+            // ignore storage errors in private/locked environments
+          }
+        });
+      } catch (err) {
+        console.warn("[socket] client unavailable:", err?.message || err);
+      }
+    };
+
+    connectSocket();
+    return () => {
+      mounted = false;
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+        socketRef.current = null;
+      }
+    };
+  }, [user?._id]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">

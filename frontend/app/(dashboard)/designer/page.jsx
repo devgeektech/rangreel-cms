@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Bell,
   CalendarDays,
   CheckCircle2,
   ClipboardList,
@@ -31,6 +32,7 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/designer", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/designer/notifications", label: "Notifications", icon: Bell },
 ];
 
 const accent = "#8B5CF6";

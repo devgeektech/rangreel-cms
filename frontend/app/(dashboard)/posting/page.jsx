@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarClock, LayoutDashboard, ListOrdered, Send } from "lucide-react";
+import { Bell, CalendarClock, LayoutDashboard, ListOrdered, Send } from "lucide-react";
 import DashboardShell from "@/components/layout/DashboardShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ const navItems = [
   { href: "/posting/calendar", label: "Calendar", icon: CalendarClock },
   { href: "/posting/queue", label: "Queue", icon: ListOrdered },
   { href: "/posting/published", label: "Published", icon: Send },
+  { href: "/posting/notifications", label: "Notifications", icon: Bell },
 ];
 
 const accent = "#EF4444";

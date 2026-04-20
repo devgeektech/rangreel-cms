@@ -3,6 +3,7 @@ const ContentItem = require("../models/ContentItem");
 const Client = require("../models/Client");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 const Leave = require("../models/Leave");
+const { notifyUsers } = require("../services/workflowNotification.service");
 const {
   scheduleStageDay,
   buildHolidaySetUTC,
@@ -42,6 +43,13 @@ const addDaysUTC = (d, days) => {
 };
 
 const USER_EDITABLE_STAGES = new Set(["Plan", "Shoot", "Edit", "Approval"]);
+
+const resolveTeamByContentType = (team, contentType) => {
+  const ct = String(contentType || "").toLowerCase();
+  if (ct === "reel") return team?.reels || {};
+  if (ct === "carousel") return team?.carousel || {};
+  return team?.posts || {};
+};
 
 async function fetchLeavesForUsers(userIds, startDate, endDate) {
   const ids = (userIds || []).filter(Boolean).map((x) => String(x));
@@ -540,6 +548,30 @@ const updateStageStatus = async (req, res) => {
 
     // Save updates.
     await contentItem.save();
+
+    const clientWithTeam = await Client.findById(contentItem.client)
+      .select("team")
+      .lean();
+    const teamForType = resolveTeamByContentType(clientWithTeam?.team || {}, contentItem?.contentType);
+    const titleText = contentItem?.title || "Content item";
+
+    if (status === "rejected") {
+      await notifyUsers({
+        userIds: teamForType?.videoEditor ? [teamForType.videoEditor] : [],
+        title: "Approval Rejected",
+        message: `${titleText} rejected. Please rework.`,
+        type: "approval",
+      });
+    }
+
+    if (status === "approved") {
+      await notifyUsers({
+        userIds: teamForType?.postingExecutive ? [teamForType.postingExecutive] : [],
+        title: "Approval Granted",
+        message: `${titleText} approved. Ready to post.`,
+        type: "approval",
+      });
+    }
 
     return success(res, {
       itemId: contentItem._id,

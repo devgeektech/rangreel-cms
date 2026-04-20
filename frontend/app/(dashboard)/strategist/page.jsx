@@ -8,6 +8,7 @@ import {
   ClipboardList,
   Film,
   LayoutDashboard,
+  Bell,
   Sparkles,
 } from "lucide-react";
 import DashboardShell from "@/components/layout/DashboardShell";
@@ -33,6 +34,7 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { href: "/strategist", label: "Dashboard", icon: LayoutDashboard },
   { href: "/strategist/global-calendar", label: "Calendar", icon: Calendar },
+  { href: "/strategist/notifications", label: "Notifications", icon: Bell },
 ];
 
 const accent = "#0EA5E9";

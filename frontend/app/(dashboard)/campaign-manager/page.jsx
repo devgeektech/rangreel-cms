@@ -1,10 +1,13 @@
 "use client";
 
-import { BriefcaseBusiness, LayoutDashboard } from "lucide-react";
+import { Bell, BriefcaseBusiness, LayoutDashboard } from "lucide-react";
 import DashboardShell from "@/components/layout/DashboardShell";
 import { Card, CardContent } from "@/components/ui/card";
 
-const navItems = [{ href: "/campaign-manager", label: "Dashboard", icon: LayoutDashboard }];
+const navItems = [
+  { href: "/campaign-manager", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/campaign-manager/notifications", label: "Notifications", icon: Bell },
+];
 
 export default function CampaignManagerDashboardPage() {
   return (

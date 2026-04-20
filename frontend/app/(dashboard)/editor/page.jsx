@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, LayoutDashboard } from "lucide-react";
+import { Bell, CheckCircle2, LayoutDashboard } from "lucide-react";
 import DashboardShell from "@/components/layout/DashboardShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +20,10 @@ import {
   isWorkflowStageOverdue,
 } from "@/lib/roleDashboardTasks";
 
-const navItems = [{ href: "/editor", label: "Dashboard", icon: LayoutDashboard }];
+const navItems = [
+  { href: "/editor", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/editor/notifications", label: "Notifications", icon: Bell },
+];
 
 const accent = "#10B981";
 
