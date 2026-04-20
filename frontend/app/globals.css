@@ -18,7 +18,7 @@
   /* Rangreel tokens + shadcn-compatible variables (light / dark via .dark class) */
   :root {
     --background: #fafafa;
-    --foreground: #18181b;
+    --foreground: #111827;
     --primary: #6c3ebf;
     --primary-foreground: #fafafa;
     --accent: #e84393;
@@ -27,14 +27,14 @@
     --card-foreground: #18181b;
     --popover: #ffffff;
     --popover-foreground: #18181b;
-    --secondary: #f4f4f5;
-    --secondary-foreground: #18181b;
-    --muted: #f4f4f5;
-    --muted-foreground: #71717a;
+    --secondary: #e2e8f0;
+    --secondary-foreground: #111827;
+    --muted: #e5e7eb;
+    --muted-foreground: #334155;
     --destructive: #dc2626;
     --destructive-foreground: #fafafa;
-    --border: #e4e4e7;
-    --input: #e4e4e7;
+    --border: #94a3b8;
+    --input: #94a3b8;
     --ring: #6c3ebf;
     --sidebar-bg: #1a0f2e;
     --sidebar-fg: #f4f4f5;

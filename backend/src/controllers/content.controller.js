@@ -507,22 +507,42 @@ const updateStageStatus = async (req, res) => {
       return failure(res, "Only approval stages can be approved or rejected", 400);
     }
 
-    // Prompt 28: manager approves/rejects based on Edit stage completion (not Approval stage completion).
+    // Manager approval should validate the latest production stage before Approval.
+    // Reels typically use Edit; static/carousel flows may use Design/Work.
     let editStageIndex = -1;
+    let designStageIndex = -1;
     for (let i = stageIndex - 1; i >= 0; i--) {
       const candidateName = String(contentItem.workflowStages[i]?.stageName || "").toLowerCase();
       if (candidateName === "edit") {
         editStageIndex = i;
+      }
+      if (candidateName === "design" || candidateName === "work") {
+        designStageIndex = i;
+      }
+      if (editStageIndex !== -1 || designStageIndex !== -1) {
         break;
       }
     }
-    if (editStageIndex === -1) {
-      return failure(res, "Cannot approve/reject without a previous Edit stage", 400);
+
+    const productionStageIndex =
+      editStageIndex !== -1 ? editStageIndex : designStageIndex;
+
+    if (productionStageIndex === -1) {
+      return failure(
+        res,
+        "Cannot approve/reject without a previous Edit or Design stage",
+        400
+      );
     }
 
-    const editStage = contentItem.workflowStages[editStageIndex];
-    if (String(editStage.status || "").toLowerCase() !== "completed") {
-      return failure(res, "Edit stage must be completed before approval", 400);
+    const productionStage = contentItem.workflowStages[productionStageIndex];
+    if (String(productionStage.status || "").toLowerCase() !== "completed") {
+      const prodName = String(productionStage.stageName || "previous stage");
+      return failure(
+        res,
+        `${prodName} stage must be completed before approval`,
+        400
+      );
     }
 
     if (status === "approved") {
@@ -576,10 +596,10 @@ const updateStageStatus = async (req, res) => {
       stage.rejectionNote = note;
       stage.completedAt = new Date();
 
-      // Simple rejection path: move previous Edit stage back to in_progress.
-      editStage.status = "in_progress";
-      editStage.completedAt = undefined;
-      editStage.rejectionNote = note;
+      // Rejection path: send the latest production stage back to in_progress.
+      productionStage.status = "in_progress";
+      productionStage.completedAt = undefined;
+      productionStage.rejectionNote = note;
       contentItem.overallStatus = "editing";
 
       // While rejected, Post must not be actionable.
