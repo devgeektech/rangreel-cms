@@ -155,6 +155,7 @@ function hashClientKey(input) {
 export function GlobalCalendarPage({ actor = "manager" }) {
   const isStrategist = actor === "strategist";
   const DEFAULT_ROLE_CAPACITY = 5;
+  const todayYmd = useMemo(() => toYMDUTC(new Date()), []);
   const [month, setMonth] = useState(() => toMonthStringUTC(new Date()));
   const [loading, setLoading] = useState(true);
   const [tasks, setTasks] = useState([]);
@@ -189,6 +190,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
   const gridScrollRef = useRef(null);
   const leaveSectionRef = useRef(null);
   const overflowCarouselRef = useRef(null);
+  const autoScrolledMonthRef = useRef("");
   const panRef = useRef({ active: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
   const lastDragEndRef = useRef({ taskId: "", at: 0 });
   const [isPanningGrid, setIsPanningGrid] = useState(false);
@@ -302,13 +304,13 @@ export function GlobalCalendarPage({ actor = "manager" }) {
 
   useEffect(() => {
     if (!highlightedCell) return undefined;
-    const t = setTimeout(() => setHighlightedCell(""), 3500);
+    const t = setTimeout(() => setHighlightedCell(""), 60000);
     return () => clearTimeout(t);
   }, [highlightedCell]);
 
   useEffect(() => {
     if (!highlightLeaveSection) return undefined;
-    const t = setTimeout(() => setHighlightLeaveSection(false), 3500);
+    const t = setTimeout(() => setHighlightLeaveSection(false), 60000);
     return () => clearTimeout(t);
   }, [highlightLeaveSection]);
 
@@ -420,6 +422,26 @@ export function GlobalCalendarPage({ actor = "manager" }) {
     }
     return out;
   }, [month]);
+
+  const isCurrentMonthView = useMemo(
+    () => month === String(todayYmd || "").slice(0, 7),
+    [month, todayYmd]
+  );
+
+  useEffect(() => {
+    if (!isCurrentMonthView || loading) return;
+    const scroller = gridScrollRef.current;
+    if (!scroller) return;
+    if (autoScrolledMonthRef.current === month) return;
+    const todayIndex = (calendarDays || []).findIndex((d) => d?.ymd === todayYmd);
+    if (todayIndex < 0) return;
+    const dayCell = scroller.querySelector("[data-gc-col-day]");
+    if (!dayCell) return;
+    const colWidth = dayCell.getBoundingClientRect().width || 120;
+    const targetLeft = Math.max(0, (todayIndex + 1) * colWidth - scroller.clientWidth * 0.45);
+    scroller.scrollTo({ left: targetLeft, behavior: "smooth" });
+    autoScrolledMonthRef.current = month;
+  }, [calendarDays, isCurrentMonthView, loading, month, todayYmd]);
 
   const filteredTasks = useMemo(() => {
     const list = tasks || [];
@@ -605,6 +627,19 @@ export function GlobalCalendarPage({ actor = "manager" }) {
     return Number.isFinite(val) && val >= 0 ? val : DEFAULT_ROLE_CAPACITY;
   };
 
+  const hasAnyOverloaded = useMemo(() => {
+    for (const [key, used] of usedByUserDayType.entries()) {
+      const parts = String(key || "").split("::");
+      const userId = parts[0] || "";
+      const bucket = parts[2] || "";
+      if (!userId || !bucket) continue;
+      const role = userMetaById.get(userId)?.role || "";
+      const cap = getRoleBucketCapacity(role, bucket);
+      if (Number(used) > Number(cap)) return true;
+    }
+    return false;
+  }, [usedByUserDayType, userMetaById, capacityByRole]);
+
   const taskById = useMemo(() => {
     const map = new Map();
     for (const t of tasks || []) {
@@ -648,9 +683,12 @@ export function GlobalCalendarPage({ actor = "manager" }) {
     return day === 0 || day === 6;
   };
 
+  const isBeforeTodayYmd = (ymd) => String(ymd || "") < String(todayYmd || "");
+
   const canDropOnCell = (_row, ymd) => {
     // Manager global calendar should not hard-block leave/holiday/capacity in UI.
     // Backend managerDragTask is the authority (borrowing/replacement/simulation).
+    if (isBeforeTodayYmd(ymd)) return false;
     const weekendBlocked = !weekendMode && isWeekendYmd(ymd);
     return !weekendBlocked;
   };
@@ -682,7 +720,9 @@ export function GlobalCalendarPage({ actor = "manager" }) {
       return;
     }
     if (!canDropOnCell(row, ymd)) {
-      const msg = "Cannot move: weekend blocked (Weekend is OFF)";
+      const msg = isBeforeTodayYmd(ymd)
+        ? "Cannot move: date is before today"
+        : "Cannot move: weekend blocked (Weekend is OFF)";
       setDropError(msg);
       toast.error(msg);
       return;
@@ -967,18 +1007,29 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                 Role / User
               </div>
               {calendarDays.map((d) => (
+                (() => {
+                  const isPastDay = isCurrentMonthView && d.ymd < todayYmd;
+                  const isHoliday = holidayByDay.has(d.ymd);
+                  return (
                 <div
                   key={d.ymd}
+                  data-gc-col-day="true"
                   className={`border-b border-r border-border px-2 py-2 text-center text-xs font-semibold ${
-                    holidayByDay.has(d.ymd) ? "bg-gray-300/40 dark:bg-gray-700/40" : "bg-muted/30"
+                    isHoliday
+                      ? "bg-gray-300/40 dark:bg-gray-700/40"
+                      : isPastDay
+                        ? "bg-slate-300/35 dark:bg-slate-700/35"
+                        : "bg-muted/30"
                   }`}
-                  title={holidayByDay.has(d.ymd) ? `${holidayByDay.get(d.ymd)} (Holiday)` : ""}
+                  title={isHoliday ? `${holidayByDay.get(d.ymd)} (Holiday)` : ""}
                 >
                   <p className="leading-tight">{d.dayNum}</p>
                   <p className="text-[10px] font-normal text-muted-foreground leading-tight">
                     {weekdayShortUTC(d.ymd)}
                   </p>
                 </div>
+                  );
+                })()
               ))}
 
               {groupedRows.map((group) => (
@@ -999,6 +1050,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                         const dayTasks = row.byDay.get(day.ymd) || [];
                         const onLeave = leaveByUserDay.has(`${row.userId}::${day.ymd}`);
                         const isHoliday = holidayByDay.has(day.ymd);
+                        const isPastDay = isCurrentMonthView && day.ymd < todayYmd;
                         const bucketKeys = ["reel", "static_post", "carousel"];
                         const bucketStats = bucketKeys.map((bucket) => {
                           const used = Number(
@@ -1041,9 +1093,15 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                             className={`flex min-h-28 flex-col border-b border-r border-border p-2 ${
                               isHoliday
                                 ? "bg-gray-300/40 dark:bg-gray-700/40"
+                                : isPastDay
+                                  ? "bg-slate-300/35 dark:bg-slate-700/35"
                                 : onLeave
-                                  ? "bg-blue-500/15"
+                                  ? "bg-red-500/15"
                                   : ""
+                            } ${
+                              isOverloaded
+                                ? "border-red-600/80 bg-red-500/12 ring-2 ring-inset ring-red-500/55"
+                                : ""
                             } ${
                               draggingTaskId && hoveredDropCell === `${row.userId}::${day.ymd}`
                                 ? canDropOnCell(row, day.ymd)
@@ -1064,6 +1122,8 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                 ? `OVERLOADED — ${capacityReason}`
                                 : isFull
                                   ? `FULL — ${capacityReason}`
+                                : isBeforeTodayYmd(day.ymd)
+                                ? "Past date (drag/drop disabled)"
                                 : !weekendMode && isWeekendYmd(day.ymd)
                                 ? "Weekend blocked"
                                 : ""
@@ -1088,7 +1148,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                               <p className="text-xs text-muted-foreground">Holiday</p>
                             ) : null}
                             {onLeave && dayTasks.length === 0 ? (
-                              <p className="text-xs text-blue-700 dark:text-blue-200">On leave</p>
+                              <p className="text-xs text-red-700 dark:text-red-300">On leave</p>
                             ) : null}
                             {dayTasks.length > 0 ? (
                             <div className="mt-1 flex min-h-0 min-w-0 flex-1 flex-col gap-1">
@@ -1299,6 +1359,11 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                   </button>
                                 </div>
                               ) : null}
+                              {isOverloaded ? (
+                                <div className="mt-1 shrink-0 rounded-sm border border-red-600/60 bg-red-500/15 px-1.5 py-0.5 text-center text-[10px] font-semibold uppercase tracking-wide text-red-700 dark:text-red-300">
+                                  Overloaded
+                                </div>
+                              ) : null}
                             </div>
                             ) : null}
                           </div>
@@ -1310,6 +1375,11 @@ export function GlobalCalendarPage({ actor = "manager" }) {
               ))}
             </div>
           </div>
+          {hasAnyOverloaded ? (
+            <div className="mt-3 rounded-md border border-red-600/60 bg-red-500/15 px-3 py-2 text-sm font-semibold text-red-700 dark:text-red-300">
+              Overloaded
+            </div>
+          ) : null}
 
           <Card>
             <CardHeader>
