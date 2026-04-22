@@ -16,6 +16,8 @@ import { TaskMonthControls } from "@/components/role-dashboard/TaskMonthControls
 import { ReelDetailDialog } from "@/components/reel/ReelDetailDialog";
 import {
   getTodayStartMs,
+  getTodayYMDUTC,
+  isStageInDateScope,
   isWorkflowStageCompleted,
   isWorkflowStageOverdue,
 } from "@/lib/roleDashboardTasks";
@@ -59,6 +61,7 @@ export default function EditorDashboardPage() {
   const [editDrafts, setEditDrafts] = useState({});
   const [openReelDetail, setOpenReelDetail] = useState(false);
   const [selectedContentId, setSelectedContentId] = useState(null);
+  const [dateScope, setDateScope] = useState("today");
 
   useEffect(() => {
     const load = async () => {
@@ -94,15 +97,24 @@ export default function EditorDashboardPage() {
     return entries.sort((a, b) => new Date(a.stage.dueDate) - new Date(b.stage.dueDate));
   }, [tasks]);
 
+  const todayYmd = useMemo(() => getTodayYMDUTC(), []);
+  const scopedEditStages = useMemo(
+    () =>
+      editStages.filter((e) =>
+        isStageInDateScope(e.stage, dateScope, todayYmd)
+      ),
+    [editStages, dateScope, todayYmd]
+  );
+
   const editCalendarEntries = useMemo(
     () =>
-      editStages.filter((e) => {
+      scopedEditStages.filter((e) => {
         const ct = String(e.contentType || "").toLowerCase();
         const onCalendar =
           ct === "reel" || ct === "static_post" || ct === "post" || ct === "carousel";
         return onCalendar && isEditPendingStage(e.stage);
       }),
-    [editStages]
+    [scopedEditStages]
   );
 
   const todayStartMs = useMemo(() => getTodayStartMs(), []);
@@ -148,7 +160,13 @@ export default function EditorDashboardPage() {
           <CardHeader className="pb-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <CardTitle className="text-base">My tasks</CardTitle>
-              <TaskMonthControls month={month} onMonthChange={setMonth} accent={accent} />
+              <TaskMonthControls
+                month={month}
+                onMonthChange={setMonth}
+                accent={accent}
+                dateScope={dateScope}
+                onDateScopeChange={setDateScope}
+              />
             </div>
           </CardHeader>
           <CardContent>
@@ -166,11 +184,11 @@ export default function EditorDashboardPage() {
                   </div>
                 ))}
               </div>
-            ) : editStages.length === 0 ? (
+            ) : scopedEditStages.length === 0 ? (
               <EmptyState title="No Edit stages this month" description="You’ll see your Editor tasks once they’re assigned." />
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                {editStages.map(({ itemId, title, clientBrand, contentType, stage }) => {
+                {scopedEditStages.map(({ itemId, title, clientBrand, contentType, stage }) => {
                   const stageId = stage._id;
                   const status = String(stage.status || "").toLowerCase();
                   const overdue = isWorkflowStageOverdue(stage, todayStartMs);

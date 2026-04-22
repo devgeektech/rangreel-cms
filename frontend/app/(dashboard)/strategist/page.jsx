@@ -26,6 +26,8 @@ import { StrategistPlanCalendar } from "./StrategistPlanCalendar";
 import { SubmitPlanDialog } from "@/components/strategist/SubmitPlanDialog";
 import {
   getTodayStartMs,
+  getTodayYMDUTC,
+  isStageInDateScope,
   isWorkflowStageCompleted,
   isWorkflowStageOverdue,
 } from "@/lib/roleDashboardTasks";
@@ -100,6 +102,7 @@ export default function StrategistDashboardPage() {
   const [planDialogOpen, setPlanDialogOpen] = useState(false);
   const [planSubmitting, setPlanSubmitting] = useState(false);
   const [planTab, setPlanTab] = useState("pending");
+  const [dateScope, setDateScope] = useState("today");
 
   const reloadTasks = useCallback(async () => {
     const res = await getMyTasksIncludingCompleted(month);
@@ -140,20 +143,30 @@ export default function StrategistDashboardPage() {
     return entries.sort((a, b) => new Date(a.stage.dueDate) - new Date(b.stage.dueDate));
   }, [tasks]);
 
+  const todayYmd = useMemo(() => getTodayYMDUTC(), []);
+
+  const scopedPlanStages = useMemo(
+    () =>
+      planStages.filter((e) =>
+        isStageInDateScope(e.stage, dateScope, todayYmd)
+      ),
+    [planStages, dateScope, todayYmd]
+  );
+
   const planStagesPending = useMemo(
-    () => planStages.filter((e) => isPlanPendingStage(e.stage)),
-    [planStages]
+    () => scopedPlanStages.filter((e) => isPlanPendingStage(e.stage)),
+    [scopedPlanStages]
   );
   const planStagesCompleted = useMemo(
-    () => planStages.filter((e) => isPlanCompletedStage(e.stage)),
-    [planStages]
+    () => scopedPlanStages.filter((e) => isPlanCompletedStage(e.stage)),
+    [scopedPlanStages]
   );
 
   const visiblePlanStages = planTab === "pending" ? planStagesPending : planStagesCompleted;
 
   const planCalendarEntries = useMemo(
     () =>
-      planStages.filter((e) => {
+      scopedPlanStages.filter((e) => {
         const ct = String(e.contentType || "").toLowerCase();
         const onCalendar =
           ct === "reel" ||
@@ -162,7 +175,7 @@ export default function StrategistDashboardPage() {
           ct === "carousel";
         return onCalendar && isPlanPendingStage(e.stage);
       }),
-    [planStages]
+    [scopedPlanStages]
   );
 
   const stats = useMemo(() => {
@@ -172,12 +185,12 @@ export default function StrategistDashboardPage() {
       if (isWorkflowStageOverdue(e.stage, todayStartMs)) overdue += 1;
     }
     return {
-      total: planStages.length,
+      total: scopedPlanStages.length,
       pending: planStagesPending.length,
       completed: planStagesCompleted.length,
       overdue,
     };
-  }, [planStages, planStagesPending, planStagesCompleted]);
+  }, [scopedPlanStages, planStagesPending, planStagesCompleted]);
 
   const todayStartMs = useMemo(() => getTodayStartMs(), []);
 
@@ -246,7 +259,7 @@ export default function StrategistDashboardPage() {
           </CardContent>
         </Card>
 
-        {!loading && planStages.length > 0 ? (
+        {!loading && scopedPlanStages.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Card className="border-border/80 shadow-sm">
               <CardContent className="flex items-center gap-3 p-4">
@@ -311,7 +324,7 @@ export default function StrategistDashboardPage() {
                 <p className="mt-1 text-xs text-muted-foreground">
                   Brand, format, plan due date, and post date at a glance.
                 </p>
-                {!loading && planStages.length > 0 ? (
+                {!loading && scopedPlanStages.length > 0 ? (
                   <div className="mt-3 inline-flex flex-wrap gap-2 rounded-lg border border-border bg-muted/30 p-1">
                     <Button
                       type="button"
@@ -334,7 +347,13 @@ export default function StrategistDashboardPage() {
                   </div>
                 ) : null}
               </div>
-              <TaskMonthControls month={month} onMonthChange={setMonth} accent={accent} />
+              <TaskMonthControls
+                month={month}
+                onMonthChange={setMonth}
+                accent={accent}
+                dateScope={dateScope}
+                onDateScopeChange={setDateScope}
+              />
             </div>
           </CardHeader>
           <CardContent>
@@ -352,7 +371,7 @@ export default function StrategistDashboardPage() {
                   </div>
                 ))}
               </div>
-            ) : planStages.length === 0 ? (
+            ) : scopedPlanStages.length === 0 ? (
               <EmptyState
                 title="No Plan tasks this month"
                 description="You’ll see your Strategist Plan stages here once they’re assigned."

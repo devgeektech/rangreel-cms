@@ -268,6 +268,17 @@ export function GlobalCalendarPage({ actor = "manager" }) {
     setBulkMoveTargetUserId("");
   }, [cellOverflow]);
 
+  const overflowContentTypeCounts = useMemo(() => {
+    const counts = { reel: 0, static_post: 0, carousel: 0 };
+    for (const task of cellOverflow?.tasks || []) {
+      const bucket = normalizeContentTypeFilterKey(task?.contentType);
+      if (bucket === "reel" || bucket === "static_post" || bucket === "carousel") {
+        counts[bucket] += 1;
+      }
+    }
+    return counts;
+  }, [cellOverflow]);
+
   const scrollOverflowCarousel = (direction) => {
     const el = overflowCarouselRef.current;
     if (!el) return;
@@ -1638,6 +1649,23 @@ export function GlobalCalendarPage({ actor = "manager" }) {
             <DialogDescription className="text-left text-sm">
               Select a task to open full details.
             </DialogDescription>
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <span
+                className={`rounded border px-2 py-1 font-semibold ${contentTypeChipClassName("reel")}`}
+              >
+                Reel: {overflowContentTypeCounts.reel}
+              </span>
+              <span
+                className={`rounded border px-2 py-1 font-semibold ${contentTypeChipClassName("static_post")}`}
+              >
+                Post: {overflowContentTypeCounts.static_post}
+              </span>
+              <span
+                className={`rounded border px-2 py-1 font-semibold ${contentTypeChipClassName("carousel")}`}
+              >
+                Carousel: {overflowContentTypeCounts.carousel}
+              </span>
+            </div>
           </DialogHeader>
           <div className="border-b border-border/60 px-6 py-3">
             <div className="flex items-center justify-between gap-2">

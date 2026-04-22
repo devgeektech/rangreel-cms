@@ -11,6 +11,14 @@ const FIELD_BY_CONTENT_TYPE = {
   carousel: "carouselCapacity",
 };
 
+function normalizeUserId(userId) {
+  if (!userId) return null;
+  if (typeof userId === "object") {
+    return userId._id || userId.id || null;
+  }
+  return userId;
+}
+
 /**
  * Effective per-day capacity ceiling for (user, workflow role, content type).
  * - User override (>0) wins over global.
@@ -33,7 +41,10 @@ async function getEffectiveCapacity(userId, role, contentType) {
   const field = FIELD_BY_CONTENT_TYPE[ct];
   if (!field) return -1;
 
-  const userCap = await UserCapacity.findOne({ user: userId }).lean();
+  const normalizedUserId = normalizeUserId(userId);
+  const userCap = normalizedUserId
+    ? await UserCapacity.findOne({ user: normalizedUserId }).lean()
+    : null;
   const globalCap = await TeamCapacity.findOne({ role }).lean();
 
   if (userCap && Number(userCap[field]) > 0) {

@@ -18,7 +18,12 @@ import { api } from "@/lib/api";
 import EmptyState from "@/components/shared/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskMonthControls } from "@/components/role-dashboard/TaskMonthControls";
-import { isWorkflowStageCompleted, isWorkflowStageOverdue } from "@/lib/roleDashboardTasks";
+import {
+  getTodayYMDUTC,
+  isStageInDateScope,
+  isWorkflowStageCompleted,
+  isWorkflowStageOverdue,
+} from "@/lib/roleDashboardTasks";
 import { ReelDetailDialog } from "@/components/reel/ReelDetailDialog";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +59,7 @@ export default function PostingDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [tasks, setTasks] = useState([]);
   const [postingTab, setPostingTab] = useState("pending");
+  const [dateScope, setDateScope] = useState("today");
   const [openReelDetail, setOpenReelDetail] = useState(false);
   const [selectedContentId, setSelectedContentId] = useState(null);
 
@@ -103,6 +109,15 @@ export default function PostingDashboardPage() {
     return entries.sort((a, b) => new Date(a.stage.dueDate) - new Date(b.stage.dueDate));
   }, [tasks]);
 
+  const todayYmd = useMemo(() => getTodayYMDUTC(), []);
+  const scopedPostStages = useMemo(
+    () =>
+      postStages.filter((entry) =>
+        isStageInDateScope(entry.stage, dateScope, todayYmd)
+      ),
+    [postStages, dateScope, todayYmd]
+  );
+
   const todayStartMs = useMemo(() => {
     const now = new Date();
     return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).getTime();
@@ -112,7 +127,7 @@ export default function PostingDashboardPage() {
     let overdue = 0;
     let completed = 0;
     let pending = 0;
-    for (const entry of postStages) {
+    for (const entry of scopedPostStages) {
       if (isWorkflowStageCompleted(entry.stage, "posting")) {
         completed += 1;
       } else {
@@ -121,27 +136,27 @@ export default function PostingDashboardPage() {
       }
     }
     return {
-      total: postStages.length,
+      total: scopedPostStages.length,
       pending,
       completed,
       overdue,
     };
-  }, [postStages, todayStartMs]);
+  }, [scopedPostStages, todayStartMs]);
 
   const postStagesPending = useMemo(
     () =>
-      postStages.filter(
+      scopedPostStages.filter(
         ({ stage }) => !isWorkflowStageCompleted(stage, "posting")
       ),
-    [postStages]
+    [scopedPostStages]
   );
 
   const postStagesCompleted = useMemo(
     () =>
-      postStages.filter(({ stage }) =>
+      scopedPostStages.filter(({ stage }) =>
         isWorkflowStageCompleted(stage, "posting")
       ),
-    [postStages]
+    [scopedPostStages]
   );
 
   const visiblePostStages =
@@ -162,7 +177,7 @@ export default function PostingDashboardPage() {
           </CardContent>
         </Card>
 
-        {!loading && postStages.length > 0 ? (
+        {!loading && scopedPostStages.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Card className="border-border/80 shadow-sm">
               <CardContent className="flex items-center gap-3 p-4">
@@ -216,7 +231,7 @@ export default function PostingDashboardPage() {
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <CardTitle className="text-base">My posting tasks</CardTitle>
-                {!loading && postStages.length > 0 ? (
+                {!loading && scopedPostStages.length > 0 ? (
                   <div className="mt-3 inline-flex flex-wrap gap-2 rounded-lg border border-border bg-muted/30 p-1">
                     <Button
                       type="button"
@@ -239,7 +254,13 @@ export default function PostingDashboardPage() {
                   </div>
                 ) : null}
               </div>
-              <TaskMonthControls month={month} onMonthChange={setMonth} accent={accent} />
+              <TaskMonthControls
+                month={month}
+                onMonthChange={setMonth}
+                accent={accent}
+                dateScope={dateScope}
+                onDateScopeChange={setDateScope}
+              />
             </div>
           </CardHeader>
           <CardContent>
@@ -254,7 +275,7 @@ export default function PostingDashboardPage() {
                   </div>
                 ))}
               </div>
-            ) : postStages.length === 0 ? (
+            ) : scopedPostStages.length === 0 ? (
               <EmptyState
                 title="No posting tasks this month"
                 description="You’ll see your posting tasks once they’re assigned."

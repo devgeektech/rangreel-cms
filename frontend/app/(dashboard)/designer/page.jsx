@@ -25,6 +25,8 @@ import { ReelDetailDialog } from "@/components/reel/ReelDetailDialog";
 import { StrategistPlanCalendar } from "../strategist/StrategistPlanCalendar";
 import {
   getTodayStartMs,
+  getTodayYMDUTC,
+  isStageInDateScope,
   isWorkflowStageCompleted,
   isWorkflowStageOverdue,
 } from "@/lib/roleDashboardTasks";
@@ -66,6 +68,7 @@ export default function DesignerDashboardPage() {
   const [openReelDetail, setOpenReelDetail] = useState(false);
   const [selectedContentId, setSelectedContentId] = useState(null);
   const [designTab, setDesignTab] = useState("pending");
+  const [dateScope, setDateScope] = useState("today");
 
   const reloadTasks = useCallback(async () => {
     const res = await getMyTasksIncludingCompleted(month);
@@ -107,21 +110,30 @@ export default function DesignerDashboardPage() {
     return entries.sort((a, b) => new Date(a.stage.dueDate) - new Date(b.stage.dueDate));
   }, [tasks]);
 
+  const todayYmd = useMemo(() => getTodayYMDUTC(), []);
+  const scopedDesignStages = useMemo(
+    () =>
+      designStages.filter((entry) =>
+        isStageInDateScope(entry.stage, dateScope, todayYmd)
+      ),
+    [designStages, dateScope, todayYmd]
+  );
+
   const designStagesPending = useMemo(
     () =>
-      designStages.filter((entry) => {
+      scopedDesignStages.filter((entry) => {
         const status = String(entry.stage?.status || "").toLowerCase();
         return status === "assigned" || status === "planned" || status === "in_progress";
       }),
-    [designStages]
+    [scopedDesignStages]
   );
 
   const designStagesCompleted = useMemo(
     () =>
-      designStages.filter(
+      scopedDesignStages.filter(
         (entry) => String(entry.stage?.status || "").toLowerCase() === "completed"
       ),
-    [designStages]
+    [scopedDesignStages]
   );
 
   const visibleDesignStages =
@@ -129,14 +141,14 @@ export default function DesignerDashboardPage() {
 
   const designCalendarEntries = useMemo(
     () =>
-      designStages.filter((entry) => {
+      scopedDesignStages.filter((entry) => {
         const status = String(entry.stage?.status || "").toLowerCase();
         const ct = String(entry.contentType || "").toLowerCase();
         const onCalendar =
           ct === "reel" || ct === "static_post" || ct === "post" || ct === "carousel";
         return onCalendar && (status === "assigned" || status === "planned" || status === "in_progress");
       }),
-    [designStages]
+    [scopedDesignStages]
   );
 
   const stats = useMemo(() => {
@@ -146,12 +158,12 @@ export default function DesignerDashboardPage() {
       if (isWorkflowStageOverdue(entry.stage, todayStartMs)) overdue += 1;
     }
     return {
-      total: designStages.length,
+      total: scopedDesignStages.length,
       pending: designStagesPending.length,
       completed: designStagesCompleted.length,
       overdue,
     };
-  }, [designStages, designStagesPending, designStagesCompleted]);
+  }, [scopedDesignStages, designStagesPending, designStagesCompleted]);
 
   const todayStartMs = useMemo(() => getTodayStartMs(), []);
 
@@ -182,7 +194,7 @@ export default function DesignerDashboardPage() {
           </CardContent>
         </Card>
 
-        {!loading && designStages.length > 0 ? (
+        {!loading && scopedDesignStages.length > 0 ? (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Card className="border-border/80 shadow-sm">
               <CardContent className="flex items-center gap-3 p-4">
@@ -249,7 +261,7 @@ export default function DesignerDashboardPage() {
                 <p className="mt-1 text-xs text-muted-foreground">
                   Brand, format, due date, and post date at a glance.
                 </p>
-                {!loading && designStages.length > 0 ? (
+                {!loading && scopedDesignStages.length > 0 ? (
                   <div className="mt-3 inline-flex flex-wrap gap-2 rounded-lg border border-border bg-muted/30 p-1">
                     <Button
                       type="button"
@@ -272,7 +284,13 @@ export default function DesignerDashboardPage() {
                   </div>
                 ) : null}
               </div>
-              <TaskMonthControls month={month} onMonthChange={setMonth} accent={accent} />
+              <TaskMonthControls
+                month={month}
+                onMonthChange={setMonth}
+                accent={accent}
+                dateScope={dateScope}
+                onDateScopeChange={setDateScope}
+              />
             </div>
           </CardHeader>
           <CardContent>
@@ -287,7 +305,7 @@ export default function DesignerDashboardPage() {
                   </div>
                 ))}
               </div>
-            ) : designStages.length === 0 ? (
+            ) : scopedDesignStages.length === 0 ? (
               <EmptyState
                 title="No Design tasks this month"
                 description="You’ll see your Designer tasks once they’re assigned."

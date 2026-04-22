@@ -20,6 +20,10 @@ export function getTodayStartMs() {
   return getTodayStartUTC().getTime();
 }
 
+export function getTodayYMDUTC() {
+  return toYMDUTC(getTodayStartUTC());
+}
+
 export function shiftMonthYYYYMM(monthStr, delta) {
   const m = String(monthStr).match(/^(\d{4})-(\d{2})$/);
   if (!m) return monthStr;
@@ -60,4 +64,16 @@ export function isWorkflowStageOverdue(stage, todayStartMs) {
   const d = stage?.dueDate ? new Date(stage.dueDate) : null;
   if (!d || Number.isNaN(d.getTime())) return false;
   return d.getTime() < todayStartMs;
+}
+
+/**
+ * Date scope filter used by role dashboards.
+ * - today: stage due date equals UTC today
+ * - currentMonth: stage due date month equals current UTC month
+ */
+export function isStageInDateScope(stage, dateScope = "today", todayYmd = getTodayYMDUTC()) {
+  const dueYmd = String(stage?.dueDate || "").slice(0, 10);
+  if (!dueYmd) return false;
+  if (dateScope === "today") return dueYmd === todayYmd;
+  return dueYmd.slice(0, 7) === todayYmd.slice(0, 7);
 }
