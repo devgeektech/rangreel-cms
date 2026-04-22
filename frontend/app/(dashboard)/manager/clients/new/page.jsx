@@ -572,6 +572,7 @@ export default function NewClientPage() {
   const [newPkgForm, setNewPkgForm] = useState({
     name: "",
     noOfReels: 0,
+    noOfPosts: 0,
     noOfStaticPosts: 0,
     noOfCarousels: 0,
     noOfGoogleReviews: 0,
@@ -827,6 +828,7 @@ export default function NewClientPage() {
     setNewPkgForm({
       name: "",
       noOfReels: 0,
+      noOfPosts: 0,
       noOfStaticPosts: 0,
       noOfCarousels: 0,
       noOfGoogleReviews: 0,
@@ -844,6 +846,7 @@ export default function NewClientPage() {
       const res = await api.createManagerPackage({
         name: newPkgForm.name.trim(),
         noOfReels: Number(newPkgForm.noOfReels),
+        noOfPosts: Number(newPkgForm.noOfPosts),
         noOfStaticPosts: Number(newPkgForm.noOfStaticPosts),
         noOfCarousels: Number(newPkgForm.noOfCarousels),
         noOfGoogleReviews: Number(newPkgForm.noOfGoogleReviews) || 0,
@@ -1772,6 +1775,16 @@ export default function NewClientPage() {
                           }
                         />
                       </Field>
+                      <Field label="Posts per month *" required>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={newPkgForm.noOfPosts}
+                          onChange={(e) =>
+                            setNewPkgForm((p) => ({ ...p, noOfPosts: e.target.valueAsNumber || Number(e.target.value) || 0 }))
+                          }
+                        />
+                      </Field>
                       <Field label="Static posts per month *" required>
                         <Input
                           type="number"
@@ -1798,6 +1811,9 @@ export default function NewClientPage() {
                           }
                         />
                       </Field>
+                      <p className="text-xs text-muted-foreground">
+                        Limits are validated individually: Reels, Posts (Posts + Static posts), and Carousels.
+                      </p>
                       <Field label="Google Reviews per month">
                         <Input
                           type="number"

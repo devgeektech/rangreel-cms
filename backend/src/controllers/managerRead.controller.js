@@ -8,6 +8,7 @@ const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 const Schedule = require("../models/Schedule");
 const mongoose = require("mongoose");
 const { normalizeDraftItemToDurationTasks } = require("../services/taskNormalizer.service");
+const { calculatePackageLimits } = require("../utils/packageCapacity.util");
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -138,6 +139,15 @@ const getPackages = async (req, res) => {
   }
 };
 
+const getPackageLimits = async (_req, res) => {
+  try {
+    const limits = await calculatePackageLimits();
+    return success(res, limits);
+  } catch (err) {
+    return failure(res, "Failed to calculate package limits", 500);
+  }
+};
+
 /**
  * POST /api/manager/packages — manager-created package (same shape as admin; scoped to creator in GET list).
  */
@@ -146,6 +156,7 @@ const createManagerPackage = async (req, res) => {
     const {
       name,
       noOfReels,
+      noOfPosts,
       noOfStaticPosts,
       noOfCarousels,
       noOfGoogleReviews,
@@ -166,23 +177,54 @@ const createManagerPackage = async (req, res) => {
     if (
       noOfReels === undefined ||
       noOfReels === null ||
+      noOfPosts === undefined ||
+      noOfPosts === null ||
       noOfStaticPosts === undefined ||
       noOfStaticPosts === null ||
       noOfCarousels === undefined ||
       noOfCarousels === null
     ) {
-      return failure(res, "noOfReels, noOfStaticPosts, and noOfCarousels are required", 400);
+      return failure(
+        res,
+        "noOfReels, noOfPosts, noOfStaticPosts, and noOfCarousels are required",
+        400
+      );
     }
 
     const reels = n(noOfReels, 0);
+    const posts = n(noOfPosts, 0);
     const staticPosts = n(noOfStaticPosts, 0);
     const carousels = n(noOfCarousels, 0);
+    const postsTotal = posts + staticPosts;
+
+    const { maxReels, maxPosts, maxCarousels } = await calculatePackageLimits();
+    if (reels > maxReels) {
+      return failure(
+        res,
+        `Reels exceed capacity. Requested: ${reels}, Max allowed: ${maxReels}`,
+        400
+      );
+    }
+    if (postsTotal > maxPosts) {
+      return failure(
+        res,
+        `Posts exceed capacity. Requested: ${posts} + ${staticPosts} = ${postsTotal}, Max allowed: ${maxPosts}`,
+        400
+      );
+    }
+    if (carousels > maxCarousels) {
+      return failure(
+        res,
+        `Carousels exceed capacity. Requested: ${carousels}, Max allowed: ${maxCarousels}`,
+        400
+      );
+    }
 
     const packageDoc = await Package.create({
       name: nameStr,
       noOfReels: reels,
+      noOfPosts: posts,
       noOfStaticPosts: staticPosts,
-      noOfPosts: 0,
       noOfCarousels: carousels,
       noOfGoogleReviews: n(noOfGoogleReviews, 0),
       gmbPosting: Boolean(gmbPosting),
@@ -496,6 +538,7 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
 
 module.exports = {
   getPackages,
+  getPackageLimits,
   createManagerPackage,
   getTeamUsers,
   getManagerTeamCapacity,

@@ -10,6 +10,7 @@ const { notifyUsers } = require("../services/workflowNotification.service");
 const ContentItem = require("../models/ContentItem");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 const { createInitialScheduleForClient } = require("../services/clientScheduleMonths.service");
+const { calculatePackageLimits } = require("../utils/packageCapacity.util");
 
 const normalizeMonthTarget = (targetMonth) => {
   if (!targetMonth) return null;
@@ -255,6 +256,16 @@ const pickTeamSubsetForPackage = (team, effective) => {
   return out;
 };
 
+const formatCapacityError = (kind, requested, max) => {
+  if (kind === "reels") {
+    return `Reels exceed capacity. Requested: ${requested}, Max allowed: ${max}`;
+  }
+  if (kind === "posts") {
+    return `Posts exceed capacity. Requested: ${requested}, Max allowed: ${max}`;
+  }
+  return `Carousels exceed capacity. Requested: ${requested}, Max allowed: ${max}`;
+};
+
 const toDraftType = (item) => {
   const t = String(item?.type || "").toLowerCase();
   if (t === "reel" || t === "post" || t === "carousel") return t;
@@ -323,6 +334,25 @@ const createClient = async (req, res) => {
       .lean();
     if (!pkg) {
       return failure(res, "Package not found", 400);
+    }
+
+    const { maxReels, maxPosts, maxCarousels } = await calculatePackageLimits();
+    const selectedCounts = effectiveContentCounts(pkg, contentEnabled || {});
+    const requestedReels = Number(selectedCounts.reelsCount) || 0;
+    const requestedPosts = Number(selectedCounts.postsCount) || 0;
+    const requestedCarousels = Number(selectedCounts.carouselsCount) || 0;
+    if (requestedReels > maxReels) {
+      return failure(res, formatCapacityError("reels", requestedReels, maxReels), 400);
+    }
+    if (requestedPosts > maxPosts) {
+      return failure(res, formatCapacityError("posts", requestedPosts, maxPosts), 400);
+    }
+    if (requestedCarousels > maxCarousels) {
+      return failure(
+        res,
+        formatCapacityError("carousels", requestedCarousels, maxCarousels),
+        400
+      );
     }
 
     const effective = effectiveContentCounts(pkg, contentEnabled || {});

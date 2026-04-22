@@ -11,6 +11,7 @@ const router = express.Router();
 router.use(auth, roleGuard(["manager", "admin"]));
 
 router.get("/packages", managerReadController.getPackages);
+router.get("/packages/limits", asyncHandler(managerReadController.getPackageLimits));
 router.post("/packages", asyncHandler(managerReadController.createManagerPackage));
 router.get("/team-users", managerReadController.getTeamUsers);
 router.get("/team-capacity", asyncHandler(managerReadController.getManagerTeamCapacity));

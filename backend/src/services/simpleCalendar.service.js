@@ -922,8 +922,8 @@ async function computeReelStageDatesForGeneration({
   if (postingWindow?.end) {
     const end = createUTCDate(postingWindow.end);
     if (end && postDue.getTime() > end.getTime()) {
-      console.warn(
-        `[scheduler] Cycle overflow for reels in ${postingWindow.label || "current cycle"}; continuing beyond cycle end`
+      throw new Error(
+        `[scheduler] No valid reel slot inside ${postingWindow.label || "current cycle"} (no spillover allowed)`
       );
     }
   }
@@ -1035,8 +1035,8 @@ async function computePostLikeStageDatesForGeneration({
   if (postingWindow?.end) {
     const end = createUTCDate(postingWindow.end);
     if (end && postDue.getTime() > end.getTime()) {
-      console.warn(
-        `[scheduler] Cycle overflow for ${postingWindow.typeLabel || "content"} in ${postingWindow.label || "current cycle"}; continuing beyond cycle end`
+      throw new Error(
+        `[scheduler] No valid ${postingWindow.typeLabel || "content"} slot inside ${postingWindow.label || "current cycle"} (no spillover allowed)`
       );
     }
   }
