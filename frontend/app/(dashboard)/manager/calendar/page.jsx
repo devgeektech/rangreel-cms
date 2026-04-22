@@ -182,6 +182,9 @@ export function GlobalCalendarPage({ actor = "manager" }) {
   const [selectedTask, setSelectedTask] = useState(null);
   /** When a cell has multiple tasks, user opens this to see full list (no in-cell scroll). */
   const [cellOverflow, setCellOverflow] = useState(null);
+  const [selectedOverflowTaskIds, setSelectedOverflowTaskIds] = useState([]);
+  const [bulkMoveTargetUserId, setBulkMoveTargetUserId] = useState("");
+  const [bulkMoveBusy, setBulkMoveBusy] = useState(false);
   const [contentTypeFilters, setContentTypeFilters] = useState({
     reel: true,
     static_post: true,
@@ -258,6 +261,11 @@ export function GlobalCalendarPage({ actor = "manager" }) {
     setOverflowSlideIndex(0);
     const el = overflowCarouselRef.current;
     if (el) el.scrollTo({ left: 0, behavior: "auto" });
+    const visibleTasks = (cellOverflow?.tasks || []).filter((t) => canEditTask(t));
+    setSelectedOverflowTaskIds(
+      visibleTasks.map((t, idx) => String(t?.taskId || `${String(t?.contentItemId || "")}-${idx}`))
+    );
+    setBulkMoveTargetUserId("");
   }, [cellOverflow]);
 
   const scrollOverflowCarousel = (direction) => {
@@ -409,6 +417,15 @@ export function GlobalCalendarPage({ actor = "manager" }) {
     });
     return map;
   }, [users]);
+
+  const bulkMoveTargetUsers = useMemo(() => {
+    if (!cellOverflow?.row?.role) return [];
+    const role = String(cellOverflow.row.role || "");
+    const currentUserId = String(cellOverflow.row.userId || "");
+    return (users || [])
+      .filter((u) => normalizeRoleKey(u?.role?.name || u?.role?.slug || u?.role || "") === role)
+      .filter((u) => String(u?._id || "") !== currentUserId);
+  }, [cellOverflow, users]);
 
   const calendarDays = useMemo(() => {
     const m = String(month).match(/^(\d{4})-(\d{2})$/);
@@ -879,6 +896,57 @@ export function GlobalCalendarPage({ actor = "manager" }) {
       toast.error(msg);
     } finally {
       setLeaveBusy(false);
+    }
+  };
+
+  const handleBulkMoveSelected = async () => {
+    if (!cellOverflow?.tasks?.length) return;
+    if (!bulkMoveTargetUserId) {
+      toast.error("Select a target user");
+      return;
+    }
+    const selectedSet = new Set((selectedOverflowTaskIds || []).map(String));
+    const selectedTasks = (cellOverflow.tasks || []).filter((task, idx) => {
+      const fallbackId = `${String(task?.contentItemId || "")}-${idx}`;
+      const id = String(task?.taskId || fallbackId);
+      return selectedSet.has(id) && canEditTask(task);
+    });
+    if (!selectedTasks.length) {
+      toast.error("Select at least one task to move");
+      return;
+    }
+
+    try {
+      setBulkMoveBusy(true);
+      let moved = 0;
+      const failed = [];
+      for (const task of selectedTasks) {
+        try {
+          await (isStrategist ? api.strategistDragTask : api.managerDragTask)({
+            contentId: task.contentItemId,
+            stageName: task.stageName,
+            newDate: cellOverflow.dayYmd,
+            allowWeekend: weekendMode === true,
+            fromGlobalCalendar: true,
+            targetUserId: bulkMoveTargetUserId,
+          });
+          moved += 1;
+        } catch (err) {
+          failed.push(task?.title || task?.contentItemId || "Task");
+        }
+      }
+      await loadCalendar({ silent: true, preserveScroll: true });
+      if (moved > 0) {
+        toast.success(`Moved ${moved} task${moved === 1 ? "" : "s"}`);
+      }
+      if (failed.length > 0) {
+        toast.error(`Failed to move ${failed.length} task${failed.length === 1 ? "" : "s"}`);
+      }
+      if (moved > 0 && failed.length === 0) {
+        setCellOverflow(null);
+      }
+    } finally {
+      setBulkMoveBusy(false);
     }
   };
 
@@ -1602,6 +1670,58 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                 </Button>
               </div>
             </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={
+                    (selectedOverflowTaskIds || []).length > 0 &&
+                    (selectedOverflowTaskIds || []).length ===
+                      (cellOverflow?.tasks || []).filter((t) => canEditTask(t)).length
+                  }
+                  onChange={(e) => {
+                    const editableTasks = (cellOverflow?.tasks || []).filter((t) => canEditTask(t));
+                    if (e.target.checked) {
+                      setSelectedOverflowTaskIds(
+                        editableTasks.map((t, idx) =>
+                          String(t?.taskId || `${String(t?.contentItemId || "")}-${idx}`)
+                        )
+                      );
+                    } else {
+                      setSelectedOverflowTaskIds([]);
+                    }
+                  }}
+                  disabled={bulkMoveBusy}
+                />
+                Select all
+              </label>
+              <select
+                className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                value={bulkMoveTargetUserId}
+                onChange={(e) => setBulkMoveTargetUserId(e.target.value)}
+                disabled={bulkMoveBusy || bulkMoveTargetUsers.length === 0}
+              >
+                <option value="">Move selected to...</option>
+                {bulkMoveTargetUsers.map((u) => (
+                  <option key={String(u._id)} value={String(u._id)}>
+                    {u.name || String(u._id).slice(-6)}
+                  </option>
+                ))}
+              </select>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={handleBulkMoveSelected}
+                disabled={
+                  bulkMoveBusy ||
+                  !bulkMoveTargetUserId ||
+                  (selectedOverflowTaskIds || []).length === 0
+                }
+              >
+                {bulkMoveBusy ? "Moving..." : "Move selected"}
+              </Button>
+            </div>
           </div>
           <div
             ref={overflowCarouselRef}
@@ -1631,9 +1751,8 @@ export function GlobalCalendarPage({ actor = "manager" }) {
               const row = cellOverflow.row;
 
               return (
-                <button
+                <div
                   key={`${String(task.taskId || idx)}-${idx}`}
-                  type="button"
                   className={`min-w-[85%] snap-start rounded-xl border px-4 py-3 text-left text-sm shadow-sm transition hover:opacity-95 sm:min-w-[78%] ${
                     hasConflict
                       ? "border-red-600/70 bg-red-500/10 text-red-900 dark:text-red-100"
@@ -1649,7 +1768,41 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                     setCellOverflow(null);
                     if (payload) setSelectedTask({ task, day: payload.dayYmd, userId: payload.row.userId });
                   }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      const payload = cellOverflow;
+                      setCellOverflow(null);
+                      if (payload) setSelectedTask({ task, day: payload.dayYmd, userId: payload.row.userId });
+                    }
+                  }}
                 >
+                  <div className="mb-2">
+                    <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={selectedOverflowTaskIds.includes(
+                          String(task?.taskId || `${String(task?.contentItemId || "")}-${idx}`)
+                        )}
+                        disabled={bulkMoveBusy || !canEditTask(task)}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          const taskId = String(
+                            task?.taskId || `${String(task?.contentItemId || "")}-${idx}`
+                          );
+                          setSelectedOverflowTaskIds((prev) =>
+                            e.target.checked
+                              ? Array.from(new Set([...prev, taskId]))
+                              : prev.filter((id) => String(id) !== taskId)
+                          );
+                        }}
+                      />
+                      Select
+                    </label>
+                  </div>
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0 flex-1 space-y-1">
                       <p className="text-base font-semibold leading-tight inline-flex items-center gap-2">
@@ -1683,7 +1836,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                       {conflictReason}
                     </p>
                   ) : null}
-                </button>
+                </div>
               );
             })}
           </div>
