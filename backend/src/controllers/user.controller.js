@@ -465,8 +465,16 @@ const getStrategistTeamUsers = async (req, res) => {
     const ok = await ensureStrategistUser(req);
     if (!ok) return failure(res, "Only strategist can access this endpoint", 403);
     const users = await User.find({ roleType: "user" }).populate("role").sort({ createdAt: -1 }).lean();
-    const filtered = users.filter((u) => u.role && !u.role.isSystem);
-    return success(res, filtered);
+    const managers = await User.find({ roleType: "manager" }).populate("role").sort({ createdAt: -1 }).lean();
+    const filteredUsers = users.filter((u) => u.role && !u.role.isSystem);
+    const normalizedManagers = managers.map((m) => {
+      const roleObj =
+        m?.role && typeof m.role === "object"
+          ? { ...m.role, name: m.role.name || "manager", slug: m.role.slug || "manager" }
+          : { name: "manager", slug: "manager" };
+      return { ...m, role: roleObj };
+    });
+    return success(res, [...filteredUsers, ...normalizedManagers]);
   } catch (error) {
     return failure(res, error.message || "Failed to fetch team users", 500);
   }

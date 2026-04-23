@@ -243,13 +243,30 @@ const createManagerPackage = async (req, res) => {
 
 const getTeamUsers = async (req, res) => {
   try {
-    // Team members are non-system "user" accounts (strategist, editor, designer, etc).
+    // Team members are non-system "user" accounts + manager accounts
+    // used by Approval rows in global calendar.
     const users = await User.find({ roleType: "user" })
       .populate("role")
       .sort({ createdAt: -1 });
+    const managerQuery =
+      req.user?.roleType === "manager"
+        ? { roleType: "manager", _id: req.user.id }
+        : { roleType: "manager" };
+    const managers = await User.find(managerQuery)
+      .populate("role")
+      .sort({ createdAt: -1 });
 
-    const filtered = users.filter((u) => u.role && !u.role.isSystem);
-    return success(res, filtered);
+    const filteredUsers = users.filter((u) => u.role && !u.role.isSystem);
+    const normalizedManagers = managers.map((m) => {
+      const raw = m.toObject ? m.toObject() : m;
+      const roleObj =
+        raw?.role && typeof raw.role === "object"
+          ? { ...raw.role, name: raw.role.name || "manager", slug: raw.role.slug || "manager" }
+          : { name: "manager", slug: "manager" };
+      return { ...raw, role: roleObj };
+    });
+
+    return success(res, [...filteredUsers, ...normalizedManagers]);
   } catch (err) {
     return failure(res, "Failed to fetch team users", 500);
   }
