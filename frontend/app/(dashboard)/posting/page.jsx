@@ -54,6 +54,10 @@ function contentTypeLabel(ct) {
   return ct || "Content";
 }
 
+function taskLabel(task) {
+  return String(task?.displayId || task?.title || "Task");
+}
+
 export default function PostingDashboardPage() {
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [loading, setLoading] = useState(true);
@@ -99,6 +103,7 @@ export default function PostingDashboardPage() {
           entries.push({
             itemId: t.contentItemId,
             title: t.title,
+            displayId: t.displayId || "",
             contentType: t.contentType,
             clientBrand: t.clientBrandName,
             stage,
@@ -291,7 +296,7 @@ export default function PostingDashboardPage() {
               />
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                {visiblePostStages.map(({ itemId, title, clientBrand, contentType, stage }) => {
+                {visiblePostStages.map(({ itemId, title, displayId, clientBrand, contentType, stage }) => {
                   const stageId = stage._id;
                   const posted = isWorkflowStageCompleted(stage, "posting");
                   const status = String(stage.status || "").toLowerCase();
@@ -318,7 +323,7 @@ export default function PostingDashboardPage() {
                             posted && "line-through text-muted-foreground"
                           )}
                         >
-                          {title}
+                          {taskLabel({ displayId, title })}
                         </h3>
                         <p className="line-clamp-1 text-xs text-muted-foreground sm:text-sm">
                           {clientBrand || "—"}

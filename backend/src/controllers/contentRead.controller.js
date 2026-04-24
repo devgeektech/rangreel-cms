@@ -1,4 +1,5 @@
 const ContentItem = require("../models/ContentItem");
+const { resolveDisplayIdForRead } = require("../utils/taskDisplayId.util");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -41,6 +42,9 @@ const getContentById = async (req, res) => {
     return success(res, {
       _id: item._id,
       title: item.title,
+      displayId: resolveDisplayIdForRead(item),
+      taskNumber: item.taskNumber || null,
+      taskType: item.taskType || "",
       contentType: item.contentType || "",
       type: item.type || "",
       planType: item.planType || item.plan || "normal",

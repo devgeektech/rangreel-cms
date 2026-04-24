@@ -157,7 +157,8 @@ function buildStageEntries(draft, editableStages) {
   for (const item of draft?.items || []) {
     const ct = normalizeCalendarContentType(item.type);
     counters[ct] = (counters[ct] || 0) + 1;
-    const contentLabel = `${(CONTENT_TYPE_META[ct] || CONTENT_TYPE_META.static_post).label} ${counters[ct]}`;
+    const numberedLabel = `${(CONTENT_TYPE_META[ct] || CONTENT_TYPE_META.static_post).label} ${counters[ct]}`;
+    const contentLabel = String(item.displayId || numberedLabel);
     for (const stage of item?.stages || []) {
       if (!stage?.date) continue;
       const ymd = String(stage.date).slice(0, 10);
@@ -347,7 +348,8 @@ function StageChip({
       >
         <div className="font-medium">{meta.label}</div>
         <div className="truncate text-[9px] opacity-90">
-          {(entry.contentLabel || meta.label) + " · "}{entry.stageName} · {entry.role}
+          {(entry.contentLabel || meta.label) + " · "}
+          {entry.stageName} · {entry.role}
         </div>
         {isCustomizationMode && entry.stageName === "Plan" ? (
           <div className="mt-0.5 text-[9px] text-muted-foreground">Plan — Moves only this stage</div>

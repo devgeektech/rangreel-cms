@@ -482,7 +482,9 @@ export default function ManagerInternalCalendarPage() {
         <CardContent className="space-y-2 text-sm">
           {(draft?.items || []).map((item) => (
             <div key={String(item.contentId)} className="flex items-center justify-between rounded border p-2">
-              <span className="font-medium capitalize">{item.type}</span>
+              <span className="font-medium capitalize">
+                {item.displayId || item.title || item.type}
+              </span>
               <span className="text-muted-foreground">{prettyDate(item.postingDate)}</span>
             </div>
           ))}

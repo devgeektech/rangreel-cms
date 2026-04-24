@@ -1,6 +1,8 @@
 const User = require("../models/User");
+const ContentItem = require("../models/ContentItem");
 const { sendNotification } = require("./notification.service");
 const { sendEmail } = require("./email.service");
+const { resolveDisplayIdForRead } = require("../utils/taskDisplayId.util");
 
 const resolveAppBaseUrl = () => {
   const raw =
@@ -54,6 +56,18 @@ const notifyUsers = async ({ userIds = [], title, message, type, contentId }) =>
     contentId && String(contentId).trim()
       ? `${resolveAppBaseUrl()}/shared/content/${String(contentId).trim()}`
       : "";
+  let taskLabel = "";
+  if (contentId) {
+    const item = await ContentItem.findById(contentId)
+      .select("displayId taskType taskNumber contentType type clientPostingDate workflowStages")
+      .populate("client", "brandName clientName")
+      .lean()
+      .catch(() => null);
+    taskLabel = resolveDisplayIdForRead(item);
+  }
+  const messageWithId = taskLabel
+    ? `${String(message || "")} (${taskLabel})`
+    : String(message || "");
 
   const users = await User.find({ _id: { $in: uniqueIds }, isActive: { $ne: false } })
     .select("_id email name")
@@ -61,7 +75,7 @@ const notifyUsers = async ({ userIds = [], title, message, type, contentId }) =>
 
   for (const user of users) {
     const userId = String(user._id);
-    await sendNotification({ userId, title, message, type });
+    await sendNotification({ userId, title, message: messageWithId, type });
     if (user.email) {
       try {
         await sendEmail({
@@ -70,7 +84,7 @@ const notifyUsers = async ({ userIds = [], title, message, type, contentId }) =>
           html: buildNotificationEmailHtml({
             userName: user.name || "",
             title,
-            message,
+            message: messageWithId,
             shareUrl,
           }),
         });

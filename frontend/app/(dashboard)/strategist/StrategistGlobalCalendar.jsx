@@ -107,6 +107,10 @@ function contentTypeLabel(raw) {
   return String(raw).replace(/_/g, " ");
 }
 
+function getTaskDisplayName(task) {
+  return String(task?.displayId || task?.title || "Task");
+}
+
 function contentTypeChipClassName(raw) {
   const t = String(raw || "").toLowerCase();
   if (t === "reel") return "border-sky-500/55 bg-sky-500/15 text-sky-950 dark:text-sky-100";
@@ -1206,7 +1210,7 @@ export default function StrategistGlobalCalendar() {
                                         ? `FULL — ${taskCapacityReason}`
                                       : hasConflict
                                       ? conflictReason || "Scheduling conflict"
-                                      : `${task.clientName} • ${ctLabel} • ${task.title} • ${task.stageName}`
+                                      : `${task.clientName} • ${ctLabel} • ${getTaskDisplayName(task)} • ${task.stageName}`
                                   }
                                 >
                                   {task?.isCustomCalendar !== false && !dragBusy ? (
@@ -1245,6 +1249,7 @@ export default function StrategistGlobalCalendar() {
                                         </span>
                                       </div>
                                       <p className="truncate opacity-95">{task.stageName}</p>
+                                      <p className="truncate opacity-90">{getTaskDisplayName(task)}</p>
                                       <p className="truncate opacity-80">
                                         {userMetaById.get(row.userId)?.name || row.name}
                                       </p>
@@ -1428,6 +1433,7 @@ export default function StrategistGlobalCalendar() {
             <div className="space-y-3 text-sm">
               <div className="grid grid-cols-2 gap-2 rounded border p-3">
                 <p><span className="text-muted-foreground">Client:</span> {selectedTaskDetails.task.clientName || "-"}</p>
+                <p><span className="text-muted-foreground">Task ID:</span> {selectedTaskDetails.task.displayId || "-"}</p>
                 <p><span className="text-muted-foreground">Title:</span> {selectedTaskDetails.task.title || "-"}</p>
                 <p>
                   <span className="text-muted-foreground">Format:</span>{" "}
@@ -1570,7 +1576,7 @@ export default function StrategistGlobalCalendar() {
                         {task.clientName}
                         {hasConflict ? <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" /> : null}
                       </p>
-                      <p className="text-sm text-muted-foreground">{task.title || "—"}</p>
+                      <p className="text-sm text-muted-foreground">{getTaskDisplayName(task)}</p>
                       <p className="font-medium">{task.stageName}</p>
                       <p className="text-xs text-muted-foreground">
                         {userMetaById.get(row.userId)?.name || row.name} · {dynamicDuration} day

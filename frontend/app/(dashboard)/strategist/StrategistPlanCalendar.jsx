@@ -56,7 +56,7 @@ export function StrategistPlanCalendar({
           new Date(entry.stage.dueDate).getTime() < Date.now() - 86400000;
         return {
           id: String(entry.stage._id),
-          title: entry.title || "Plan",
+          title: entry.displayId || entry.title || "Plan",
           start: ymd,
           allDay: true,
           extendedProps: { entry, overdue, contentType: entry.contentType },

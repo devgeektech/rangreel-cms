@@ -10,6 +10,7 @@ const Schedule = require("../models/Schedule");
 const mongoose = require("mongoose");
 const { normalizeDraftItemToDurationTasks } = require("../services/taskNormalizer.service");
 const { calculatePackageLimits } = require("../utils/packageCapacity.util");
+const { resolveDisplayIdForRead } = require("../utils/taskDisplayId.util");
 
 function pad2(n) {
   return String(n).padStart(2, "0");
@@ -351,7 +352,7 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
 
     const contentItems = allContentIds.length
       ? await ContentItem.find({ _id: { $in: allContentIds } })
-          .select("client contentType type planType plan title clientPostingDate workflowStages.stageName workflowStages._id isCustomCalendar weekendEnabled")
+          .select("client contentType type planType plan title displayId taskType taskNumber clientPostingDate workflowStages.stageName workflowStages._id isCustomCalendar weekendEnabled")
           .lean()
       : [];
 
@@ -402,6 +403,9 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
             clientId: clientIdStr,
             clientName,
             title: meta.title || "",
+            displayId: resolveDisplayIdForRead(meta),
+            taskType: meta.taskType || "",
+            taskNumber: meta.taskNumber || null,
             contentType: String(meta.contentType || meta.type || item?.type || ""),
             role,
             stageName: roleToStageName(role),
@@ -464,6 +468,9 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
           clientId: clientIdStr,
           clientName,
           title: it?.title || "",
+          displayId: resolveDisplayIdForRead(meta),
+          taskType: meta.taskType || "",
+          taskNumber: meta.taskNumber || null,
           contentType,
           role: "postingExecutive",
           stageName: "Post",

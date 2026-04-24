@@ -10,6 +10,7 @@ const {
 } = require("../services/simpleCalendar.service");
 const { validateStagesNotAfterPosting } = require("../services/stageBoundary.service");
 const { normalizeDraftItemToDurationTasks } = require("../services/taskNormalizer.service");
+const { resolveDisplayIdForRead } = require("../utils/taskDisplayId.util");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -97,6 +98,9 @@ const getContentById = async (req, res) => {
 
     return success(res, {
       title: item.title,
+      displayId: resolveDisplayIdForRead(item),
+      taskNumber: item.taskNumber || null,
+      taskType: item.taskType || "",
       planType: item.planType || item.plan || "normal",
       contentBrief: Array.isArray(planStage?.contentBrief) ? planStage.contentBrief : [],
       videoUrl: item.videoUrl || "",
@@ -144,6 +148,9 @@ const getSharedContentDetails = async (req, res) => {
       data: {
         _id: item._id,
         title: item.title,
+        displayId: resolveDisplayIdForRead(item),
+        taskNumber: item.taskNumber || null,
+        taskType: item.taskType || "",
         contentBrief: item.contentBrief || planStage?.contentBrief || [],
         videoUrl: item.videoUrl || "",
         client: item.client,

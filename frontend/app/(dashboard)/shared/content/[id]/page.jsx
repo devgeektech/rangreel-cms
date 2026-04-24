@@ -192,7 +192,12 @@ export default function SharedContentPage({ params }) {
     <div className="p-6">
       <Card className="mx-auto w-full max-w-3xl">
         <CardHeader className="space-y-2">
-          <CardTitle className="text-xl">{data.title}</CardTitle>
+          <CardTitle className="text-xl">{data.displayId || data.title}</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            {data.displayId ? `Task ID: ${data.displayId}` : ""}
+            {data.displayId && data.title ? " • " : ""}
+            {data.title ? `Title: ${data.title}` : ""}
+          </p>
           <div className="flex flex-wrap items-center gap-2">
             {String(data?.planType || "").toLowerCase() === "urgent" ? (
               <Badge className="bg-red-600 text-white">Urgent Plan</Badge>

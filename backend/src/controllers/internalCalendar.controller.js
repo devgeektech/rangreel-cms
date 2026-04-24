@@ -12,6 +12,7 @@ const {
 } = require("../services/stageBoundary.service");
 const { normalizeDraftItemToDurationTasks } = require("../services/taskNormalizer.service");
 const { scheduleStageDay, buildHolidaySetUTC } = require("../services/simpleCalendar.service");
+const { resolveDisplayIdForRead } = require("../utils/taskDisplayId.util");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -96,7 +97,8 @@ const getInternalCalendar = async (req, res) => {
     if (!allowed) return failure(res, "Forbidden", 403);
 
     const items = await ContentItem.find({ client: clientId })
-      .select("title type contentType clientPostingDate workflowStages isCustomCalendar weekendEnabled")
+      .select("title displayId taskType taskNumber type contentType clientPostingDate workflowStages isCustomCalendar weekendEnabled client")
+      .populate("client", "brandName clientName")
       .populate("workflowStages.assignedUser", "name avatar")
       .sort({ clientPostingDate: 1 });
 
@@ -107,6 +109,9 @@ const getInternalCalendar = async (req, res) => {
       items: (items || []).map((item) => ({
         contentId: item._id,
         title: item.title || "",
+        displayId: resolveDisplayIdForRead(item),
+        taskType: item.taskType || "",
+        taskNumber: item.taskNumber || null,
         type: item.type || (item.contentType === "static_post" ? "post" : item.contentType),
         isCustomCalendar: Boolean(item.isCustomCalendar),
         weekendEnabled: Boolean(item.weekendEnabled),

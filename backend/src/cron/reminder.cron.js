@@ -5,6 +5,7 @@ const User = require("../models/User");
 const ReminderEmailLog = require("../models/ReminderEmailLog");
 const { sendNotification } = require("../services/notification.service");
 const { sendEmail } = require("../services/email.service");
+const { resolveDisplayIdForRead } = require("../utils/taskDisplayId.util");
 
 const resolveAppBaseUrl = () => {
   const raw =
@@ -69,7 +70,8 @@ const startReminderCron = () => {
           },
         },
       })
-        .select("title client workflowStages")
+        .select("title displayId taskType taskNumber contentType type client clientPostingDate workflowStages")
+        .populate("client", "brandName clientName")
         .populate("workflowStages.assignedUser", "email name")
         .lean();
 
@@ -96,7 +98,10 @@ const startReminderCron = () => {
             .map((id) => String(id));
           const recipients = [...new Set([assigneeId, managerId, ...strategistIds].filter(Boolean))];
           const title = "Task Overdue";
-          const message = `${item.title} is overdue`;
+          const taskLabel = resolveDisplayIdForRead(item);
+          const message = taskLabel
+            ? `${taskLabel} is overdue`
+            : `${item.title} is overdue`;
 
           for (const userId of recipients) {
             await sendNotification({ userId, title, message, type: "reminder" });

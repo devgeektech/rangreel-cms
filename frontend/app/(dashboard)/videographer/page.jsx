@@ -49,6 +49,10 @@ function contentTypeLabel(ct) {
   return ct || "Content";
 }
 
+function taskLabel(task) {
+  return String(task?.displayId || task?.title || "Task");
+}
+
 function isShootPendingStage(stage) {
   const s = String(stage?.status || "").toLowerCase();
   return s === "assigned" || s === "in_progress";
@@ -87,6 +91,7 @@ export default function VideographerDashboardPage() {
           entries.push({
             itemId: t.contentItemId,
             title: t.title,
+            displayId: t.displayId || "",
             contentType: t.contentType,
             plan: t.plan,
             clientBrand: t.clientBrandName,
@@ -193,7 +198,7 @@ export default function VideographerDashboardPage() {
               />
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                {scopedShootStages.map(({ itemId, title, clientBrand, contentType, stage }) => {
+                {scopedShootStages.map(({ itemId, title, displayId, clientBrand, contentType, stage }) => {
                   const stageId = stage._id;
                   const status = String(stage.status || "").toLowerCase();
                   const overdue = isWorkflowStageOverdue(stage, todayStartMs);
@@ -209,7 +214,7 @@ export default function VideographerDashboardPage() {
                     >
                       <div className="min-w-0 flex-1">
                         <p className={`line-clamp-2 text-sm font-semibold leading-snug ${completed ? "line-through opacity-70" : ""}`}>
-                          {title}
+                          {taskLabel({ displayId, title })}
                         </p>
                         <button
                           type="button"

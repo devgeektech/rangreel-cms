@@ -261,13 +261,20 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
             <Card>
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between gap-2">
-                  <CardTitle className="text-base">{data.title}</CardTitle>
+                  <CardTitle className="text-base">
+                    {data.displayId || data.title}
+                  </CardTitle>
                   <Button type="button" variant="outline" size="sm" onClick={handleCopyShareLink}>
                     Copy Share Link
                   </Button>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
+                <p className="text-xs text-muted-foreground">
+                  {data.displayId ? `Task ID: ${data.displayId}` : ""}
+                  {data.displayId && data.title ? " • " : ""}
+                  {data.title ? `Title: ${data.title}` : ""}
+                </p>
                 <div className="flex flex-wrap items-center gap-2">
                   {String(data?.planType || "").toLowerCase() === "urgent" ? (
                     <Badge className="bg-red-600 text-white">Urgent Plan</Badge>

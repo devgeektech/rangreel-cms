@@ -9,6 +9,7 @@ const UserCapacity = require("../models/UserCapacity");
 const managerReadController = require("./managerRead.controller");
 const { runManagerDragTask } = require("../services/managerDragTask.service");
 const { notifyUsers } = require("../services/workflowNotification.service");
+const { resolveDisplayIdForRead } = require("../utils/taskDisplayId.util");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -90,7 +91,7 @@ const getMyTasks = async (req, res) => {
       },
     })
       .populate("client", "brandName clientName")
-      .select("title contentType plan clientPostingDate overallStatus workflowStages client")
+      .select("title displayId taskType taskNumber contentType plan clientPostingDate overallStatus workflowStages client")
       .lean();
 
     const tasks = items
@@ -116,6 +117,9 @@ const getMyTasks = async (req, res) => {
       return {
         contentItemId: item._id,
         title: item.title,
+        displayId: resolveDisplayIdForRead(item),
+        taskType: item.taskType || "",
+        taskNumber: item.taskNumber || null,
         contentType: item.contentType,
         plan: item.plan,
         clientPostingDate: toYMD(item.clientPostingDate),
@@ -377,7 +381,7 @@ const getTeamClient = async (req, res) => {
     }
 
     const items = await ContentItem.find({ client: id })
-      .select("title type contentType clientPostingDate workflowStages")
+      .select("title displayId taskType taskNumber type contentType clientPostingDate workflowStages")
       .sort({ clientPostingDate: 1 })
       .lean();
 
@@ -386,6 +390,9 @@ const getTeamClient = async (req, res) => {
       contentItems: (items || []).map((item) => ({
         _id: item._id,
         title: item.title,
+        displayId: resolveDisplayIdForRead(item),
+        taskType: item.taskType || "",
+        taskNumber: item.taskNumber || null,
         type: item.type,
         contentType: item.contentType,
         postingDate: toYMD(item.clientPostingDate),

@@ -1,4 +1,9 @@
 const mongoose = require("mongoose");
+const {
+  assignDisplayIdFields,
+  assignDisplayIdFieldsMany,
+  refreshDisplayIdMonthIfNeeded,
+} = require("../utils/taskDisplayId.util");
 
 const WorkflowStageSchema = new mongoose.Schema(
   {
@@ -133,11 +138,50 @@ const contentItemSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    taskNumber: {
+      type: Number,
+      min: 1,
+    },
+    taskType: {
+      type: String,
+      enum: ["Post", "Reel", "Carousel"],
+    },
+    displayId: {
+      type: String,
+      trim: true,
+      default: "",
+    },
   },
   {
     timestamps: true,
   }
 );
+
+contentItemSchema.pre("save", async function contentItemDisplayIdPreSave() {
+  try {
+    if (this.isNew && (!this.displayId || String(this.displayId).trim() === "")) {
+      const plain = this.toObject({ depopulate: true });
+      const nextFields = await assignDisplayIdFields(plain);
+      this.taskNumber = nextFields.taskNumber;
+      this.taskType = nextFields.taskType;
+      this.displayId = nextFields.displayId;
+    } else if (!this.isNew && this.isModified("workflowStages")) {
+      await refreshDisplayIdMonthIfNeeded(this);
+    }
+  } catch (err) {
+    console.warn("[ContentItem] displayId pre-save:", err?.message || err);
+  }
+});
+
+contentItemSchema.pre("insertMany", async function contentItemDisplayIdPreInsertMany(...args) {
+  const docs =
+    (Array.isArray(args[0]) && args[0]) ||
+    (Array.isArray(args[1]) && args[1]) ||
+    [];
+  if (docs.length) {
+    await assignDisplayIdFieldsMany(docs);
+  }
+});
 
 module.exports =
   mongoose.models.ContentItem ||
