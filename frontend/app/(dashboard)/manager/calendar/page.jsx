@@ -424,6 +424,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
         id,
         name: u?.name || `User ${id.slice(-4)}`,
         role: normalizeRoleKey(u?.role?.name || u?.role?.slug || u?.role),
+        userCapacity: u?.userCapacity || null,
       });
     });
     return map;
@@ -649,7 +650,25 @@ export function GlobalCalendarPage({ actor = "manager" }) {
     return map;
   }, [tasks]);
 
-  const getRoleBucketCapacity = (role, bucket) => {
+  const getRoleBucketCapacity = (userId, role, bucket) => {
+    const userCap = userMetaById.get(String(userId || ""))?.userCapacity || null;
+    if (userCap) {
+      const hasReelOverride =
+        userCap.overrideReelCapacity === true || Number(userCap.reelCapacity) > 0;
+      const hasPostOverride =
+        userCap.overridePostCapacity === true || Number(userCap.postCapacity) > 0;
+      const hasCarouselOverride =
+        userCap.overrideCarouselCapacity === true || Number(userCap.carouselCapacity) > 0;
+      if (bucket === "reel" && hasReelOverride) {
+        return Number(userCap.reelCapacity) || 0;
+      }
+      if (bucket === "static_post" && hasPostOverride) {
+        return Number(userCap.postCapacity) || 0;
+      }
+      if (bucket === "carousel" && hasCarouselOverride) {
+        return Number(userCap.carouselCapacity) || 0;
+      }
+    }
     const byRole = capacityByRole?.[role];
     const val = Number(byRole?.[bucket]);
     return Number.isFinite(val) && val >= 0 ? val : DEFAULT_ROLE_CAPACITY;
@@ -662,7 +681,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
       const bucket = parts[2] || "";
       if (!userId || !bucket) continue;
       const role = userMetaById.get(userId)?.role || "";
-      const cap = getRoleBucketCapacity(role, bucket);
+      const cap = getRoleBucketCapacity(userId, role, bucket);
       if (Number(used) > Number(cap)) return true;
     }
     return false;
@@ -1135,7 +1154,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                           const used = Number(
                             usedByUserDayType.get(`${row.userId}::${day.ymd}::${bucket}`) || 0
                           );
-                          const capacity = getRoleBucketCapacity(row.role, bucket);
+                          const capacity = getRoleBucketCapacity(row.userId, row.role, bucket);
                           return { bucket, used, capacity };
                         });
                         const warningBuckets = bucketStats
@@ -1241,7 +1260,11 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                               const taskUsed = Number(
                                 usedByUserDayType.get(`${row.userId}::${day.ymd}::${taskBucket}`) || 0
                               );
-                              const taskCapacity = getRoleBucketCapacity(row.role, taskBucket);
+                              const taskCapacity = getRoleBucketCapacity(
+                                row.userId,
+                                row.role,
+                                taskBucket
+                              );
                               const taskIsOverloaded = overloadedBuckets.has(taskBucket);
                               const taskIsFull = !taskIsOverloaded && fullBuckets.has(taskBucket);
                               const taskCapacityReason =

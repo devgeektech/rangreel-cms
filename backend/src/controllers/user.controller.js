@@ -5,6 +5,7 @@ const Role = require("../models/Role");
 const Client = require("../models/Client");
 const Leave = require("../models/Leave");
 const TeamCapacity = require("../models/TeamCapacity");
+const UserCapacity = require("../models/UserCapacity");
 const managerReadController = require("./managerRead.controller");
 const { runManagerDragTask } = require("../services/managerDragTask.service");
 const { notifyUsers } = require("../services/workflowNotification.service");
@@ -474,7 +475,17 @@ const getStrategistTeamUsers = async (req, res) => {
           : { name: "manager", slug: "manager" };
       return { ...m, role: roleObj };
     });
-    return success(res, [...filteredUsers, ...normalizedManagers]);
+    const allRows = [...filteredUsers, ...normalizedManagers];
+    const allUserIds = allRows.map((r) => r?._id).filter(Boolean);
+    const capDocs = allUserIds.length
+      ? await UserCapacity.find({ user: { $in: allUserIds } }).lean()
+      : [];
+    const capByUser = new Map(capDocs.map((c) => [String(c.user), c]));
+    const withCapacity = allRows.map((row) => ({
+      ...row,
+      userCapacity: capByUser.get(String(row._id)) || null,
+    }));
+    return success(res, withCapacity);
   } catch (error) {
     return failure(res, error.message || "Failed to fetch team users", 500);
   }

@@ -14,6 +14,11 @@ const userCapacitySchema = new mongoose.Schema(
       required: true,
       enum: TEAM_CAPACITY_ROLES,
     },
+    // Explicit override toggles so value 0 can still mean "override to 0"
+    // rather than "fallback to global".
+    overrideReelCapacity: { type: Boolean, default: false },
+    overridePostCapacity: { type: Boolean, default: false },
+    overrideCarouselCapacity: { type: Boolean, default: false },
     reelCapacity: { type: Number, default: 0, min: 0 },
     postCapacity: { type: Number, default: 0, min: 0 },
     carouselCapacity: { type: Number, default: 0, min: 0 },

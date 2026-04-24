@@ -122,7 +122,11 @@ async function generateCalendarDraft({
   allowWeekend = false,
   allowFlexibleAdjustment = false,
 }) {
-  const PREVIEW_CYCLE_COUNT = 3;
+  const previousSuppress = globalThis.__RR_SUPPRESS_SCHEDULER_WARNINGS__;
+  globalThis.__RR_SUPPRESS_SCHEDULER_WARNINGS__ = true;
+  try {
+  // Keep draft generation focused on the immediate 30-day planning window.
+  const PREVIEW_CYCLE_COUNT = 1;
   let schedulingOpts = {
     allowWeekend: allowWeekend === true,
     allowFlexibleAdjustment: allowFlexibleAdjustment === true,
@@ -312,7 +316,11 @@ async function generateCalendarDraft({
       const attempt = await buildCycleAttempt({
         cycleStart,
         cycleIndex: cycle,
-        localSchedulingOpts: { ...schedulingOpts, ...cfg },
+        localSchedulingOpts: {
+          ...schedulingOpts,
+          ...cfg,
+          suppressSchedulerWarnings: true,
+        },
         reelOffset: reelGlobalIndex,
         postOffset: postGlobalIndex,
         carouselOffset: carouselGlobalIndex,
@@ -355,6 +363,9 @@ async function generateCalendarDraft({
     activeContentCounts,
     cycleRanges,
   };
+  } finally {
+    globalThis.__RR_SUPPRESS_SCHEDULER_WARNINGS__ = previousSuppress === true;
+  }
 }
 
 module.exports = {

@@ -537,6 +537,7 @@ async function pickAssigneeForSplitDay({
 }
 
 function warnIfSubstitutes(roleLabel, primaryId, assignees) {
+  if (globalThis.__RR_SUPPRESS_SCHEDULER_WARNINGS__ === true) return;
   if (!primaryId || !assignees?.length) return;
   const uniq = new Set();
   for (const a of assignees) {
@@ -549,6 +550,11 @@ function warnIfSubstitutes(roleLabel, primaryId, assignees) {
       )}, also assigned: ${[...uniq].join(", ")}`
     );
   }
+}
+
+function schedulerWarn(message) {
+  if (globalThis.__RR_SUPPRESS_SCHEDULER_WARNINGS__ === true) return;
+  console.warn(message);
 }
 
 /**
@@ -584,6 +590,8 @@ async function fillMultiDaySlotsWithBuffer(
   const assignees = [];
   const pendingSynthetic = [...seedTasks];
   let extensionSteps = 0;
+  const loggedBorrowDenials = new Set();
+  let skipBorrowAttempts = false;
 
   let probe = createUTCDate(startFrom);
   if (!probe) {
@@ -653,32 +661,44 @@ async function fillMultiDaySlotsWithBuffer(
       const meta = getDurationExtensionMeta(role);
       if (meta.flexible && currentTarget < meta.maxDays) {
         const borrowFn = options.tryBorrowFromNextStage;
-        if (typeof borrowFn === "function") {
+        if (!skipBorrowAttempts && typeof borrowFn === "function") {
           const br = borrowFn();
           if (br && br.ok === true) {
             currentTarget += 1;
             extensionSteps += 1;
             maxIterations += 60;
-            console.warn(
+            schedulerWarn(
               `[scheduler] Prompt 62/63: extended ${role} target to ${currentTarget} days (borrowed 1d from ${br.nextRole})`
             );
           } else if (allowFlexibleAdjustment) {
             currentTarget += 1;
             extensionSteps += 1;
             maxIterations += 60;
-            console.warn(
+            schedulerWarn(
               `[scheduler] Prompt 66: extended ${role} target to ${currentTarget} days (flexible adjustment; borrow was ${br?.reason || "unavailable"})`
             );
           } else {
-            console.warn(
-              `[scheduler] Prompt 63: extension reverted — borrow denied (${br?.reason || "unknown"})`
-            );
+            const deniedReason = String(br?.reason || "unknown");
+            // Repeating same denial in long loops can flood logs and slow backend.
+            if (!loggedBorrowDenials.has(deniedReason)) {
+              loggedBorrowDenials.add(deniedReason);
+              schedulerWarn(
+                `[scheduler] Prompt 63: extension reverted — borrow denied (${deniedReason})`
+              );
+            }
+            if (
+              deniedReason === "cannot_reduce_post" ||
+              deniedReason === "cannot_reduce_next_stage" ||
+              deniedReason === "next_stage_not_flexible"
+            ) {
+              skipBorrowAttempts = true;
+            }
           }
         } else if (allowFlexibleAdjustment) {
           currentTarget += 1;
           extensionSteps += 1;
           maxIterations += 60;
-          console.warn(
+          schedulerWarn(
             `[scheduler] Prompt 66: extended ${role} target to ${currentTarget} days (flexible adjustment; no borrow hook)`
           );
         }
@@ -724,7 +744,7 @@ async function fillMultiDaySlots(role, userId, startFrom, nDays, holidaySet, opt
     );
   }
   if (result.partial) {
-    console.warn(
+    schedulerWarn(
       `[scheduler] Partial ${role} buffer: scheduled ${result.dates.length}/${result.durationDays ?? nDays} days (Prompt 60)`
     );
   }

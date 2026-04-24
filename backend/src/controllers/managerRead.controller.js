@@ -4,6 +4,7 @@ const Client = require("../models/Client");
 const ContentItem = require("../models/ContentItem");
 const Leave = require("../models/Leave");
 const TeamCapacity = require("../models/TeamCapacity");
+const UserCapacity = require("../models/UserCapacity");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 const Schedule = require("../models/Schedule");
 const mongoose = require("mongoose");
@@ -265,8 +266,21 @@ const getTeamUsers = async (req, res) => {
           : { name: "manager", slug: "manager" };
       return { ...raw, role: roleObj };
     });
+    const allRows = [
+      ...filteredUsers.map((u) => (u.toObject ? u.toObject() : u)),
+      ...normalizedManagers,
+    ];
+    const allUserIds = allRows.map((r) => r?._id).filter(Boolean);
+    const capDocs = allUserIds.length
+      ? await UserCapacity.find({ user: { $in: allUserIds } }).lean()
+      : [];
+    const capByUser = new Map(capDocs.map((c) => [String(c.user), c]));
+    const withCapacity = allRows.map((row) => ({
+      ...row,
+      userCapacity: capByUser.get(String(row._id)) || null,
+    }));
 
-    return success(res, [...filteredUsers, ...normalizedManagers]);
+    return success(res, withCapacity);
   } catch (err) {
     return failure(res, "Failed to fetch team users", 500);
   }

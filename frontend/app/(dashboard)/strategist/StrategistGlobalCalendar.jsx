@@ -397,6 +397,7 @@ export default function StrategistGlobalCalendar() {
         id,
         name: u?.name || `User ${id.slice(-4)}`,
         role: normalizeRoleKey(u?.role?.name || u?.role?.slug || u?.role),
+        userCapacity: u?.userCapacity || null,
       });
     });
     return map;
@@ -593,7 +594,19 @@ export default function StrategistGlobalCalendar() {
     return map;
   }, [tasks]);
 
-  const getRoleBucketCapacity = (role, bucket) => {
+  const getRoleBucketCapacity = (userId, role, bucket) => {
+    const userCap = userMetaById.get(String(userId || ""))?.userCapacity || null;
+    if (userCap) {
+      if (bucket === "reel" && userCap.overrideReelCapacity === true) {
+        return Number(userCap.reelCapacity) || 0;
+      }
+      if (bucket === "static_post" && userCap.overridePostCapacity === true) {
+        return Number(userCap.postCapacity) || 0;
+      }
+      if (bucket === "carousel" && userCap.overrideCarouselCapacity === true) {
+        return Number(userCap.carouselCapacity) || 0;
+      }
+    }
     const byRole = capacityByRole?.[role];
     const val = Number(byRole?.[bucket]);
     return Number.isFinite(val) && val >= 0 ? val : DEFAULT_ROLE_CAPACITY;
@@ -986,7 +999,7 @@ export default function StrategistGlobalCalendar() {
                           const used = Number(
                             usedByUserDayType.get(`${row.userId}::${day.ymd}::${bucket}`) || 0
                           );
-                          const capacity = getRoleBucketCapacity(row.role, bucket);
+                          const capacity = getRoleBucketCapacity(row.userId, row.role, bucket);
                           return { bucket, used, capacity };
                         });
                         const warningBuckets = bucketStats
@@ -1084,7 +1097,11 @@ export default function StrategistGlobalCalendar() {
                               const taskUsed = Number(
                                 usedByUserDayType.get(`${row.userId}::${day.ymd}::${taskBucket}`) || 0
                               );
-                              const taskCapacity = getRoleBucketCapacity(row.role, taskBucket);
+                              const taskCapacity = getRoleBucketCapacity(
+                                row.userId,
+                                row.role,
+                                taskBucket
+                              );
                               const taskIsOverloaded = overloadedBuckets.has(taskBucket);
                               const taskIsFull = !taskIsOverloaded && fullBuckets.has(taskBucket);
                               const taskCapacityReason =

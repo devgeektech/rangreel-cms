@@ -10,6 +10,11 @@ const FIELD_BY_CONTENT_TYPE = {
   static_post: "postCapacity",
   carousel: "carouselCapacity",
 };
+const OVERRIDE_FLAG_BY_FIELD = {
+  reelCapacity: "overrideReelCapacity",
+  postCapacity: "overridePostCapacity",
+  carouselCapacity: "overrideCarouselCapacity",
+};
 
 function normalizeUserId(userId) {
   if (!userId) return null;
@@ -47,8 +52,13 @@ async function getEffectiveCapacity(userId, role, contentType) {
     : null;
   const globalCap = await TeamCapacity.findOne({ role }).lean();
 
-  if (userCap && Number(userCap[field]) > 0) {
-    return Number(userCap[field]);
+  const userHasOverride =
+    userCap &&
+    (userCap[OVERRIDE_FLAG_BY_FIELD[field]] === true ||
+      Number(userCap[field]) > 0);
+  if (userHasOverride) {
+    const v = Number(userCap[field]);
+    return Number.isFinite(v) && v >= 0 ? v : 0;
   }
 
   const g = globalCap && Number.isFinite(Number(globalCap[field])) ? Number(globalCap[field]) : 0;

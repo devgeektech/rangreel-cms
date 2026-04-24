@@ -6,6 +6,11 @@ const {
 } = require("../constants/roleCapacityMap");
 
 const CAP_FIELDS = ["reelCapacity", "postCapacity", "carouselCapacity"];
+const OVERRIDE_FLAG_BY_FIELD = {
+  reelCapacity: "overrideReelCapacity",
+  postCapacity: "overridePostCapacity",
+  carouselCapacity: "overrideCarouselCapacity",
+};
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
@@ -19,6 +24,7 @@ function validateUserCapacityBody(workflowRole, body) {
     throw new Error("User role does not support capacity overrides");
   }
   const updates = {};
+  const overrideFlags = {};
   for (const key of CAP_FIELDS) {
     if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
     const n = Number(body[key]);
@@ -35,8 +41,9 @@ function validateUserCapacityBody(workflowRole, body) {
       throw new Error("This role cannot have carousel capacity");
     }
     updates[key] = n;
+    overrideFlags[OVERRIDE_FLAG_BY_FIELD[key]] = true;
   }
-  return updates;
+  return { updates, overrideFlags };
 }
 
 const getCapacity = async (req, res) => {
@@ -85,7 +92,7 @@ const setCapacity = async (req, res) => {
       return failure(res, "User role does not have schedulable capacity", 400);
     }
 
-    const updates = validateUserCapacityBody(workflowRole, body);
+    const { updates, overrideFlags } = validateUserCapacityBody(workflowRole, body);
 
     if (Object.keys(updates).length === 0) {
       return failure(res, "No valid capacity fields to update", 400);
@@ -93,8 +100,11 @@ const setCapacity = async (req, res) => {
 
     const doc = await UserCapacity.findOneAndUpdate(
       { user: id },
-      { $set: { ...updates, role: workflowRole }, $setOnInsert: { user: id } },
-      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
+      {
+        $set: { ...updates, ...overrideFlags, role: workflowRole },
+        $setOnInsert: { user: id },
+      },
+      { returnDocument: "after", upsert: true, runValidators: true, setDefaultsOnInsert: true }
     );
 
     return success(res, doc);
