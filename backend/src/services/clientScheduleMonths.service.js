@@ -36,23 +36,11 @@ function enumerateDays(start, end) {
 }
 
 function splitIntoWeeks(days) {
+  const list = Array.isArray(days) ? days.filter(Boolean) : [];
   const weeks = [];
-  let current = [];
-  for (const day of days || []) {
-    if (!day) continue;
-    if (current.length === 0) {
-      current.push(day);
-      continue;
-    }
-    const dow = day.getUTCDay();
-    if (dow === 1) {
-      weeks.push(current);
-      current = [day];
-    } else {
-      current.push(day);
-    }
+  for (let i = 0; i < list.length; i += 7) {
+    weeks.push(list.slice(i, i + 7));
   }
-  if (current.length) weeks.push(current);
   return weeks;
 }
 
@@ -285,11 +273,6 @@ async function generateScheduleForRange(client, range, options = {}) {
  * First 3 custom months after package / client creation. Idempotent if rows already exist.
  */
 async function createInitialScheduleForClient(clientId) {
-  const existing = await Schedule.countDocuments({ clientId });
-  if (existing > 0) {
-    return { created: 0, skipped: true };
-  }
-
   const client = await Client.findById(clientId)
     .populate("package")
     .select("startDate isCustomCalendar activeContentCounts package totalReels totalPosts totalCarousels weekendEnabled rules")
@@ -298,8 +281,22 @@ async function createInitialScheduleForClient(clientId) {
     return { created: 0, skipped: true };
   }
 
+  const existingRows = await Schedule.find({ clientId })
+    .select("monthIndex")
+    .lean();
+  const existingIndexes = new Set(
+    (existingRows || [])
+      .map((r) => Number(r?.monthIndex))
+      .filter((n) => Number.isFinite(n) && n >= 0)
+  );
   const docs = [];
+  const createdIndexes = [];
+  let skippedExisting = 0;
   for (let i = 0; i < 3; i++) {
+    if (existingIndexes.has(i)) {
+      skippedExisting += 1;
+      continue;
+    }
     const range = getCustomMonthRange(client.startDate, i);
     const items = await generateScheduleForRange(client, range, { forceWeekendOff: true });
     docs.push({
@@ -311,16 +308,44 @@ async function createInitialScheduleForClient(clientId) {
       isEditable: true,
       isCustomCalendar: Boolean(client.isCustomCalendar),
     });
+    createdIndexes.push(i);
   }
 
-  await Schedule.insertMany(docs);
-  return { created: docs.length, skipped: false };
+  if (!docs.length) {
+    return { created: 0, skipped: skippedExisting > 0, createdIndexes: [] };
+  }
+
+  try {
+    await Schedule.insertMany(docs, { ordered: false });
+  } catch (err) {
+    const writeErrors = Array.isArray(err?.writeErrors) ? err.writeErrors : [];
+    const onlyDupes =
+      err?.code === 11000 ||
+      (writeErrors.length > 0 && writeErrors.every((w) => Number(w?.code) === 11000));
+    if (!onlyDupes) throw err;
+  }
+
+  const totalAfter = await Schedule.countDocuments({ clientId });
+  if (totalAfter < 3) {
+    console.warn(
+      `[schedule-init] incomplete months after init clientId=${String(clientId)} total=${Number(
+        totalAfter
+      )} expected=3`
+    );
+  } else {
+    console.info(
+      `[schedule-init] ensured initial months clientId=${String(clientId)} created=${createdIndexes.join(
+        ","
+      ) || "none"} total=${Number(totalAfter)}`
+    );
+  }
+  return { created: createdIndexes.length, skipped: false, createdIndexes };
 }
 
 async function listSchedulesForClient(clientId) {
   let totalMonths = await Schedule.countDocuments({ clientId });
-  // No rows yet: always create the 3 anchored custom months (items may be empty per range).
-  if (totalMonths === 0) {
+  // Ensure first 3 rows always exist (also heals partial writes: 1/3 or 2/3).
+  if (totalMonths < 3) {
     try {
       await createInitialScheduleForClient(clientId);
     } catch (err) {
@@ -362,7 +387,10 @@ async function createNextMonthSchedule(clientId, managerUserId) {
     throw new Error("Month already exists");
   }
 
-  const range = getCustomMonthRange(client.startDate, nextIndex);
+  const sequentialStart = normalizeUtcMidnight(addDaysUTC(lastMonth.endDate, 1));
+  const range = sequentialStart
+    ? { start: sequentialStart, end: addDaysUTC(sequentialStart, 29) }
+    : getCustomMonthRange(client.startDate, nextIndex);
   const items = await generateScheduleForRange(client, range, { forceWeekendOff: true });
 
   const doc = await Schedule.create({
@@ -413,10 +441,18 @@ async function previewExtendSchedules(clientId, managerUserId, numberOfCycles, o
     throw new Error("Some months already exist");
   }
 
+  const anchorLastSchedule = await Schedule.findOne({ clientId }).sort({ monthIndex: -1 }).lean();
+  let rollingStart =
+    !Number.isFinite(startIndexFromInput) && anchorLastSchedule?.endDate
+      ? normalizeUtcMidnight(addDaysUTC(anchorLastSchedule.endDate, 1))
+      : null;
+
   const newSchedules = [];
   for (let i = 0; i < n; i += 1) {
     const monthIndex = startIndex + i;
-    const range = getCustomMonthRange(client.startDate, monthIndex);
+    const range = rollingStart
+      ? { start: rollingStart, end: addDaysUTC(rollingStart, 29) }
+      : getCustomMonthRange(client.startDate, monthIndex);
     const items = await generateScheduleForRange(client, range, { forceWeekendOff: true });
     newSchedules.push({
       clientId,
@@ -429,6 +465,7 @@ async function previewExtendSchedules(clientId, managerUserId, numberOfCycles, o
       editedByManager: false,
       isDraft: true,
     });
+    rollingStart = addDaysUTC(range.end, 1);
   }
   return newSchedules;
 }

@@ -119,18 +119,40 @@ const startReminderCron = () => {
             if (alreadySentToday) continue;
             emailedToday.add(emailKey);
             const user = await User.findById(userId).select("email name").lean();
-            if (!user?.email) continue;
+            if (!user?.email) {
+              console.info(
+                `[reminder-cron] email skipped (no email) userId=${String(userId)} contentId=${String(
+                  item._id
+                )} stageId=${String(stage._id)}`
+              );
+              continue;
+            }
             const shareUrl = `${resolveAppBaseUrl()}/shared/content/${String(item._id)}`;
-            await sendEmail({
-              to: { email: user.email, name: user.name || "" },
-              subject: title,
-              html: buildReminderEmailHtml({
-                userName: user.name || "",
-                title,
-                message,
-                shareUrl,
-              }),
-            });
+            try {
+              await sendEmail({
+                to: { email: user.email, name: user.name || "" },
+                subject: title,
+                html: buildReminderEmailHtml({
+                  userName: user.name || "",
+                  title,
+                  message,
+                  shareUrl,
+                }),
+              });
+              console.info(
+                `[reminder-cron] email success to=${user.email} userId=${String(
+                  userId
+                )} contentId=${String(item._id)} stageId=${String(stage._id)}`
+              );
+            } catch (emailErr) {
+              console.warn(
+                `[reminder-cron] email failed to=${user.email} userId=${String(
+                  userId
+                )} contentId=${String(item._id)} stageId=${String(stage._id)}:`,
+                emailErr?.message || emailErr
+              );
+              continue;
+            }
             await ReminderEmailLog.create({
               contentItem: item._id,
               stageId: String(stage._id),

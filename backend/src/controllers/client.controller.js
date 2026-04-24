@@ -505,7 +505,18 @@ const createClient = async (req, res) => {
     );
 
     try {
-      await createInitialScheduleForClient(client._id);
+      const initScheduleResult = await createInitialScheduleForClient(client._id);
+      console.info(
+        "[createClient] initial schedule months:",
+        JSON.stringify({
+          clientId: String(client._id),
+          created: Number(initScheduleResult?.created || 0),
+          createdIndexes: Array.isArray(initScheduleResult?.createdIndexes)
+            ? initScheduleResult.createdIndexes
+            : [],
+          skipped: Boolean(initScheduleResult?.skipped),
+        })
+      );
     } catch (schedErr) {
       console.warn("[createClient] createInitialScheduleForClient:", schedErr?.message || schedErr);
     }

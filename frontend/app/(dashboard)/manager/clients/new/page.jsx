@@ -34,7 +34,6 @@ import ContentCalendarDnd from "@/components/calendar/ContentCalendarDnd";
 import { cn } from "@/lib/utils";
 import {
   getCustomMonthRange,
-  mergeScheduleDraft,
   postingInCustomRange,
   prettyDateUtc,
 } from "@/lib/customMonthRange";
@@ -497,6 +496,22 @@ const MAX_BRIEF_FILE_BYTES = 50 * 1024 * 1024;
 
 const emptyBriefFiles = { brandKit: [], socialCredentials: [], other: [], agreement: [] };
 
+function monthNumberFromKey(monthKey) {
+  const m = String(monthKey || "").match(/^M(\d+)$/i);
+  if (!m) return Number.POSITIVE_INFINITY;
+  return Number(m[1]);
+}
+
+function getSortedScheduleKeys(scheduleObj) {
+  if (!scheduleObj || typeof scheduleObj !== "object") return [];
+  return Object.keys(scheduleObj).sort((a, b) => monthNumberFromKey(a) - monthNumberFromKey(b));
+}
+
+function flattenScheduleObject(scheduleObj) {
+  const keys = getSortedScheduleKeys(scheduleObj);
+  return keys.flatMap((k) => (Array.isArray(scheduleObj?.[k]?.items) ? scheduleObj[k].items : []));
+}
+
 function BriefFilePicker({ label, hint, files, onFilesAdded, accept, validateFile }) {
   const [localError, setLocalError] = useState("");
   return (
@@ -560,8 +575,8 @@ export default function NewClientPage() {
   const [scheduleSubmitted, setScheduleSubmitted] = useState(false);
   /** During customize: default to Post-only chips; user can switch to Plan / Shoot / … */
   const [scheduleStageFilter, setScheduleStageFilter] = useState("Post");
-  /** First 3 custom months from start date (same as post-create Schedule M0–M2). */
-  const [selectedPreviewMonthIndex, setSelectedPreviewMonthIndex] = useState(0);
+  /** First 3 custom months from start date keyed as M1/M2/M3. */
+  const [selectedPreviewMonthKey, setSelectedPreviewMonthKey] = useState("M1");
   const [weekendEnabled, setWeekendEnabled] = useState(false);
   const [calendarDraftError, setCalendarDraftError] = useState("");
   const [briefFiles, setBriefFiles] = useState(emptyBriefFiles);
@@ -606,9 +621,23 @@ export default function NewClientPage() {
   }, [startDateWatch]);
 
   const previewCustomMonths = useMemo(() => {
+    const scheduleObj = calendarDraft?.schedule;
+    const scheduleKeys = getSortedScheduleKeys(scheduleObj);
+    if (scheduleKeys.length) {
+      return scheduleKeys.map((key, i) => {
+        const row = scheduleObj?.[key] || {};
+        return {
+          monthKey: key,
+          monthIndex: Number.isFinite(row?.monthIndex) ? row.monthIndex : i,
+          start: row?.start,
+          end: row?.end,
+        };
+      });
+    }
     const dynamic = Array.isArray(calendarDraft?.cycleRanges) ? calendarDraft.cycleRanges : null;
     if (dynamic?.length) {
       return dynamic.map((row, i) => ({
+        monthKey: `M${i + 1}`,
         monthIndex: Number.isFinite(row?.monthIndex) ? row.monthIndex : i,
         start: row?.start,
         end: row?.end,
@@ -618,7 +647,7 @@ export default function NewClientPage() {
     try {
       return [0, 1, 2].map((i) => {
         const range = getCustomMonthRange(clientStartDateYmd, i);
-        return { monthIndex: i, ...range };
+        return { monthKey: `M${i + 1}`, monthIndex: i, ...range };
       });
     } catch {
       return null;
@@ -627,23 +656,25 @@ export default function NewClientPage() {
 
   const selectedPreviewRange = useMemo(() => {
     if (!previewCustomMonths?.length) return null;
-    return previewCustomMonths[selectedPreviewMonthIndex] ?? previewCustomMonths[0];
-  }, [previewCustomMonths, selectedPreviewMonthIndex]);
+    return (
+      previewCustomMonths.find((m) => String(m.monthKey) === String(selectedPreviewMonthKey)) ||
+      previewCustomMonths[0]
+    );
+  }, [previewCustomMonths, selectedPreviewMonthKey]);
 
   const displayCalendarDraft = useMemo(() => {
-    if (!calendarDraft?.items?.length) return calendarDraft;
-    if (Number.isFinite(selectedPreviewMonthIndex)) {
-      const byCycle = calendarDraft.items.filter(
-        (it) => Number(it?.cycleIndex) === Number(selectedPreviewMonthIndex)
-      );
-      if (byCycle.length > 0) return { ...calendarDraft, items: byCycle };
+    if (!calendarDraft) return calendarDraft;
+    const monthDraft = calendarDraft?.schedule?.[selectedPreviewMonthKey];
+    if (monthDraft && Array.isArray(monthDraft.items)) {
+      return { ...calendarDraft, items: monthDraft.items };
     }
+    if (!calendarDraft?.items?.length) return calendarDraft;
     if (!selectedPreviewRange) return calendarDraft;
     const items = calendarDraft.items.filter((it) =>
       postingInCustomRange(it.postingDate, selectedPreviewRange.start, selectedPreviewRange.end)
     );
     return { ...calendarDraft, items };
-  }, [calendarDraft, selectedPreviewRange, selectedPreviewMonthIndex]);
+  }, [calendarDraft, selectedPreviewRange, selectedPreviewMonthKey]);
 
   /** useWatch (not watch) so nested Controller fields like `teamAssignment.strategist` update this object reliably. */
   const teamAssignmentWatch = useWatch({
@@ -698,8 +729,16 @@ export default function NewClientPage() {
   }, [selectedPackageId, setValue]);
 
   useEffect(() => {
-    setSelectedPreviewMonthIndex(0);
+    setSelectedPreviewMonthKey("M1");
   }, [clientStartDateYmd]);
+
+  useEffect(() => {
+    const keys = getSortedScheduleKeys(calendarDraft?.schedule);
+    if (!keys.length) return;
+    if (!keys.includes(selectedPreviewMonthKey)) {
+      setSelectedPreviewMonthKey(keys[0]);
+    }
+  }, [calendarDraft, selectedPreviewMonthKey]);
 
   useEffect(() => {
     if (step !== 2) {
@@ -2101,13 +2140,13 @@ export default function NewClientPage() {
                       <span className="text-sm text-muted-foreground">Custom month:</span>
                       {previewCustomMonths.map((m) => (
                         <Button
-                          key={m.monthIndex}
+                          key={m.monthKey || m.monthIndex}
                           type="button"
                           size="sm"
-                          variant={selectedPreviewMonthIndex === m.monthIndex ? "default" : "outline"}
-                          onClick={() => setSelectedPreviewMonthIndex(m.monthIndex)}
+                          variant={selectedPreviewMonthKey === m.monthKey ? "default" : "outline"}
+                          onClick={() => setSelectedPreviewMonthKey(m.monthKey || `M${m.monthIndex + 1}`)}
                         >
-                          M{m.monthIndex + 1}{" "}
+                          {m.monthKey || `M${m.monthIndex + 1}`}{" "}
                           <span className="hidden sm:inline">
                             ({prettyDateUtc(m.start)} – {prettyDateUtc(m.end)})
                           </span>
@@ -2126,7 +2165,7 @@ export default function NewClientPage() {
                     </p>
                   ) : (
                     <ContentCalendarDnd
-                      key={`preview-${selectedPreviewMonthIndex}-${clientStartDateYmd || ""}`}
+                      key={`preview-${selectedPreviewMonthKey}-${clientStartDateYmd || ""}`}
                       draft={displayCalendarDraft}
                       controlledDraft
                       canEdit={customizingSchedule}
@@ -2142,7 +2181,26 @@ export default function NewClientPage() {
                       saving={false}
                       userById={userById}
                       onCalendarStateChange={(nextDraft) =>
-                        setCalendarDraft((prev) => mergeScheduleDraft(prev, nextDraft))
+                        setCalendarDraft((prev) => {
+                          if (!prev) return nextDraft;
+                          const monthKey = selectedPreviewMonthKey || "M1";
+                          const prevSchedule =
+                            prev.schedule && typeof prev.schedule === "object" ? prev.schedule : {};
+                          const updatedMonth = {
+                            ...(prevSchedule[monthKey] || {}),
+                            items: Array.isArray(nextDraft?.items) ? nextDraft.items : [],
+                          };
+                          const nextSchedule = {
+                            ...prevSchedule,
+                            [monthKey]: updatedMonth,
+                          };
+                          return {
+                            ...prev,
+                            ...nextDraft,
+                            schedule: nextSchedule,
+                            items: flattenScheduleObject(nextSchedule),
+                          };
+                        })
                       }
                       weekendMode={weekendEnabled}
                       onToggleWeekend={setWeekendEnabled}

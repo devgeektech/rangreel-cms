@@ -51,7 +51,14 @@ const buildNotificationEmailHtml = ({ userName, title, message, shareUrl }) => {
 
 const notifyUsers = async ({ userIds = [], title, message, type, contentId }) => {
   const uniqueIds = [...new Set((userIds || []).filter(Boolean).map((id) => String(id)))];
-  if (!uniqueIds.length) return;
+  if (!uniqueIds.length) {
+    console.info(
+      `[notifyUsers] skipped: no recipients title="${String(title || "")}" contentId=${String(
+        contentId || ""
+      )}`
+    );
+    return;
+  }
   const shareUrl =
     contentId && String(contentId).trim()
       ? `${resolveAppBaseUrl()}/shared/content/${String(contentId).trim()}`
@@ -72,6 +79,11 @@ const notifyUsers = async ({ userIds = [], title, message, type, contentId }) =>
   const users = await User.find({ _id: { $in: uniqueIds }, isActive: { $ne: false } })
     .select("_id email name")
     .lean();
+  console.info(
+    `[notifyUsers] dispatching title="${String(title || "")}" contentId=${String(
+      contentId || ""
+    )} recipients=${users.length}`
+  );
 
   for (const user of users) {
     const userId = String(user._id);
@@ -88,10 +100,26 @@ const notifyUsers = async ({ userIds = [], title, message, type, contentId }) =>
             shareUrl,
           }),
         });
+        console.info(
+          `[notifyUsers] email success userId=${userId} to=${user.email} title="${String(
+            title || ""
+          )}" contentId=${String(contentId || "")}`
+        );
       } catch (err) {
         // Email failures must not block workflow actions.
-        console.warn("[notifyUsers] email send failed:", err?.message || err);
+        console.warn(
+          `[notifyUsers] email failed userId=${userId} to=${user.email} title="${String(
+            title || ""
+          )}" contentId=${String(contentId || "")}:`,
+          err?.message || err
+        );
       }
+    } else {
+      console.info(
+        `[notifyUsers] email skipped (no email) userId=${userId} title="${String(
+          title || ""
+        )}" contentId=${String(contentId || "")}`
+      );
     }
   }
 };

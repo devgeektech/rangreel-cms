@@ -125,8 +125,8 @@ async function generateCalendarDraft({
   const previousSuppress = globalThis.__RR_SUPPRESS_SCHEDULER_WARNINGS__;
   globalThis.__RR_SUPPRESS_SCHEDULER_WARNINGS__ = true;
   try {
-  // Keep draft generation focused on the immediate 30-day planning window.
-  const PREVIEW_CYCLE_COUNT = 1;
+  // New-client preview must expose first 3 custom months (M1–M3).
+  const PREVIEW_CYCLE_COUNT = 3;
   let schedulingOpts = {
     allowWeekend: allowWeekend === true,
     allowFlexibleAdjustment: allowFlexibleAdjustment === true,
@@ -189,6 +189,7 @@ async function generateCalendarDraft({
 
   const items = [];
   const cycleRanges = [];
+  const schedule = {};
 
   const buildCycleAttempt = async ({
     cycleStart,
@@ -347,6 +348,14 @@ async function generateCalendarDraft({
       nominalEnd: createUTCDate(nominalCycleEnd),
       overflowed: completedEnd.getTime() > nominalCycleEnd.getTime(),
     });
+    schedule[`M${cycle + 1}`] = {
+      monthIndex: cycle,
+      start: createUTCDate(cycleStart),
+      end: createUTCDate(completedEnd),
+      nominalEnd: createUTCDate(nominalCycleEnd),
+      overflowed: completedEnd.getTime() > nominalCycleEnd.getTime(),
+      items: cycleItems,
+    };
 
     if (completedEnd.getTime() <= nominalCycleEnd.getTime()) {
       cycleStart = addDaysUTC(cycleStart, 30);
@@ -359,6 +368,7 @@ async function generateCalendarDraft({
 
   return {
     items,
+    schedule,
     endDate,
     activeContentCounts,
     cycleRanges,
