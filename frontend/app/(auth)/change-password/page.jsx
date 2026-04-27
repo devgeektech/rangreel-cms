@@ -129,7 +129,8 @@ export default function ChangePasswordPage() {
 
       setUser(data.user);
       const dashboardRoute = resolveDashboardRoute(data.user);
-      router.replace(dashboardRoute);
+      // Use hard navigation so middleware picks up freshly rotated auth cookie immediately.
+      window.location.assign(dashboardRoute);
     } catch (error) {
       setServerError(error.message || "Failed to update password");
     }

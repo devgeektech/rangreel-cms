@@ -48,6 +48,7 @@ const getCookieOptions = () => ({
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: "lax",
+  path: "/",
   maxAge: 7 * 24 * 60 * 60 * 1000,
 });
 
@@ -97,7 +98,14 @@ const login = async (req, res) => {
 
 const logout = async (req, res) => {
   try {
-    res.clearCookie("rangreel_token");
+    const clearOpts = {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+    };
+    // Clear potential legacy-path cookies as well.
+    res.clearCookie("rangreel_token", { ...clearOpts, path: "/" });
+    res.clearCookie("rangreel_token", { ...clearOpts, path: "/api" });
     return res.status(200).json({ success: true });
   } catch (error) {
     return res.status(500).json({ success: false, error: "Logout failed" });
