@@ -1,34 +1,11 @@
 const Package = require("../models/Package");
 const Client = require("../models/Client");
-const { calculatePackageLimits } = require("../utils/packageCapacity.util");
 
 const success = (res, data, statusCode = 200) =>
   res.status(statusCode).json({ success: true, data });
 
 const failure = (res, error, statusCode = 400) =>
   res.status(statusCode).json({ success: false, error });
-
-const normalizeCounts = (payload = {}) => {
-  const reels = Math.max(0, Number(payload.noOfReels) || 0);
-  const staticPosts = Math.max(0, Number(payload.noOfStaticPosts) || 0);
-  const posts = Math.max(0, Number(payload.noOfPosts) || 0);
-  const carousels = Math.max(0, Number(payload.noOfCarousels) || 0);
-  return {
-    reels,
-    postsTotal: staticPosts + posts,
-    carousels,
-  };
-};
-
-const formatCapacityError = (kind, requested, max) => {
-  if (kind === "reels") {
-    return `Reels exceed capacity. Requested: ${requested}, Max allowed: ${max}`;
-  }
-  if (kind === "posts") {
-    return `Posts exceed capacity. Requested: ${requested}, Max allowed: ${max}`;
-  }
-  return `Carousels exceed capacity. Requested: ${requested}, Max allowed: ${max}`;
-};
 
 const canManagerEditPackage = (pkg, userId) =>
   String(pkg?.createdBy || "") === String(userId || "");
@@ -94,18 +71,6 @@ const createPackage = async (req, res) => {
       return failure(res, "Not authorized", 403);
     }
 
-    const { maxReels, maxPosts, maxCarousels } = await calculatePackageLimits();
-    const { reels, postsTotal, carousels } = normalizeCounts(req.body);
-    if (reels > maxReels) {
-      return failure(res, formatCapacityError("reels", reels, maxReels), 400);
-    }
-    if (postsTotal > maxPosts) {
-      return failure(res, formatCapacityError("posts", postsTotal, maxPosts), 400);
-    }
-    if (carousels > maxCarousels) {
-      return failure(res, formatCapacityError("carousels", carousels, maxCarousels), 400);
-    }
-
     const packageDoc = await Package.create({
       ...req.body,
       createdBy: req.user.id,
@@ -157,18 +122,6 @@ const updatePackage = async (req, res) => {
         packageDoc[field] = req.body[field];
       }
     });
-
-    const { maxReels, maxPosts, maxCarousels } = await calculatePackageLimits();
-    const { reels, postsTotal, carousels } = normalizeCounts(packageDoc);
-    if (reels > maxReels) {
-      return failure(res, formatCapacityError("reels", reels, maxReels), 400);
-    }
-    if (postsTotal > maxPosts) {
-      return failure(res, formatCapacityError("posts", postsTotal, maxPosts), 400);
-    }
-    if (carousels > maxCarousels) {
-      return failure(res, formatCapacityError("carousels", carousels, maxCarousels), 400);
-    }
 
     await packageDoc.save();
     return success(res, packageDoc);
