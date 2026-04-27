@@ -116,12 +116,16 @@ export default function DesignerDashboardPage() {
   }, [tasks]);
 
   const todayYmd = useMemo(() => getTodayYMDUTC(), []);
+  const scopeRefYmd = useMemo(
+    () => (dateScope === "currentMonth" ? `${month}-01` : todayYmd),
+    [dateScope, month, todayYmd]
+  );
   const scopedDesignStages = useMemo(
     () =>
       designStages.filter((entry) =>
-        isStageInDateScope(entry.stage, dateScope, todayYmd)
+        isStageInDateScope(entry.stage, dateScope, scopeRefYmd)
       ),
-    [designStages, dateScope, todayYmd]
+    [designStages, dateScope, scopeRefYmd]
   );
 
   const designStagesPending = useMemo(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bell, Camera, LayoutDashboard } from "lucide-react";
 import DashboardShell from "@/components/layout/DashboardShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskMonthControls } from "@/components/role-dashboard/TaskMonthControls";
 import { ReelDetailDialog } from "@/components/reel/ReelDetailDialog";
+import { getMyTasksIncludingCompleted } from "@/lib/userMyTasksApi";
 import {
   getTodayStartMs,
   getTodayYMDUTC,
@@ -66,14 +67,19 @@ export default function VideographerDashboardPage() {
   const [footageUploading, setFootageUploading] = useState({});
   const [openReelDetail, setOpenReelDetail] = useState(false);
   const [selectedContentId, setSelectedContentId] = useState(null);
-  const [dateScope, setDateScope] = useState("today");
+  const [dateScope, setDateScope] = useState("currentMonth");
+  const [shootTab, setShootTab] = useState("pending");
+
+  const reloadTasks = useCallback(async () => {
+    const res = await getMyTasksIncludingCompleted(month);
+    setTasks(Array.isArray(res?.data) ? res.data : []);
+  }, [month]);
 
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
-        const res = await api.getMyTasks(month);
-        setTasks(Array.isArray(res?.data) ? res.data : []);
+        await reloadTasks();
       } catch (error) {
         toast.error(error.message || "Failed to load tasks");
       } finally {
@@ -81,7 +87,7 @@ export default function VideographerDashboardPage() {
       }
     };
     load();
-  }, [month]);
+  }, [reloadTasks]);
 
   const shootStages = useMemo(() => {
     const entries = [];
@@ -104,22 +110,42 @@ export default function VideographerDashboardPage() {
   }, [tasks]);
 
   const todayYmd = useMemo(() => getTodayYMDUTC(), []);
+  const scopeRefYmd = useMemo(
+    () => (dateScope === "currentMonth" ? `${month}-01` : todayYmd),
+    [dateScope, month, todayYmd]
+  );
   const scopedShootStages = useMemo(
     () =>
       shootStages.filter((e) =>
-        isStageInDateScope(e.stage, dateScope, todayYmd)
+        isStageInDateScope(e.stage, dateScope, scopeRefYmd)
       ),
-    [shootStages, dateScope, todayYmd]
+    [shootStages, dateScope, scopeRefYmd]
   );
+  const shootStagesPending = useMemo(
+    () =>
+      scopedShootStages.filter((e) => {
+        const s = String(e.stage?.status || "").toLowerCase();
+        return s === "assigned" || s === "in_progress";
+      }),
+    [scopedShootStages]
+  );
+  const shootStagesCompleted = useMemo(
+    () =>
+      scopedShootStages.filter(
+        (e) => String(e.stage?.status || "").toLowerCase() === "completed"
+      ),
+    [scopedShootStages]
+  );
+  const visibleShootStages = shootTab === "pending" ? shootStagesPending : shootStagesCompleted;
 
-  /** Pending shoot tasks with due dates — same idea as strategist plan calendar. */
+  /** Calendar should show all month shoot stages (pending + completed) for visibility parity. */
   const shootCalendarEntries = useMemo(
     () =>
       scopedShootStages.filter((e) => {
         const ct = String(e.contentType || "").toLowerCase();
         const onCalendar =
           ct === "reel" || ct === "static_post" || ct === "post" || ct === "carousel";
-        return onCalendar && isShootPendingStage(e.stage);
+        return onCalendar;
       }),
     [scopedShootStages]
   );
@@ -196,9 +222,39 @@ export default function VideographerDashboardPage() {
                 title="No Shoot stages this month"
                 description="You’ll see your Videographer tasks once they’re assigned."
               />
+            ) : visibleShootStages.length === 0 ? (
+              <EmptyState
+                title={shootTab === "pending" ? "No pending shoot tasks" : "No completed shoot tasks yet"}
+                description={
+                  shootTab === "pending"
+                    ? "Completed items move to the Completed tab."
+                    : "Submit footage from Pending to see it here."
+                }
+              />
             ) : (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                {scopedShootStages.map(({ itemId, title, displayId, clientBrand, contentType, stage }) => {
+              <div className="space-y-3">
+                <div className="inline-flex flex-wrap gap-2 rounded-lg border border-border bg-muted/30 p-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={shootTab === "pending" ? "default" : "ghost"}
+                    className="h-8"
+                    onClick={() => setShootTab("pending")}
+                  >
+                    Pending ({shootStagesPending.length})
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={shootTab === "completed" ? "default" : "ghost"}
+                    className="h-8"
+                    onClick={() => setShootTab("completed")}
+                  >
+                    Completed ({shootStagesCompleted.length})
+                  </Button>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                {visibleShootStages.map(({ itemId, title, displayId, clientBrand, contentType, stage }) => {
                   const stageId = stage._id;
                   const status = String(stage.status || "").toLowerCase();
                   const overdue = isWorkflowStageOverdue(stage, todayStartMs);
@@ -267,8 +323,7 @@ export default function VideographerDashboardPage() {
                               } catch (error) {
                                 toast.error(error.message || "Failed to start shoot");
                               } finally {
-                                const res = await api.getMyTasks(month);
-                                setTasks(Array.isArray(res?.data) ? res.data : []);
+                                await reloadTasks();
                               }
                             }}
                           >
@@ -350,8 +405,7 @@ export default function VideographerDashboardPage() {
                                   toast.error(error.message || "Failed to submit footage");
                                 } finally {
                                   setFootageUploading((prev) => ({ ...prev, [stageId]: false }));
-                                  const res = await api.getMyTasks(month);
-                                  setTasks(Array.isArray(res?.data) ? res.data : []);
+                                  await reloadTasks();
                                 }
                               }}
                             >
@@ -364,6 +418,7 @@ export default function VideographerDashboardPage() {
                     </div>
                   );
                 })}
+                </div>
               </div>
             )}
           </CardContent>
@@ -379,8 +434,7 @@ export default function VideographerDashboardPage() {
         contentId={selectedContentId}
         viewerRole="videographer"
         onDidMutate={async () => {
-          const res = await api.getMyTasks(month);
-          setTasks(Array.isArray(res?.data) ? res.data : []);
+          await reloadTasks();
         }}
       />
     </DashboardShell>

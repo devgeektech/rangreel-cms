@@ -103,12 +103,16 @@ export default function EditorDashboardPage() {
   }, [tasks]);
 
   const todayYmd = useMemo(() => getTodayYMDUTC(), []);
+  const scopeRefYmd = useMemo(
+    () => (dateScope === "currentMonth" ? `${month}-01` : todayYmd),
+    [dateScope, month, todayYmd]
+  );
   const scopedEditStages = useMemo(
     () =>
       editStages.filter((e) =>
-        isStageInDateScope(e.stage, dateScope, todayYmd)
+        isStageInDateScope(e.stage, dateScope, scopeRefYmd)
       ),
-    [editStages, dateScope, todayYmd]
+    [editStages, dateScope, scopeRefYmd]
   );
 
   const editCalendarEntries = useMemo(

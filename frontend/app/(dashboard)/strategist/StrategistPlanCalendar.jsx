@@ -81,7 +81,7 @@ export function StrategistPlanCalendar({
           headerToolbar={{
             left: "title",
             center: "",
-            right: "prev,next today",
+            right: "",
           }}
           height="auto"
           dayMaxEvents={3}

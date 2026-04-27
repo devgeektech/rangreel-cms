@@ -77,12 +77,17 @@ const getMyTasks = async (req, res) => {
       return failure(res, "month must be in format YYYY-MM", 400);
     }
 
+    const normalizedMonth = normalizeMonthTarget(month);
+    const year = Number(normalizedMonth.year);
+    const monthIndex = Number(normalizedMonth.month) - 1;
+    const monthStart = new Date(Date.UTC(year, monthIndex, 1));
+    const monthEndExclusive = new Date(Date.UTC(year, monthIndex + 1, 1));
+
     const statusInQuery = includeCompleted
       ? ["assigned", "in_progress", "planned", "completed"]
       : ["assigned", "in_progress", "planned"];
 
     const items = await ContentItem.find({
-      month,
       workflowStages: {
         $elemMatch: {
           assignedUser: req.user.id,
@@ -99,6 +104,12 @@ const getMyTasks = async (req, res) => {
       const filteredStages = (item.workflowStages || []).filter((s) => {
         const isMine = s.assignedUser && String(s.assignedUser) === String(req.user.id);
         const stageStatus = String(s.status || "").toLowerCase();
+        const due = s?.dueDate ? new Date(s.dueDate) : null;
+        const inMonth =
+          due instanceof Date &&
+          !Number.isNaN(due.getTime()) &&
+          due.getTime() >= monthStart.getTime() &&
+          due.getTime() < monthEndExclusive.getTime();
         const allowedPending =
           stageStatus === "assigned" ||
           stageStatus === "in_progress" ||
@@ -106,7 +117,7 @@ const getMyTasks = async (req, res) => {
         const isIncluded = includeCompleted
           ? allowedPending || stageStatus === "completed"
           : allowedPending;
-        return isMine && isIncluded;
+        return isMine && inMonth && isIncluded;
       });
 
       const approvalStage = (item.workflowStages || []).find((s) => {

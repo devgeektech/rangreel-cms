@@ -106,7 +106,7 @@ export default function StrategistDashboardPage() {
   const [planDialogOpen, setPlanDialogOpen] = useState(false);
   const [planSubmitting, setPlanSubmitting] = useState(false);
   const [planTab, setPlanTab] = useState("pending");
-  const [dateScope, setDateScope] = useState("today");
+  const [dateScope, setDateScope] = useState("currentMonth");
 
   const reloadTasks = useCallback(async () => {
     const res = await getMyTasksIncludingCompleted(month);
@@ -149,13 +149,17 @@ export default function StrategistDashboardPage() {
   }, [tasks]);
 
   const todayYmd = useMemo(() => getTodayYMDUTC(), []);
+  const scopeRefYmd = useMemo(
+    () => (dateScope === "currentMonth" ? `${month}-01` : todayYmd),
+    [dateScope, month, todayYmd]
+  );
 
   const scopedPlanStages = useMemo(
     () =>
       planStages.filter((e) =>
-        isStageInDateScope(e.stage, dateScope, todayYmd)
+        isStageInDateScope(e.stage, dateScope, scopeRefYmd)
       ),
-    [planStages, dateScope, todayYmd]
+    [planStages, dateScope, scopeRefYmd]
   );
 
   const planStagesPending = useMemo(
@@ -178,7 +182,7 @@ export default function StrategistDashboardPage() {
           ct === "static_post" ||
           ct === "post" ||
           ct === "carousel";
-        return onCalendar && isPlanPendingStage(e.stage);
+        return onCalendar;
       }),
     [scopedPlanStages]
   );

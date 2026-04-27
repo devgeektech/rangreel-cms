@@ -115,12 +115,16 @@ export default function PostingDashboardPage() {
   }, [tasks]);
 
   const todayYmd = useMemo(() => getTodayYMDUTC(), []);
+  const scopeRefYmd = useMemo(
+    () => (dateScope === "currentMonth" ? `${month}-01` : todayYmd),
+    [dateScope, month, todayYmd]
+  );
   const scopedPostStages = useMemo(
     () =>
       postStages.filter((entry) =>
-        isStageInDateScope(entry.stage, dateScope, todayYmd)
+        isStageInDateScope(entry.stage, dateScope, scopeRefYmd)
       ),
-    [postStages, dateScope, todayYmd]
+    [postStages, dateScope, scopeRefYmd]
   );
 
   const todayStartMs = useMemo(() => {
