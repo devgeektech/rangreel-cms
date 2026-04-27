@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bell, CheckCircle2, LayoutDashboard } from "lucide-react";
 import DashboardShell from "@/components/layout/DashboardShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,7 @@ import EmptyState from "@/components/shared/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskMonthControls } from "@/components/role-dashboard/TaskMonthControls";
 import { ReelDetailDialog } from "@/components/reel/ReelDetailDialog";
+import { getMyTasksIncludingCompleted } from "@/lib/userMyTasksApi";
 import {
   getTodayStartMs,
   getTodayYMDUTC,
@@ -66,13 +67,18 @@ export default function EditorDashboardPage() {
   const [openReelDetail, setOpenReelDetail] = useState(false);
   const [selectedContentId, setSelectedContentId] = useState(null);
   const [dateScope, setDateScope] = useState("today");
+  const [editTab, setEditTab] = useState("pending");
+
+  const reloadTasks = useCallback(async () => {
+    const res = await getMyTasksIncludingCompleted(month);
+    setTasks(Array.isArray(res?.data) ? res.data : []);
+  }, [month]);
 
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
-        const res = await api.getMyTasks(month);
-        setTasks(Array.isArray(res?.data) ? res.data : []);
+        await reloadTasks();
       } catch (error) {
         toast.error(error.message || "Failed to load tasks");
       } finally {
@@ -80,7 +86,7 @@ export default function EditorDashboardPage() {
       }
     };
     load();
-  }, [month]);
+  }, [reloadTasks]);
 
   const editStages = useMemo(() => {
     const entries = [];
@@ -114,6 +120,22 @@ export default function EditorDashboardPage() {
       ),
     [editStages, dateScope, scopeRefYmd]
   );
+  const editStagesPending = useMemo(
+    () =>
+      scopedEditStages.filter((e) => {
+        const s = String(e.stage?.status || "").toLowerCase();
+        return s === "assigned" || s === "in_progress";
+      }),
+    [scopedEditStages]
+  );
+  const editStagesCompleted = useMemo(
+    () =>
+      scopedEditStages.filter(
+        (e) => String(e.stage?.status || "").toLowerCase() === "completed"
+      ),
+    [scopedEditStages]
+  );
+  const visibleEditStages = editTab === "pending" ? editStagesPending : editStagesCompleted;
 
   const editCalendarEntries = useMemo(
     () =>
@@ -195,9 +217,39 @@ export default function EditorDashboardPage() {
               </div>
             ) : scopedEditStages.length === 0 ? (
               <EmptyState title="No Edit stages this month" description="You’ll see your Editor tasks once they’re assigned." />
+            ) : visibleEditStages.length === 0 ? (
+              <EmptyState
+                title={editTab === "pending" ? "No pending edit tasks" : "No completed edit tasks yet"}
+                description={
+                  editTab === "pending"
+                    ? "Completed items move to the Completed tab."
+                    : "Submit edits from Pending to see them here."
+                }
+              />
             ) : (
+              <div className="space-y-3">
+                <div className="inline-flex flex-wrap gap-2 rounded-lg border border-border bg-muted/30 p-1">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={editTab === "pending" ? "default" : "ghost"}
+                    className="h-8"
+                    onClick={() => setEditTab("pending")}
+                  >
+                    Pending ({editStagesPending.length})
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={editTab === "completed" ? "default" : "ghost"}
+                    className="h-8"
+                    onClick={() => setEditTab("completed")}
+                  >
+                    Completed ({editStagesCompleted.length})
+                  </Button>
+                </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                {scopedEditStages.map(({ itemId, title, displayId, clientBrand, contentType, stage }) => {
+                {visibleEditStages.map(({ itemId, title, displayId, clientBrand, contentType, stage }) => {
                   const stageId = stage._id;
                   const status = String(stage.status || "").toLowerCase();
                   const overdue = isWorkflowStageOverdue(stage, todayStartMs);
@@ -265,8 +317,7 @@ export default function EditorDashboardPage() {
                                 } catch (error) {
                                   toast.error(error.message || "Failed to start edit");
                                 } finally {
-                                  const res = await api.getMyTasks(month);
-                                  setTasks(Array.isArray(res?.data) ? res.data : []);
+                                  await reloadTasks();
                                 }
                               }}
                             >
@@ -304,8 +355,7 @@ export default function EditorDashboardPage() {
                                   } catch (error) {
                                     toast.error(error.message || "Failed to submit edit");
                                   } finally {
-                                    const res = await api.getMyTasks(month);
-                                    setTasks(Array.isArray(res?.data) ? res.data : []);
+                                  await reloadTasks();
                                   }
                                 }}
                               >
@@ -318,6 +368,7 @@ export default function EditorDashboardPage() {
                     </div>
                   );
                 })}
+              </div>
               </div>
             )}
           </CardContent>
@@ -333,8 +384,7 @@ export default function EditorDashboardPage() {
         contentId={selectedContentId}
         viewerRole="editor"
         onDidMutate={async () => {
-          const res = await api.getMyTasks(month);
-          setTasks(Array.isArray(res?.data) ? res.data : []);
+          await reloadTasks();
         }}
       />
     </DashboardShell>
