@@ -176,52 +176,10 @@ const createManagerPackage = async (req, res) => {
       return failure(res, "Package name is required", 400);
     }
 
-    if (
-      noOfReels === undefined ||
-      noOfReels === null ||
-      noOfPosts === undefined ||
-      noOfPosts === null ||
-      noOfStaticPosts === undefined ||
-      noOfStaticPosts === null ||
-      noOfCarousels === undefined ||
-      noOfCarousels === null
-    ) {
-      return failure(
-        res,
-        "noOfReels, noOfPosts, noOfStaticPosts, and noOfCarousels are required",
-        400
-      );
-    }
-
     const reels = n(noOfReels, 0);
     const posts = n(noOfPosts, 0);
     const staticPosts = n(noOfStaticPosts, 0);
     const carousels = n(noOfCarousels, 0);
-    const postsTotal = posts + staticPosts;
-
-    const { maxReels, maxPosts, maxCarousels } = await calculatePackageLimits();
-    if (reels > maxReels) {
-      return failure(
-        res,
-        `Reels exceed capacity. Requested: ${reels}, Max allowed: ${maxReels}`,
-        400
-      );
-    }
-    if (postsTotal > maxPosts) {
-      return failure(
-        res,
-        `Posts exceed capacity. Requested: ${posts} + ${staticPosts} = ${postsTotal}, Max allowed: ${maxPosts}`,
-        400
-      );
-    }
-    if (carousels > maxCarousels) {
-      return failure(
-        res,
-        `Carousels exceed capacity. Requested: ${carousels}, Max allowed: ${maxCarousels}`,
-        400
-      );
-    }
-
     const packageDoc = await Package.create({
       name: nameStr,
       noOfReels: reels,

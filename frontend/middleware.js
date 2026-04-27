@@ -12,6 +12,21 @@ const ROLE_ROOTS = [
   "/designer",
   "/posting",
 ];
+const ROLE_SLUG_DASHBOARD_ROUTE = {
+  strategist: "/strategist",
+  videographer: "/videographer",
+  editor: "/editor",
+  "video-editor": "/editor",
+  videoeditor: "/editor",
+  designer: "/designer",
+  "graphic-designer": "/designer",
+  graphicdesigner: "/designer",
+  posting: "/posting",
+  "posting-executive": "/posting",
+  postingexecutive: "/posting",
+  campaignmanager: "/campaign-manager",
+  "campaign-manager": "/campaign-manager",
+};
 
 function isPublicPath(pathname) {
   if (PUBLIC_PATHS.includes(pathname)) {
@@ -32,6 +47,10 @@ function getDashboardRoute(payload) {
   }
   if (payload.roleType === "admin") return "/admin";
   if (payload.roleType === "manager") return "/manager";
+  const roleSlug = String(payload.roleSlug || "").toLowerCase();
+  if (roleSlug && ROLE_SLUG_DASHBOARD_ROUTE[roleSlug]) {
+    return ROLE_SLUG_DASHBOARD_ROUTE[roleSlug];
+  }
   return "/";
 }
 

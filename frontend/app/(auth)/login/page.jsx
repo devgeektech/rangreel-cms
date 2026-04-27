@@ -10,6 +10,31 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
 import ThemeToggle from "@/components/theme-toggle";
 import AppLogo from "@/components/shared/AppLogo";
+const ROLE_SLUG_DASHBOARD_ROUTE = {
+  strategist: "/strategist",
+  videographer: "/videographer",
+  editor: "/editor",
+  "video-editor": "/editor",
+  videoeditor: "/editor",
+  designer: "/designer",
+  "graphic-designer": "/designer",
+  graphicdesigner: "/designer",
+  posting: "/posting",
+  "posting-executive": "/posting",
+  postingexecutive: "/posting",
+  campaignmanager: "/campaign-manager",
+  "campaign-manager": "/campaign-manager",
+};
+
+function resolveDashboardRoute(user) {
+  if (user?.dashboardRoute) return user.dashboardRoute;
+  if (user?.roleType === "admin") return "/admin";
+  if (user?.roleType === "manager") return "/manager";
+  const slug = String(user?.role?.slug || "").toLowerCase();
+  if (slug && ROLE_SLUG_DASHBOARD_ROUTE[slug]) return ROLE_SLUG_DASHBOARD_ROUTE[slug];
+  return "/";
+}
+
 const loginSchema = z.object({
   email: z.string().trim().email("Please enter a valid email"),
   password: z.string().min(1, "Password is required"),
@@ -38,7 +63,7 @@ export default function LoginPage() {
     try {
       const data = await api.login(values);
       setUser(data.user);
-      router.push(data.user.dashboardRoute || "/");
+      router.replace(resolveDashboardRoute(data.user));
     } catch (error) {
       setServerError(error.message || "Login failed");
     }

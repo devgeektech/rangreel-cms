@@ -4,17 +4,38 @@ const User = require("../models/User");
 const PASSWORD_REGEX =
   /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_\-+=[\]{};':"\\|,.<>/?]).{8,}$/;
 
+const ROLE_SLUG_DASHBOARD_ROUTE = {
+  strategist: "/strategist",
+  videographer: "/videographer",
+  editor: "/editor",
+  "video-editor": "/editor",
+  videoeditor: "/editor",
+  designer: "/designer",
+  "graphic-designer": "/designer",
+  graphicdesigner: "/designer",
+  posting: "/posting",
+  "posting-executive": "/posting",
+  postingexecutive: "/posting",
+  campaignmanager: "/campaign-manager",
+  "campaign-manager": "/campaign-manager",
+};
+
 const resolveDashboardRoute = (user) => {
   if (user.roleType === "admin") return "/admin";
   if (user.roleType === "manager") return "/manager";
   if (user.role && user.role.dashboardRoute) return user.role.dashboardRoute;
-  return "";
+  const slug = String(user?.role?.slug || "").toLowerCase();
+  if (slug && ROLE_SLUG_DASHBOARD_ROUTE[slug]) {
+    return ROLE_SLUG_DASHBOARD_ROUTE[slug];
+  }
+  return "/";
 };
 
 const getJwtPayload = (user, dashboardRoute) => ({
   id: user._id,
   roleType: user.roleType,
   dashboardRoute: dashboardRoute || "",
+  roleSlug: String(user?.role?.slug || "").toLowerCase(),
   mustChangePass: user.mustChangePass,
 });
 

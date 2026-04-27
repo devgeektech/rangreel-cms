@@ -30,6 +30,31 @@ const schema = z
       "Password must include 8+ chars, uppercase, number, and special character",
   });
 
+const ROLE_SLUG_DASHBOARD_ROUTE = {
+  strategist: "/strategist",
+  videographer: "/videographer",
+  editor: "/editor",
+  "video-editor": "/editor",
+  videoeditor: "/editor",
+  designer: "/designer",
+  "graphic-designer": "/designer",
+  graphicdesigner: "/designer",
+  posting: "/posting",
+  "posting-executive": "/posting",
+  postingexecutive: "/posting",
+  campaignmanager: "/campaign-manager",
+  "campaign-manager": "/campaign-manager",
+};
+
+function resolveDashboardRoute(user) {
+  if (user?.dashboardRoute) return user.dashboardRoute;
+  if (user?.roleType === "admin") return "/admin";
+  if (user?.roleType === "manager") return "/manager";
+  const slug = String(user?.role?.slug || "").toLowerCase();
+  if (slug && ROLE_SLUG_DASHBOARD_ROUTE[slug]) return ROLE_SLUG_DASHBOARD_ROUTE[slug];
+  return "/";
+}
+
 function RequirementItem({ ok, label }) {
   return (
     <li className="flex items-center gap-2 text-xs sm:text-sm">
@@ -103,9 +128,8 @@ export default function ChangePasswordPage() {
       });
 
       setUser(data.user);
-      const dashboardRoute =
-        useAuthStore.getState().user?.dashboardRoute || data.user?.dashboardRoute || "/";
-      router.push(dashboardRoute);
+      const dashboardRoute = resolveDashboardRoute(data.user);
+      router.replace(dashboardRoute);
     } catch (error) {
       setServerError(error.message || "Failed to update password");
     }
