@@ -36,6 +36,26 @@ function initials(name) {
     .toUpperCase();
 }
 
+function looksLikeObjectId(value) {
+  return /^[a-f0-9]{24}$/i.test(String(value || "").trim());
+}
+
+function humanizeSlug(slug) {
+  return String(slug || "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function roleLabel(role) {
+  const rawName = String(role?.name || "").trim();
+  if (rawName && !looksLikeObjectId(rawName)) return rawName;
+  const rawSlug = String(role?.slug || "").trim();
+  if (rawSlug && !looksLikeObjectId(rawSlug)) return humanizeSlug(rawSlug);
+  return "Role";
+}
+
 export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [roles, setRoles] = useState([]);
@@ -256,7 +276,7 @@ export default function AdminUsersPage() {
             <SelectItem value="all">All roles</SelectItem>
             {assignableRoles.map((role) => (
               <SelectItem key={role._id} value={role.slug}>
-                {role.name}
+                {roleLabel(role)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -442,7 +462,7 @@ export default function AdminUsersPage() {
                 <SelectContent>
                   {assignableRoles.map((role) => (
                     <SelectItem key={role._id} value={role._id}>
-                      {role.name}
+                      {roleLabel(role)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -511,7 +531,7 @@ export default function AdminUsersPage() {
                 <SelectContent>
                   {assignableRoles.map((role) => (
                     <SelectItem key={role._id} value={role._id}>
-                      {role.name}
+                      {roleLabel(role)}
                     </SelectItem>
                   ))}
                 </SelectContent>
