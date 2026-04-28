@@ -248,7 +248,14 @@ function sortTasks(a, b) {
   const eb = b.stages[b.currentStageIndex]?.earliestStartDate?.getTime?.() || 0;
   if (ea !== eb) return ea - eb;
   if (a.clientSortKey !== b.clientSortKey) return a.clientSortKey.localeCompare(b.clientSortKey);
-  return a.title.localeCompare(b.title);
+  const ta = String(a.title || "");
+  const tb = String(b.title || "");
+  const na = Number((ta.match(/#\s*(\d+)/) || [])[1]);
+  const nb = Number((tb.match(/#\s*(\d+)/) || [])[1]);
+  const hasNa = Number.isFinite(na);
+  const hasNb = Number.isFinite(nb);
+  if (hasNa && hasNb && na !== nb) return na - nb;
+  return ta.localeCompare(tb);
 }
 
 function getEffectiveBucket(contentType) {
