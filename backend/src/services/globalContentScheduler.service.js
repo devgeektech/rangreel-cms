@@ -4,6 +4,14 @@ const PublicHoliday = require("../models/PublicHoliday");
 const { BACKWARD_OFFSETS } = require("./workflowFromPostingDate.service");
 const { getEffectiveCapacity } = require("../utils/capacityResolver");
 
+const MIX_BUCKETS = ["reel", "static_post", "carousel"];
+const DAILY_MIX_TARGET = {
+  reel: 2,
+  static_post: 2,
+  carousel: 2,
+};
+const URGENT_REEL_RESERVE = 2;
+
 function createUTCDate(date) {
   const d = date instanceof Date ? new Date(date) : new Date(date);
   if (Number.isNaN(d.getTime())) return null;
@@ -56,6 +64,43 @@ function isNonWorkingDayUTC(date, holidaySet, allowWeekend = false) {
   const key = ymdUTC(date);
   if (!allowWeekend && isWeekendUTC(date)) return true;
   return Boolean(key && holidaySet && holidaySet.has(key));
+}
+
+async function buildSeedDayUsageMap(cycleRange, options = {}) {
+  const start = createUTCDate(cycleRange?.start);
+  const end = createUTCDate(cycleRange?.end);
+  if (!start || !end) return new Map();
+
+  const excludeClientIds = Array.isArray(options.excludeClientIds)
+    ? options.excludeClientIds.filter(Boolean).map((id) => String(id))
+    : [];
+
+  const query = {
+    "workflowStages.dueDate": { $gte: start, $lte: end },
+  };
+  if (excludeClientIds.length) {
+    query.client = { $nin: excludeClientIds };
+  }
+
+  const rows = await ContentItem.find(query)
+    .select("contentType workflowStages.role workflowStages.assignedUser workflowStages.dueDate workflowStages.status client")
+    .lean();
+
+  const seeded = new Map();
+  for (const item of rows || []) {
+    const contentType = getEffectiveBucket(item?.contentType);
+    for (const ws of item?.workflowStages || []) {
+      const due = createUTCDate(ws?.dueDate);
+      const role = String(ws?.role || "");
+      const uid = ws?.assignedUser ? String(ws.assignedUser) : "";
+      const status = String(ws?.status || "").toLowerCase();
+      if (!due || !role || !uid) continue;
+      if (status === "completed" || status === "posted") continue;
+      const key = `${ymdUTC(due)}|${role}|${uid}|${contentType}`;
+      seeded.set(key, (seeded.get(key) || 0) + 1);
+    }
+  }
+  return seeded;
 }
 
 function getPipelineRows(contentType, planType) {
@@ -154,10 +199,43 @@ function sortTasks(a, b) {
   return a.title.localeCompare(b.title);
 }
 
+function getEffectiveBucket(contentType) {
+  const t = String(contentType || "").toLowerCase();
+  if (t === "reel") return "reel";
+  if (t === "carousel") return "carousel";
+  return "static_post";
+}
+
+function sumRemaining(remainingByType) {
+  let total = 0;
+  for (const key of MIX_BUCKETS) {
+    const n = remainingByType[key];
+    if (!Number.isFinite(n)) return Number.POSITIVE_INFINITY;
+    total += Math.max(0, Number(n) || 0);
+  }
+  return total;
+}
+
+function takeAssignableTasks(candidates, remainingByType, maxTake) {
+  const picked = [];
+  if (!Array.isArray(candidates) || !candidates.length || maxTake <= 0) return picked;
+  for (const task of candidates) {
+    if (picked.length >= maxTake) break;
+    const bucket = getEffectiveBucket(task.contentType);
+    const left = remainingByType[bucket];
+    if (Number.isFinite(left) && left <= 0) continue;
+    picked.push(task);
+    if (Number.isFinite(left)) remainingByType[bucket] = left - 1;
+  }
+  return picked;
+}
+
 async function runCycleScheduling(tasks, cycleRange, useOverload, options = {}) {
   const holidaySet = options.holidaySet || new Set();
   const allowWeekend = options.allowWeekend === true;
-  const dayUsage = new Map();
+  const seedUsageMap =
+    options.seedUsageMap instanceof Map ? options.seedUsageMap : new Map();
+  const dayUsage = new Map(seedUsageMap);
   const capCache = new Map();
   const roleUsers = new Map();
   const roles = new Set();
@@ -190,24 +268,64 @@ async function runCycleScheduling(tasks, cycleRange, useOverload, options = {}) 
 
         if (eligible.length === 0) continue;
 
-        const stage = eligible[0].stages[eligible[0].currentStageIndex];
-        const cacheKey = `${role}|${userKey}|${eligible[0].contentType}`;
-        let cap = Number.POSITIVE_INFINITY;
-        if (!useOverload && userKey && stage) {
-          if (!capCache.has(cacheKey)) {
-            const v = await getEffectiveCapacity(stage.assignedUser, role, eligible[0].contentType);
-            capCache.set(cacheKey, Number(v) <= 0 ? Number.POSITIVE_INFINITY : Number(v));
+        const remainingByType = {
+          reel: Number.POSITIVE_INFINITY,
+          static_post: Number.POSITIVE_INFINITY,
+          carousel: Number.POSITIVE_INFINITY,
+        };
+        if (!useOverload && userKey) {
+          for (const bucket of MIX_BUCKETS) {
+            const cacheKey = `${role}|${userKey}|${bucket}`;
+            if (!capCache.has(cacheKey)) {
+              const v = await getEffectiveCapacity(userKey, role, bucket);
+              capCache.set(cacheKey, Number(v) <= 0 ? Number.POSITIVE_INFINITY : Number(v));
+            }
+            const cap = capCache.get(cacheKey);
+            const usageKey = `${ymdUTC(current)}|${role}|${userKey}|${bucket}`;
+            const used = dayUsage.get(usageKey) || 0;
+            remainingByType[bucket] = Number.isFinite(cap) ? Math.max(0, cap - used) : Number.POSITIVE_INFINITY;
           }
-          cap = capCache.get(cacheKey);
         }
 
-        const usageKey = `${ymdUTC(current)}|${role}|${userKey}|${eligible[0].contentType}`;
-        const used = dayUsage.get(usageKey) || 0;
-        let remaining = useOverload ? Number.POSITIVE_INFINITY : Math.max(0, cap - used);
+        let remaining = sumRemaining(remainingByType);
         if (remaining <= 0) continue;
 
-        for (const task of eligible) {
+        const urgentReels = eligible.filter(
+          (task) => getEffectiveBucket(task.contentType) === "reel" && String(task.planType || "") === "urgent"
+        );
+        const normalPool = eligible.filter(
+          (task) => !(getEffectiveBucket(task.contentType) === "reel" && String(task.planType || "") === "urgent")
+        );
+        const normalByType = {
+          reel: normalPool.filter((task) => getEffectiveBucket(task.contentType) === "reel"),
+          static_post: normalPool.filter((task) => getEffectiveBucket(task.contentType) === "static_post"),
+          carousel: normalPool.filter((task) => getEffectiveBucket(task.contentType) === "carousel"),
+        };
+
+        const selected = [];
+        selected.push(
+          ...takeAssignableTasks(
+            urgentReels,
+            remainingByType,
+            Math.min(remaining, URGENT_REEL_RESERVE)
+          )
+        );
+        remaining = sumRemaining(remainingByType);
+
+        for (const bucket of MIX_BUCKETS) {
           if (remaining <= 0) break;
+          const quota = Math.max(0, Number(DAILY_MIX_TARGET[bucket]) || 0);
+          selected.push(...takeAssignableTasks(normalByType[bucket], remainingByType, Math.min(remaining, quota)));
+          remaining = sumRemaining(remainingByType);
+        }
+
+        if (remaining > 0) {
+          const selectedSet = new Set(selected);
+          const backfill = eligible.filter((task) => !selectedSet.has(task));
+          selected.push(...takeAssignableTasks(backfill, remainingByType, remaining));
+        }
+
+        for (const task of selected) {
           const st = task.stages[task.currentStageIndex];
           st.dueDate = createUTCDate(current);
           st.status = "assigned";
@@ -220,7 +338,8 @@ async function runCycleScheduling(tasks, cycleRange, useOverload, options = {}) 
             nextStage.earliestStartDate = addDaysUTC(current, Math.max(0, Number(nextStage.minGap) || 0));
             task.currentStageIndex += 1;
           }
-          remaining -= 1;
+          const bucket = getEffectiveBucket(task.contentType);
+          const usageKey = `${ymdUTC(current)}|${role}|${userKey}|${bucket}`;
           dayUsage.set(usageKey, (dayUsage.get(usageKey) || 0) + 1);
         }
       }
@@ -232,10 +351,15 @@ async function runCycleScheduling(tasks, cycleRange, useOverload, options = {}) 
 
 async function scheduleCycleWithFallback(blueprintTasks, cycleRange) {
   const holidaySet = await buildHolidaySetUTC(cycleRange.start, cycleRange.end);
+  const excludeClientIds = Array.from(
+    new Set((blueprintTasks || []).map((t) => (t?.clientId ? String(t.clientId) : null)).filter(Boolean))
+  );
+  const seedUsageMap = await buildSeedDayUsageMap(cycleRange, { excludeClientIds });
   const normalRun = cloneBlueprint(blueprintTasks);
   const okNormal = await runCycleScheduling(normalRun, cycleRange, false, {
     holidaySet,
     allowWeekend: false,
+    seedUsageMap,
   });
   if (okNormal) return { tasks: normalRun, overloadMode: false };
 
@@ -243,6 +367,7 @@ async function scheduleCycleWithFallback(blueprintTasks, cycleRange) {
   const okOverload = await runCycleScheduling(overloadRun, cycleRange, true, {
     holidaySet,
     allowWeekend: false,
+    seedUsageMap,
   });
   if (!okOverload) {
     throw new Error(`Unable to schedule cycle ${cycleRange.index} within 30-day window`);
