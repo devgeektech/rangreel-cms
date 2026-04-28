@@ -2,7 +2,7 @@ const Client = require("../models/Client");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 const Package = require("../models/Package");
 const { detectCapacityConflicts } = require("../services/calendarConflict.service");
-const { generateCalendarDraft } = require("../services/calendarDraftGenerator.service");
+const { generateGlobalCalendarDraft } = require("../services/globalContentScheduler.service");
 const {
   generateWorkflowStagesFromPostingDate,
 } = require("../services/workflowFromPostingDate.service");
@@ -110,14 +110,15 @@ const generateDraft = async (req, res) => {
       .lean();
     if (!pkg) return failure(res, "Package not found", 404);
 
-    const draft = await generateCalendarDraft({
+    const draft = await generateGlobalCalendarDraft({
       packageCounts: pkg,
       startDate,
       team,
       contentEnabled: contentEnabled || {},
-      /** Weekends only when client explicitly requests (e.g. global calendar toggle). New-client flow sends false. */
-      allowWeekend: allowWeekend === true,
-      allowFlexibleAdjustment: allowFlexibleAdjustment === true,
+      managerId: req.user.id,
+      createdBy: req.user.id,
+      isCustomCalendar: true,
+      weekendEnabled: allowWeekend === true,
     });
 
     return success(res, draft);

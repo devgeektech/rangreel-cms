@@ -86,8 +86,14 @@ const contentItemSchema = new mongoose.Schema(
     },
     planType: {
       type: String,
-      enum: ["urgent", "normal"],
+      enum: ["urgent", "normal", "standard"],
       default: "normal",
+    },
+    cycleIndex: {
+      type: Number,
+      min: 1,
+      max: 3,
+      default: 1,
     },
     title: {
       type: String,

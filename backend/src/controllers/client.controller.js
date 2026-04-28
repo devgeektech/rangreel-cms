@@ -4,7 +4,7 @@ const mongoose = require("mongoose");
 const Client = require("../models/Client");
 const Package = require("../models/Package");
 const { uploadsRoot, BRIEF_UPLOAD_FIELDS } = require("../multer/clientBriefUpload");
-const { generateClientReels } = require("../services/simpleCalendar.service");
+const { generateGlobalCalendarForClients } = require("../services/globalContentScheduler.service");
 const { persistCalendarDraft } = require("../services/calendarDraftPersistence.service");
 const { notifyUsers } = require("../services/workflowNotification.service");
 const ContentItem = require("../models/ContentItem");
@@ -415,8 +415,9 @@ const createClient = async (req, res) => {
       calendarDraft?.items && Array.isArray(calendarDraft.items) && calendarDraft.items.length > 0;
     const hasCustomStages = Array.isArray(customStages) && customStages.length > 0;
 
-    // Auto generation unless pre-creation customization payload is provided.
-    if (hasCalendarDraft || hasCustomStages) {
+    // If explicit custom stage payload is provided, persist it; otherwise always run
+    // the deterministic global scheduler at client creation.
+    if (hasCustomStages) {
       let draftToPersist = hasCalendarDraft ? { ...calendarDraft } : { items: [] };
 
       if (hasCustomStages) {
@@ -479,12 +480,7 @@ const createClient = async (req, res) => {
         await Client.updateOne({ _id: client._id }, { $set: { endDate } });
       }
     } else {
-      // Prompt 16: only run the new simple calendar service.
-      // New clients: weekdays + public holidays only (no Sat/Sun) unless a pre-built draft is supplied above.
-      await generateClientReels(client, {
-        allowWeekend: false,
-        allowFlexibleAdjustment: false,
-      });
+      await generateGlobalCalendarForClients([client._id]);
     }
 
     // Prompt 68: keep an editable draft copy in sync with generated ContentItems.

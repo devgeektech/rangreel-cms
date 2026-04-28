@@ -42,27 +42,27 @@ function normalizeContentType(type) {
 const BACKWARD_OFFSETS = {
   /** Normal reel plan — multi-day Shoot / Edit / Approval spans (unchanged). */
   reel: [
-    { stageName: "Plan", role: "strategist", daysBeforePost: 12 },
-    { stageName: "Shoot", role: "videographer", daysBeforePost: 8 },
-    { stageName: "Edit", role: "videoEditor", daysBeforePost: 4 },
-    { stageName: "Approval", role: "manager", daysBeforePost: 1 },
-    { stageName: "Post", role: "postingExecutive", daysBeforePost: 0 },
+    { stageName: "Plan", role: "strategist", daysBeforePost: 12, minGap: 0 },
+    { stageName: "Shoot", role: "videographer", daysBeforePost: 8, minGap: 3 },
+    { stageName: "Edit", role: "videoEditor", daysBeforePost: 4, minGap: 2 },
+    { stageName: "Approval", role: "manager", daysBeforePost: 1, minGap: 3 },
+    { stageName: "Post", role: "postingExecutive", daysBeforePost: 0, minGap: 1 },
   ],
   /**
    * Urgent reel plan — one effective day per role; editor + manager share the same calendar day.
    * (daysBeforePost: 4,3,2,2,0 → Plan, Shoot, Edit, Approval, Post)
    */
   reelUrgent: [
-    { stageName: "Plan", role: "strategist", daysBeforePost: 4 },
-    { stageName: "Shoot", role: "videographer", daysBeforePost: 3 },
-    { stageName: "Edit", role: "videoEditor", daysBeforePost: 2 },
-    { stageName: "Approval", role: "manager", daysBeforePost: 2 },
-    { stageName: "Post", role: "postingExecutive", daysBeforePost: 0 },
+    { stageName: "Plan", role: "strategist", daysBeforePost: 4, minGap: 0 },
+    { stageName: "Shoot", role: "videographer", daysBeforePost: 3, minGap: 1 },
+    { stageName: "Edit", role: "videoEditor", daysBeforePost: 2, minGap: 1 },
+    { stageName: "Approval", role: "manager", daysBeforePost: 2, minGap: 1 },
+    { stageName: "Post", role: "postingExecutive", daysBeforePost: 0, minGap: 1 },
   ],
   post: [
     { stageName: "Plan", role: "strategist", daysBeforePost: 6 },
     { stageName: "Design", role: "graphicDesigner", daysBeforePost: 3 },
-    { stageName: "Approval", role: "manager", daysBeforePost: 1 },
+    { stageName: "Approval", role: "manager", daysBeforePost: 1, minGap: 1 },
     { stageName: "Post", role: "postingExecutive", daysBeforePost: 0 },
   ],
 };
