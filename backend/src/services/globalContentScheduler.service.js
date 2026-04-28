@@ -66,6 +66,58 @@ function isNonWorkingDayUTC(date, holidaySet, allowWeekend = false) {
   return Boolean(key && holidaySet && holidaySet.has(key));
 }
 
+function countWorkingDaysInRange(startDate, endDate, holidaySet, allowWeekend = false) {
+  const start = createUTCDate(startDate);
+  const end = createUTCDate(endDate);
+  if (!start || !end || start.getTime() > end.getTime()) return 0;
+  let count = 0;
+  for (let d = start; d && d.getTime() <= end.getTime(); d = addDaysUTC(d, 1)) {
+    if (!isNonWorkingDayUTC(d, holidaySet, allowWeekend)) count += 1;
+  }
+  return count;
+}
+
+function computeDynamicTrancheSize(tasks, cycleRange, holidaySet, allowWeekend = false) {
+  const workingDays = Math.max(
+    1,
+    countWorkingDaysInRange(cycleRange?.start, cycleRange?.end, holidaySet, allowWeekend)
+  );
+  const counts = {
+    reel: 0,
+    static_post: 0,
+    carousel: 0,
+  };
+  for (const task of tasks || []) {
+    if (task?.isCompleted) continue;
+    const bucket = getEffectiveBucket(task?.contentType);
+    counts[bucket] += 1;
+  }
+  const activeBuckets = MIX_BUCKETS.filter((b) => counts[b] > 0);
+  if (!activeBuckets.length) return 1;
+
+  const minTarget = Math.max(
+    1,
+    Math.min(...activeBuckets.map((b) => Math.max(1, Number(DAILY_MIX_TARGET[b]) || 1)))
+  );
+  const capacityBased = workingDays * minTarget;
+  const minAvailable = Math.min(...activeBuckets.map((b) => counts[b]));
+  return Math.max(1, Math.min(capacityBased, minAvailable));
+}
+
+function assignBatchGroups(tasks, trancheSize) {
+  const n = Math.max(1, Number(trancheSize) || 1);
+  const cursor = {
+    reel: 0,
+    static_post: 0,
+    carousel: 0,
+  };
+  for (const task of tasks || []) {
+    const bucket = getEffectiveBucket(task?.contentType);
+    cursor[bucket] += 1;
+    task.batchGroup = Math.floor((cursor[bucket] - 1) / n);
+  }
+}
+
 async function buildSeedDayUsageMap(cycleRange, options = {}) {
   const start = createUTCDate(cycleRange?.start);
   const end = createUTCDate(cycleRange?.end);
@@ -230,9 +282,33 @@ function takeAssignableTasks(candidates, remainingByType, maxTake) {
   return picked;
 }
 
+function getActiveBatchGroupForRoleUser(tasks, role, userKey) {
+  const minByBucket = {
+    reel: Number.POSITIVE_INFINITY,
+    static_post: Number.POSITIVE_INFINITY,
+    carousel: Number.POSITIVE_INFINITY,
+  };
+  for (const task of tasks || []) {
+    if (task?.isCompleted) continue;
+    const stage = task?.stages?.[task?.currentStageIndex];
+    if (!stage || String(stage.role || "") !== String(role || "")) continue;
+    if (String(stage.assignedUser || "") !== String(userKey || "")) continue;
+    const bucket = getEffectiveBucket(task.contentType);
+    const grp = Number(task.batchGroup);
+    const g = Number.isFinite(grp) && grp >= 0 ? grp : 0;
+    if (g < minByBucket[bucket]) minByBucket[bucket] = g;
+  }
+  const values = Object.values(minByBucket).filter((n) => Number.isFinite(n));
+  if (!values.length) return null;
+  return Math.min(...values);
+}
+
 async function runCycleScheduling(tasks, cycleRange, useOverload, options = {}) {
   const holidaySet = options.holidaySet || new Set();
   const allowWeekend = options.allowWeekend === true;
+  const balancedOverload = options.balancedOverload !== false;
+  const enforceTranche = options.enforceTranche !== false;
+  const overloadSpreadFactor = Math.max(1, Number(options.overloadSpreadFactor) || 1);
   const seedUsageMap =
     options.seedUsageMap instanceof Map ? options.seedUsageMap : new Map();
   const dayUsage = new Map(seedUsageMap);
@@ -268,6 +344,39 @@ async function runCycleScheduling(tasks, cycleRange, useOverload, options = {}) 
 
         if (eligible.length === 0) continue;
 
+        let effectiveEligible = eligible;
+        if (useOverload && balancedOverload && enforceTranche) {
+          const activeBatchGroup = getActiveBatchGroupForRoleUser(tasks, role, userKey);
+          if (Number.isFinite(activeBatchGroup)) {
+            const trancheEligible = eligible.filter((task) => {
+              const grp = Number(task.batchGroup);
+              const g = Number.isFinite(grp) && grp >= 0 ? grp : 0;
+              return g === activeBatchGroup;
+            });
+            if (trancheEligible.length > 0) {
+              effectiveEligible = trancheEligible.sort(sortTasks);
+            }
+          }
+        }
+
+        let maxDailyAssignments = Number.POSITIVE_INFINITY;
+        if (useOverload && balancedOverload) {
+          const pendingTotalForRoleUser = tasks.filter((task) => {
+            if (task?.isCompleted) return false;
+            const stage = task?.stages?.[task?.currentStageIndex];
+            if (!stage || String(stage.role || "") !== String(role || "")) return false;
+            return String(stage.assignedUser || "") === String(userKey || "");
+          }).length;
+          const remainingWorkDays = Math.max(
+            1,
+            countWorkingDaysInRange(current, end, holidaySet, allowWeekend)
+          );
+          maxDailyAssignments = Math.max(
+            1,
+            Math.ceil((pendingTotalForRoleUser / remainingWorkDays) * overloadSpreadFactor)
+          );
+        }
+
         const remainingByType = {
           reel: Number.POSITIVE_INFINITY,
           static_post: Number.POSITIVE_INFINITY,
@@ -285,15 +394,38 @@ async function runCycleScheduling(tasks, cycleRange, useOverload, options = {}) 
             const used = dayUsage.get(usageKey) || 0;
             remainingByType[bucket] = Number.isFinite(cap) ? Math.max(0, cap - used) : Number.POSITIVE_INFINITY;
           }
+        } else if (useOverload && userKey && balancedOverload) {
+          // Overload balancing: distribute pending same-role tasks across remaining working days
+          // so large batches (e.g. 100/100/100) don't collapse into the earliest dates.
+          const remainingWorkDays = Math.max(
+            1,
+            countWorkingDaysInRange(current, end, holidaySet, allowWeekend)
+          );
+          for (const bucket of MIX_BUCKETS) {
+            const pendingCount = tasks.filter((task) => {
+              if (task.isCompleted) return false;
+              const stage = task.stages[task.currentStageIndex];
+              if (!stage || stage.role !== role) return false;
+              if (String(stage.assignedUser || "") !== userKey) return false;
+              return getEffectiveBucket(task.contentType) === bucket;
+            }).length;
+            const targetPerDay = Math.max(
+              1,
+              Math.ceil((pendingCount / remainingWorkDays) * overloadSpreadFactor)
+            );
+            const usageKey = `${ymdUTC(current)}|${role}|${userKey}|${bucket}`;
+            const used = dayUsage.get(usageKey) || 0;
+            remainingByType[bucket] = Math.max(0, targetPerDay - used);
+          }
         }
 
         let remaining = sumRemaining(remainingByType);
         if (remaining <= 0) continue;
 
-        const urgentReels = eligible.filter(
+        const urgentReels = effectiveEligible.filter(
           (task) => getEffectiveBucket(task.contentType) === "reel" && String(task.planType || "") === "urgent"
         );
-        const normalPool = eligible.filter(
+        const normalPool = effectiveEligible.filter(
           (task) => !(getEffectiveBucket(task.contentType) === "reel" && String(task.planType || "") === "urgent")
         );
         const normalByType = {
@@ -303,26 +435,42 @@ async function runCycleScheduling(tasks, cycleRange, useOverload, options = {}) 
         };
 
         const selected = [];
+        let remainingSlots = Number.isFinite(maxDailyAssignments)
+          ? Math.max(0, maxDailyAssignments)
+          : Number.POSITIVE_INFINITY;
         selected.push(
           ...takeAssignableTasks(
             urgentReels,
             remainingByType,
-            Math.min(remaining, URGENT_REEL_RESERVE)
+            Math.min(remaining, URGENT_REEL_RESERVE, remainingSlots)
           )
         );
+        remainingSlots = Number.isFinite(remainingSlots)
+          ? Math.max(0, remainingSlots - selected.length)
+          : remainingSlots;
         remaining = sumRemaining(remainingByType);
 
         for (const bucket of MIX_BUCKETS) {
-          if (remaining <= 0) break;
+          if (remaining <= 0 || remainingSlots <= 0) break;
           const quota = Math.max(0, Number(DAILY_MIX_TARGET[bucket]) || 0);
-          selected.push(...takeAssignableTasks(normalByType[bucket], remainingByType, Math.min(remaining, quota)));
+          const picked = takeAssignableTasks(
+            normalByType[bucket],
+            remainingByType,
+            Math.min(remaining, quota, remainingSlots)
+          );
+          selected.push(...picked);
+          remainingSlots = Number.isFinite(remainingSlots)
+            ? Math.max(0, remainingSlots - picked.length)
+            : remainingSlots;
           remaining = sumRemaining(remainingByType);
         }
 
-        if (remaining > 0) {
+        if (remaining > 0 && remainingSlots > 0) {
           const selectedSet = new Set(selected);
-          const backfill = eligible.filter((task) => !selectedSet.has(task));
-          selected.push(...takeAssignableTasks(backfill, remainingByType, remaining));
+          const backfill = effectiveEligible.filter((task) => !selectedSet.has(task));
+          selected.push(
+            ...takeAssignableTasks(backfill, remainingByType, Math.min(remaining, remainingSlots))
+          );
         }
 
         for (const task of selected) {
@@ -364,15 +512,52 @@ async function scheduleCycleWithFallback(blueprintTasks, cycleRange) {
   if (okNormal) return { tasks: normalRun, overloadMode: false };
 
   const overloadRun = cloneBlueprint(blueprintTasks);
+  const dynamicTrancheSize = computeDynamicTrancheSize(
+    overloadRun,
+    cycleRange,
+    holidaySet,
+    false
+  );
+  assignBatchGroups(overloadRun, dynamicTrancheSize);
   const okOverload = await runCycleScheduling(overloadRun, cycleRange, true, {
     holidaySet,
     allowWeekend: false,
-    seedUsageMap,
+    // Overload should ignore pre-booked load from other clients; only track current run.
+    seedUsageMap: new Map(),
+    balancedOverload: true,
+    enforceTranche: true,
+    overloadSpreadFactor: 1,
   });
-  if (!okOverload) {
-    throw new Error(`Unable to schedule cycle ${cycleRange.index} within 30-day window`);
+  if (okOverload) return { tasks: overloadRun, overloadMode: true };
+
+  // Relax tranche gate but keep balanced day-wise spreading.
+  const relaxedOverloadRun = cloneBlueprint(blueprintTasks);
+  assignBatchGroups(relaxedOverloadRun, dynamicTrancheSize);
+  const okRelaxedOverload = await runCycleScheduling(relaxedOverloadRun, cycleRange, true, {
+    holidaySet,
+    allowWeekend: false,
+    seedUsageMap: new Map(),
+    balancedOverload: true,
+    enforceTranche: false,
+    overloadSpreadFactor: 1,
+  });
+  if (okRelaxedOverload) return { tasks: relaxedOverloadRun, overloadMode: true };
+
+  // Repeat-loop relaxation: keep balanced logic and gradually increase day allowance.
+  for (const factor of [1.5, 2, 3, 5, 8, 12]) {
+    const loopRun = cloneBlueprint(blueprintTasks);
+    assignBatchGroups(loopRun, dynamicTrancheSize);
+    const okLoop = await runCycleScheduling(loopRun, cycleRange, true, {
+      holidaySet,
+      allowWeekend: false,
+      seedUsageMap: new Map(),
+      balancedOverload: true,
+      enforceTranche: false,
+      overloadSpreadFactor: factor,
+    });
+    if (okLoop) return { tasks: loopRun, overloadMode: true };
   }
-  return { tasks: overloadRun, overloadMode: true };
+  throw new Error(`Unable to schedule cycle ${cycleRange.index} within 30-day window`);
 }
 
 function toContentItemDoc(task) {
