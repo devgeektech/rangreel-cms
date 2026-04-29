@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import {
   DndContext,
   DragOverlay,
@@ -451,6 +452,7 @@ export default function ContentCalendarDnd({
   /** When true, dropping on a weekend while weekend mode is OFF opens a confirmation modal (custom calendar only). Defaults to customization preview mode; set explicitly for internal calendar. */
   weekendBlockedConfirmEnabled,
   onToggleWeekend,
+  showWeekendToggle = true,
   /** 'all' | stage name — hide chips except this stage when not 'all' */
   stageFilter = "all",
   onStageFilterChange,
@@ -459,6 +461,8 @@ export default function ContentCalendarDnd({
   /** Pre-creation client customize: earliest allowed calendar day for any stage (YYYY-MM-DD). */
   customizationMinStageDateYmd = "",
 }) {
+  const pathname = usePathname();
+  const hideWeekendToggleForPreClient = pathname === "/manager/clients/new";
   const defaultMonth = useMemo(() => {
     const items = draft?.items || [];
     for (const it of items) {
@@ -1083,7 +1087,9 @@ export default function ContentCalendarDnd({
             Next
           </Button>
         </div>
-        {typeof onToggleWeekend === "function" ? (
+        {showWeekendToggle &&
+        !hideWeekendToggleForPreClient &&
+        typeof onToggleWeekend === "function" ? (
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"

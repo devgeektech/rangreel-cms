@@ -960,9 +960,9 @@ export default function StrategistGlobalCalendar() {
           >
             <div
               className="grid min-w-[2200px]"
-              style={{ gridTemplateColumns: `280px repeat(${calendarDays.length}, minmax(120px, 1fr))` }}
+              style={{ gridTemplateColumns: `232px repeat(${calendarDays.length}, minmax(120px, 1fr))` }}
             >
-              <div className="sticky left-0 z-20 border-b border-r border-border bg-muted/50 px-3 py-2 text-xs font-semibold">
+              <div className="sticky left-0 z-20 border-b border-r border-border bg-muted/50 px-2 py-2 text-xs font-semibold">
                 Role / User
               </div>
               {calendarDays.map((d) => (
@@ -982,7 +982,13 @@ export default function StrategistGlobalCalendar() {
 
               {groupedRows.map((group) => (
                 <div key={group.role} className="contents">
-                  <div className="sticky left-0 z-10 border-b border-r border-border bg-muted/40 px-3 py-2 text-xs font-semibold">
+                  <div
+                    className="sticky left-0 z-10 border-b border-r border-border bg-muted/40 px-2 py-1.5 text-xs font-semibold"
+                    title={`${roleLabel[group.role] || group.role} • ${group.rows.length} users • ${group.rows.reduce(
+                      (sum, r) => sum + Array.from(r.byDay.values()).reduce((s, list) => s + list.length, 0),
+                      0
+                    )} assignments`}
+                  >
                     {roleLabel[group.role] || group.role}
                   </div>
                   {calendarDays.map((day) => (
@@ -991,7 +997,14 @@ export default function StrategistGlobalCalendar() {
 
                   {group.rows.map((row) => (
                     <div key={`${group.role}-${row.userId}`} className="contents">
-                      <div className="sticky left-0 z-10 border-b border-r border-border bg-card px-3 py-3 text-sm font-medium">
+                      <div
+                        className="sticky left-0 z-10 border-b border-r border-border bg-card px-2 py-2 text-sm font-medium"
+                        title={`${row.name} • ${roleLabel[group.role] || group.role} • ${Array.from(
+                          row.byDay.values()
+                        ).reduce((sum, list) => sum + list.length, 0)} assignments across ${
+                          row.byDay.size
+                        } active day(s)`}
+                      >
                         {row.name}
                       </div>
                       {calendarDays.map((day) => {
@@ -1037,7 +1050,7 @@ export default function StrategistGlobalCalendar() {
                             key={`${row.userId}-${day.ymd}`}
                             data-gc-user={String(row.userId || "")}
                             data-gc-ymd={String(day.ymd || "")}
-                            className={`flex min-h-28 flex-col border-b border-r border-border p-2 ${
+                            className={`flex min-h-20 flex-col border-b border-r border-border p-1.5 ${
                               isHoliday
                                 ? "bg-gray-300/40 dark:bg-gray-700/40"
                                 : onLeave
