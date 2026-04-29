@@ -108,6 +108,32 @@ function resolveBackendMediaUrl(pathOrUrl) {
   return `${origin}${s.startsWith("/") ? s : `/${s}`}`;
 }
 
+function normalizeClientPayload(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  return {
+    clientName: raw.clientName || "",
+    brandName: raw.brandName || "",
+    industry: raw.industry || "",
+    businessType: raw.businessType || "",
+    contactNumber: raw.contactNumber || "",
+    email: raw.email || "",
+    website: raw.website || "",
+    startDate: raw.startDate || null,
+    endDate: raw.endDate || null,
+    status: raw.status || "",
+    socialHandles: raw.socialHandles || {},
+    socialCredentialsNotes: raw.socialCredentialsNotes || "",
+    clientBrief: raw.clientBrief || {},
+  };
+}
+
+function readClientBriefValue(v) {
+  if (Array.isArray(v)) return v.filter(Boolean).join(", ");
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  const s = String(v || "").trim();
+  return s;
+}
+
 export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, onDidMutate }) {
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
@@ -122,7 +148,23 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
     try {
       setLoading(true);
       const res = await api.getContent(contentId);
-      setData(res?.data || null);
+      const payload = res?.data || null;
+      let normalized = payload ? { ...payload } : null;
+      if (normalized) {
+        normalized.client = normalizeClientPayload(normalized.client);
+      }
+      if (normalized && !normalized.client) {
+        const fallbackClientId = String(normalized.clientId || "").trim();
+        if (fallbackClientId) {
+          try {
+            const clientRes = await api.getTeamClient(fallbackClientId);
+            normalized.client = normalizeClientPayload(clientRes?.data || clientRes || null);
+          } catch {
+            // Keep dialog functional even if client fallback endpoint is unavailable.
+          }
+        }
+      }
+      setData(normalized);
     } catch (err) {
       toast.error(err.message || "Failed to load reel details");
       setData(null);
@@ -155,6 +197,65 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
   const planConcept = data?.concept ?? "";
   const planCaption = data?.captionDirection ?? "";
   const contentType = data?.contentType || data?.type || "";
+  const clientDetails = data?.client || null;
+  const clientBriefSummary = useMemo(() => {
+    const brief = clientDetails?.clientBrief || {};
+    const entries = [
+      ["USP", brief.usp],
+      ["Brand tone", brief.brandToneOther || brief.brandTone],
+      ["Target audience", brief.targetAudience],
+      ["Key products/services", brief.keyProductsServices],
+      ["Priority focus", brief.priorityFocus],
+      ["Festivals to target", brief.festivalsToTarget],
+      ["Language", brief.languageOther || brief.language],
+      ["Competitors", brief.competitors],
+      ["Accounts liked (reason)", brief.accountsYouLikeReason],
+      ["Main goal", brief.mainGoal],
+      ["Age group", brief.ageGroup],
+      ["Focus locations", brief.focusLocations],
+      ["Content preference", brief.contentPreference],
+      ["Preferred shoot days/timing", brief.preferredShootDaysTiming],
+      ["Best posting time", brief.bestPostingTime],
+    ]
+      .map(([label, value]) => ({ label, value: readClientBriefValue(value) }))
+      .filter((x) => x.value);
+    return entries;
+  }, [clientDetails]);
+  const shootAvailabilitySummary = useMemo(() => {
+    const sa = clientDetails?.clientBrief?.shootAvailability || {};
+    const entries = [
+      ["Store/office for shoot", sa.storeOrOfficeForShoot],
+      ["Products ready for shoot", sa.productsReadyForShoot],
+      ["Models available", sa.modelsAvailable],
+    ]
+      .map(([label, value]) => ({ label, value: readClientBriefValue(value) }))
+      .filter((x) => x.value);
+    return entries;
+  }, [clientDetails]);
+  const socialHandleSummary = useMemo(() => {
+    const handles = clientDetails?.socialHandles || {};
+    return Object.entries(handles)
+      .map(([key, value]) => ({
+        label: key.replace(/([A-Z])/g, " $1").replace(/^./, (ch) => ch.toUpperCase()),
+        value: String(value || "").trim(),
+      }))
+      .filter((x) => x.value);
+  }, [clientDetails]);
+  const briefFilesSummary = useMemo(() => {
+    const brief = clientDetails?.clientBrief || {};
+    const groups = [
+      { label: "Brand kit files", key: "brandKitFiles" },
+      { label: "Social credentials files", key: "socialCredentialsFiles" },
+      { label: "Other files", key: "otherBriefFiles" },
+      { label: "Agreement files", key: "agreementFiles" },
+    ];
+    return groups
+      .map((g) => ({
+        label: g.label,
+        files: Array.isArray(brief?.[g.key]) ? brief[g.key] : [],
+      }))
+      .filter((g) => g.files.length > 0);
+  }, [clientDetails]);
 
   const planStage = useMemo(() => {
     return stages.find((s) => String(s?.stageName || "").toLowerCase() === "plan") || null;
@@ -314,6 +415,121 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                     </ul>
                   )}
                 </CollapsibleSection>
+
+                {clientDetails ? (
+                  <CollapsibleSection title="Client added details">
+                    <div className="space-y-3 text-sm">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <p>
+                          <span className="text-muted-foreground">Client:</span>{" "}
+                          <span className="font-medium">{clientDetails.clientName || "-"}</span>
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Brand:</span>{" "}
+                          <span className="font-medium">{clientDetails.brandName || "-"}</span>
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Industry:</span>{" "}
+                          <span>{clientDetails.industry || "-"}</span>
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Business type:</span>{" "}
+                          <span>{clientDetails.businessType || "-"}</span>
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Contact:</span>{" "}
+                          <span>{clientDetails.contactNumber || "-"}</span>
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Email:</span>{" "}
+                          <span>{clientDetails.email || "-"}</span>
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Website:</span>{" "}
+                          <span>{clientDetails.website || "-"}</span>
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">Start:</span>{" "}
+                          <span>{safeYMD(clientDetails.startDate)}</span>
+                        </p>
+                        <p>
+                          <span className="text-muted-foreground">End:</span>{" "}
+                          <span>{safeYMD(clientDetails.endDate)}</span>
+                        </p>
+                        <p className="sm:col-span-2">
+                          <span className="text-muted-foreground">Client status:</span>{" "}
+                          <span>{clientDetails.status || "-"}</span>
+                        </p>
+                      </div>
+
+                      {clientDetails.socialCredentialsNotes ? (
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground">Social credentials notes</p>
+                          <p className="mt-1 rounded-md border border-border bg-muted/20 p-2 text-xs">
+                            {clientDetails.socialCredentialsNotes}
+                          </p>
+                        </div>
+                      ) : null}
+
+                      {socialHandleSummary.length ? (
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground">Social handles</p>
+                          <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
+                            {socialHandleSummary.map((x) => (
+                              <p key={x.label} className="text-xs">
+                                <span className="text-muted-foreground">{x.label}:</span> {x.value}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {clientBriefSummary.length ? (
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground">Client brief</p>
+                          <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
+                            {clientBriefSummary.map((x) => (
+                              <p key={x.label} className="text-xs">
+                                <span className="text-muted-foreground">{x.label}:</span> {x.value}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {shootAvailabilitySummary.length ? (
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground">Shoot availability</p>
+                          <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
+                            {shootAvailabilitySummary.map((x) => (
+                              <p key={x.label} className="text-xs">
+                                <span className="text-muted-foreground">{x.label}:</span> {x.value}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      {briefFilesSummary.length ? (
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground">Onboarding files</p>
+                          <div className="mt-1 space-y-2">
+                            {briefFilesSummary.map((group) => (
+                              <div key={group.label}>
+                                <p className="text-[11px] font-medium text-muted-foreground">{group.label}</p>
+                                <ul className="mt-1 list-disc pl-5 text-xs">
+                                  {group.files.map((f, idx) => (
+                                    <li key={`${group.label}-${f?._id || idx}`}>
+                                      {String(f?.originalName || f?.storedName || "File")}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  </CollapsibleSection>
+                ) : null}
 
                 {shootStage?.footageLink ? (
                   <CollapsibleSection title="Videographer raw footage">

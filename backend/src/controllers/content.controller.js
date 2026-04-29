@@ -84,6 +84,24 @@ const getContentById = async (req, res) => {
     const { id } = req.params;
 
     const item = await ContentItem.findById(id)
+      .populate(
+        "client",
+        [
+          "clientName",
+          "brandName",
+          "industry",
+          "businessType",
+          "contactNumber",
+          "email",
+          "website",
+          "startDate",
+          "endDate",
+          "status",
+          "socialHandles",
+          "socialCredentialsNotes",
+          "clientBrief",
+        ].join(" ")
+      )
       .populate("workflowStages.assignedUser", "name avatar")
       .lean();
 
@@ -95,8 +113,38 @@ const getContentById = async (req, res) => {
     const planStage = (item.workflowStages || []).find(
       (s) => String(s?.stageName || "").toLowerCase() === "plan"
     );
+    const clientId =
+      item?.client && typeof item.client === "object"
+        ? String(item.client?._id || "")
+        : String(item?.client || "");
+    let clientDoc =
+      item?.client && typeof item.client === "object" && item.client.clientName
+        ? item.client
+        : null;
+    if (!clientDoc && clientId) {
+      clientDoc = await Client.findById(clientId)
+        .select(
+          [
+            "clientName",
+            "brandName",
+            "industry",
+            "businessType",
+            "contactNumber",
+            "email",
+            "website",
+            "startDate",
+            "endDate",
+            "status",
+            "socialHandles",
+            "socialCredentialsNotes",
+            "clientBrief",
+          ].join(" ")
+        )
+        .lean();
+    }
 
     return success(res, {
+      clientId,
       title: item.title,
       displayId: resolveDisplayIdForRead(item),
       taskNumber: item.taskNumber || null,
@@ -104,6 +152,23 @@ const getContentById = async (req, res) => {
       planType: item.planType || item.plan || "normal",
       contentBrief: Array.isArray(planStage?.contentBrief) ? planStage.contentBrief : [],
       videoUrl: item.videoUrl || "",
+      client: clientDoc
+        ? {
+            clientName: clientDoc.clientName || "",
+            brandName: clientDoc.brandName || "",
+            industry: clientDoc.industry || "",
+            businessType: clientDoc.businessType || "",
+            contactNumber: clientDoc.contactNumber || "",
+            email: clientDoc.email || "",
+            website: clientDoc.website || "",
+            startDate: clientDoc.startDate || null,
+            endDate: clientDoc.endDate || null,
+            status: clientDoc.status || "",
+            socialHandles: clientDoc.socialHandles || {},
+            socialCredentialsNotes: clientDoc.socialCredentialsNotes || "",
+            clientBrief: clientDoc.clientBrief || {},
+          }
+        : null,
       stages: (item.workflowStages || []).map((s) => ({
         _id: s._id,
         stageName: s.stageName,

@@ -25,6 +25,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { ReelDetailDialog } from "@/components/reel/ReelDetailDialog";
 
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -82,6 +84,28 @@ const CONTENT_PREF = {
   entertaining: "Entertaining",
   trend_based: "Trend-based",
 };
+const TARGET_AUDIENCE_OPTIONS = [
+  "Under 10",
+  "10 – 15",
+  "16 – 20",
+  "21 – 25",
+  "26 – 30",
+  "31 – 40",
+  "41 – 50",
+  "51 – 60",
+  "60+",
+  "All ages",
+];
+const AGE_GROUP_OPTIONS = [
+  { value: "gen_alpha", label: "Gen Alpha (born 2013+)" },
+  { value: "gen_z", label: "Gen Z (born 1997–2012)" },
+  { value: "millennials", label: "Millennials (born 1981–1996)" },
+  { value: "gen_x", label: "Gen X (born 1965–1980)" },
+  { value: "baby_boomers", label: "Baby Boomers (born 1946–1964)" },
+  { value: "silent", label: "Silent Generation (born before 1946)" },
+  { value: "mixed", label: "Mixed / All age groups" },
+];
+const WEEKDAY_OPTIONS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 function hasMeaningfulClientBrief(b) {
   if (!b || typeof b !== "object") return false;
@@ -151,6 +175,76 @@ function statusBadge(status) {
   return <Badge variant="outline">{status}</Badge>;
 }
 
+function toCsvOrString(value) {
+  if (Array.isArray(value)) return value.join(", ");
+  return String(value || "");
+}
+
+function toTextAreaValue(value) {
+  return String(value || "");
+}
+
+function toBool(value) {
+  return value === true;
+}
+
+function makeEditClientForm(client) {
+  const brief = client?.clientBrief || {};
+  const handles = client?.socialHandles || {};
+  const parseCsv = (v) =>
+    String(toCsvOrString(v) || "")
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
+  return {
+    clientName: client?.clientName || "",
+    brandName: client?.brandName || "",
+    contactNumber: client?.contactNumber || "",
+    email: client?.email || "",
+    website: client?.website || "",
+    industry: client?.industry || "",
+    businessType: client?.businessType || "",
+    socialCredentialsNotes: client?.socialCredentialsNotes || "",
+    socialHandles: {
+      instagram: handles.instagram || "",
+      facebook: handles.facebook || "",
+      youtube: handles.youtube || "",
+      googleBusiness: handles.googleBusiness || "",
+      twitter: handles.twitter || "",
+      linkedin: handles.linkedin || "",
+      tiktok: handles.tiktok || "",
+      pinterest: handles.pinterest || "",
+      other: handles.other || "",
+    },
+    clientBrief: {
+      usp: brief.usp || "",
+      brandTone: brief.brandTone || "",
+      brandToneOther: brief.brandToneOther || "",
+      targetAudienceList: parseCsv(brief.targetAudience),
+      keyProductsServices: brief.keyProductsServices || "",
+      priorityFocus: brief.priorityFocus || "",
+      festivalsToTarget: brief.festivalsToTarget || "",
+      language: brief.language || "english",
+      languageOther: brief.languageOther || "",
+      competitors: brief.competitors || "",
+      accountsYouLikeReason: brief.accountsYouLikeReason || "",
+      mainGoal: brief.mainGoal || "",
+      ageGroup: brief.ageGroup || "",
+      focusLocations: brief.focusLocations || "",
+      contentPreferenceList: Array.isArray(brief.contentPreference)
+        ? brief.contentPreference
+        : parseCsv(brief.contentPreference),
+      preferredShootDaysList: parseCsv(brief.preferredShootDaysTiming),
+      bestPostingTime: brief.bestPostingTime || "",
+      shootAvailability: {
+        storeOrOfficeForShoot: toBool(brief?.shootAvailability?.storeOrOfficeForShoot),
+        productsReadyForShoot: toBool(brief?.shootAvailability?.productsReadyForShoot),
+        modelsAvailable: toBool(brief?.shootAvailability?.modelsAvailable),
+      },
+    },
+  };
+}
+
 export default function ManagerClientDetailPage() {
   const params = useParams();
   const id = params?.id;
@@ -171,8 +265,12 @@ export default function ManagerClientDetailPage() {
     brandKit: [],
     socialCredentials: [],
     other: [],
+    agreement: [],
   });
   const [briefUploading, setBriefUploading] = useState(false);
+  const [editClientOpen, setEditClientOpen] = useState(false);
+  const [editClientSaving, setEditClientSaving] = useState(false);
+  const [editClientForm, setEditClientForm] = useState(null);
 
   const loadClient = async () => {
     try {
@@ -191,7 +289,8 @@ export default function ManagerClientDetailPage() {
     const n =
       moreBriefFiles.brandKit.length +
       moreBriefFiles.socialCredentials.length +
-      moreBriefFiles.other.length;
+      moreBriefFiles.other.length +
+      moreBriefFiles.agreement.length;
     if (n === 0) {
       toast.error("Choose at least one file to upload");
       return;
@@ -202,9 +301,10 @@ export default function ManagerClientDetailPage() {
       moreBriefFiles.brandKit.forEach((f) => formData.append("brandKit", f));
       moreBriefFiles.socialCredentials.forEach((f) => formData.append("socialCredentials", f));
       moreBriefFiles.other.forEach((f) => formData.append("other", f));
+      moreBriefFiles.agreement.forEach((f) => formData.append("agreement", f));
       await api.uploadClientBriefAssets(id, formData);
       toast.success("Files uploaded");
-      setMoreBriefFiles({ brandKit: [], socialCredentials: [], other: [] });
+      setMoreBriefFiles({ brandKit: [], socialCredentials: [], other: [], agreement: [] });
       await loadClient();
     } catch (error) {
       toast.error(error.message || "Upload failed");
@@ -374,6 +474,85 @@ export default function ManagerClientDetailPage() {
     }
   };
 
+  const openEditClientDialog = () => {
+    setEditClientForm(makeEditClientForm(client));
+    setEditClientOpen(true);
+  };
+
+  const submitEditClient = async () => {
+    if (!editClientForm || !id) return;
+    try {
+      setEditClientSaving(true);
+      const allowedBrandTone = new Set(["luxury", "premium", "bold", "friendly", "minimal", "other", ""]);
+      const allowedLanguage = new Set(["english", "hindi", "other", ""]);
+      const allowedGoal = new Set(["awareness", "sales", "social_growth", ""]);
+      const allowedContentPref = new Set(["education", "promotional", "entertaining", "trend_based"]);
+      const clean = (v) => String(v || "").trim();
+      const cleanEnum = (v, allowed) => {
+        const val = clean(v).toLowerCase();
+        return allowed.has(val) ? val : "";
+      };
+      const parsedContentPref = (editClientForm.clientBrief.contentPreferenceList || [])
+        .map((x) => String(x || "").trim().toLowerCase())
+        .filter((x) => allowedContentPref.has(x));
+      const parsedTargetAudience = (editClientForm.clientBrief.targetAudienceList || [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean)
+        .join(", ");
+      const parsedPreferredShootDays = (editClientForm.clientBrief.preferredShootDaysList || [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean)
+        .join(", ");
+      const payload = {
+        clientName: clean(editClientForm.clientName),
+        brandName: clean(editClientForm.brandName),
+        contactNumber: clean(editClientForm.contactNumber),
+        email: clean(editClientForm.email),
+        website: clean(editClientForm.website),
+        industry: clean(editClientForm.industry),
+        businessType: clean(editClientForm.businessType),
+        socialCredentialsNotes: clean(editClientForm.socialCredentialsNotes),
+        socialHandles: { ...editClientForm.socialHandles },
+        clientBrief: {
+          usp: clean(editClientForm.clientBrief.usp),
+          brandTone: cleanEnum(editClientForm.clientBrief.brandTone, allowedBrandTone),
+          brandToneOther: clean(editClientForm.clientBrief.brandToneOther),
+          targetAudience: parsedTargetAudience,
+          keyProductsServices: clean(editClientForm.clientBrief.keyProductsServices),
+          priorityFocus: clean(editClientForm.clientBrief.priorityFocus),
+          festivalsToTarget: clean(editClientForm.clientBrief.festivalsToTarget),
+          language: cleanEnum(editClientForm.clientBrief.language, allowedLanguage) || "english",
+          languageOther: clean(editClientForm.clientBrief.languageOther),
+          competitors: clean(editClientForm.clientBrief.competitors),
+          accountsYouLikeReason: clean(editClientForm.clientBrief.accountsYouLikeReason),
+          mainGoal: cleanEnum(editClientForm.clientBrief.mainGoal, allowedGoal),
+          ageGroup: clean(editClientForm.clientBrief.ageGroup),
+          focusLocations: clean(editClientForm.clientBrief.focusLocations),
+          preferredShootDaysTiming: parsedPreferredShootDays,
+          bestPostingTime: clean(editClientForm.clientBrief.bestPostingTime),
+          shootAvailability: {
+            storeOrOfficeForShoot: Boolean(
+              editClientForm.clientBrief?.shootAvailability?.storeOrOfficeForShoot
+            ),
+            productsReadyForShoot: Boolean(
+              editClientForm.clientBrief?.shootAvailability?.productsReadyForShoot
+            ),
+            modelsAvailable: Boolean(editClientForm.clientBrief?.shootAvailability?.modelsAvailable),
+          },
+          contentPreference: parsedContentPref,
+        },
+      };
+      await api.updateClient(id, payload);
+      toast.success("Client info updated");
+      setEditClientOpen(false);
+      await loadClient();
+    } catch (error) {
+      toast.error(error.message || "Failed to update client");
+    } finally {
+      setEditClientSaving(false);
+    }
+  };
+
   const team = client?.team || {};
   const activePlan = client?.activeContentCounts;
   const pkg = client?.package || {};
@@ -420,6 +599,9 @@ export default function ManagerClientDetailPage() {
                       Edit Schedule
                     </Button>
                   </Link>
+                  <Button type="button" size="sm" variant="outline" onClick={openEditClientDialog}>
+                    Edit Client Info
+                  </Button>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4 text-sm">
@@ -463,6 +645,7 @@ export default function ManagerClientDetailPage() {
                     { title: "Brand kit / identity", files: client.clientBrief?.brandKitFiles },
                     { title: "Social credentials", files: client.clientBrief?.socialCredentialsFiles },
                     { title: "Other essential files", files: client.clientBrief?.otherBriefFiles },
+                    { title: "Agreement", files: client.clientBrief?.agreementFiles },
                   ].map(({ title, files }) =>
                     Array.isArray(files) && files.length > 0 ? (
                       <div key={title}>
@@ -500,7 +683,8 @@ export default function ManagerClientDetailPage() {
                   )}
                   {!client.clientBrief?.brandKitFiles?.length &&
                   !client.clientBrief?.socialCredentialsFiles?.length &&
-                  !client.clientBrief?.otherBriefFiles?.length ? (
+                  !client.clientBrief?.otherBriefFiles?.length &&
+                  !client.clientBrief?.agreementFiles?.length ? (
                     <p className="text-xs text-muted-foreground">No files uploaded yet.</p>
                   ) : null}
 
@@ -555,16 +739,35 @@ export default function ManagerClientDetailPage() {
                           }}
                         />
                       </div>
+                      <div className="space-y-1 sm:col-span-2">
+                        <Label className="text-xs">Agreement</Label>
+                        <Input
+                          type="file"
+                          multiple
+                          className="cursor-pointer text-xs file:mr-2"
+                          onChange={(e) => {
+                            const list = e.target.files;
+                            if (list?.length)
+                              setMoreBriefFiles((p) => ({
+                                ...p,
+                                agreement: [...p.agreement, ...Array.from(list)],
+                              }));
+                            e.target.value = "";
+                          }}
+                        />
+                      </div>
                     </div>
                     {(moreBriefFiles.brandKit.length > 0 ||
                       moreBriefFiles.socialCredentials.length > 0 ||
-                      moreBriefFiles.other.length > 0) && (
+                      moreBriefFiles.other.length > 0 ||
+                      moreBriefFiles.agreement.length > 0) && (
                       <p className="mt-2 text-xs text-muted-foreground">
                         Queued:{" "}
                         {[
                           ...moreBriefFiles.brandKit,
                           ...moreBriefFiles.socialCredentials,
                           ...moreBriefFiles.other,
+                          ...moreBriefFiles.agreement,
                         ]
                           .map((f) => f.name)
                           .join(", ")}
@@ -1080,6 +1283,211 @@ export default function ManagerClientDetailPage() {
                   </Button>
                 </div>
               </div>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog
+            open={editClientOpen}
+            onOpenChange={(open) => {
+              setEditClientOpen(open);
+              if (!open) setEditClientForm(null);
+            }}
+          >
+            <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Edit client info</DialogTitle>
+              </DialogHeader>
+              {editClientForm ? (
+                <div className="space-y-4 text-sm">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5"><Label>Name</Label><Input value={editClientForm.clientName} onChange={(e) => setEditClientForm((p) => ({ ...p, clientName: e.target.value }))} /></div>
+                    <div className="space-y-1.5"><Label>Brand name</Label><Input value={editClientForm.brandName} onChange={(e) => setEditClientForm((p) => ({ ...p, brandName: e.target.value }))} /></div>
+                    <div className="space-y-1.5"><Label>Contact number</Label><Input value={editClientForm.contactNumber} onChange={(e) => setEditClientForm((p) => ({ ...p, contactNumber: e.target.value }))} /></div>
+                    <div className="space-y-1.5"><Label>Email</Label><Input value={editClientForm.email} onChange={(e) => setEditClientForm((p) => ({ ...p, email: e.target.value }))} /></div>
+                    <div className="space-y-1.5"><Label>Website</Label><Input value={editClientForm.website} onChange={(e) => setEditClientForm((p) => ({ ...p, website: e.target.value }))} /></div>
+                    <div className="space-y-1.5"><Label>Industry</Label><Input value={editClientForm.industry} onChange={(e) => setEditClientForm((p) => ({ ...p, industry: e.target.value }))} /></div>
+                    <div className="space-y-1.5 sm:col-span-2"><Label>Business type</Label><Input value={editClientForm.businessType} onChange={(e) => setEditClientForm((p) => ({ ...p, businessType: e.target.value }))} /></div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label>Social credentials notes</Label>
+                    <textarea className="min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2" value={toTextAreaValue(editClientForm.socialCredentialsNotes)} onChange={(e) => setEditClientForm((p) => ({ ...p, socialCredentialsNotes: e.target.value }))} />
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {Object.entries(editClientForm.socialHandles).map(([k, v]) => (
+                      <div key={k} className="space-y-1.5">
+                        <Label>{k.replace(/([A-Z])/g, " $1").replace(/^./, (ch) => ch.toUpperCase())}</Label>
+                        <Input value={v} onChange={(e) => setEditClientForm((p) => ({ ...p, socialHandles: { ...p.socialHandles, [k]: e.target.value } }))} />
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1.5 sm:col-span-2"><Label>USP</Label><textarea className="min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2" value={toTextAreaValue(editClientForm.clientBrief.usp)} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, usp: e.target.value } }))} /></div>
+                    <div className="space-y-1.5">
+                      <Label>Brand tone</Label>
+                      <Select
+                        value={editClientForm.clientBrief.brandTone || undefined}
+                        onValueChange={(v) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, brandTone: v } }))}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Choose one" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="luxury">Luxury</SelectItem>
+                          <SelectItem value="premium">Premium</SelectItem>
+                          <SelectItem value="bold">Bold</SelectItem>
+                          <SelectItem value="friendly">Friendly</SelectItem>
+                          <SelectItem value="minimal">Minimal</SelectItem>
+                          <SelectItem value="other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5"><Label>Brand tone other</Label><Input value={editClientForm.clientBrief.brandToneOther} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, brandToneOther: e.target.value } }))} /></div>
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label>Who is your target audience?</Label>
+                      <div className="flex flex-wrap gap-3">
+                        {TARGET_AUDIENCE_OPTIONS.map((opt) => {
+                          const set = new Set(editClientForm.clientBrief.targetAudienceList || []);
+                          const checked = set.has(opt);
+                          return (
+                            <label key={opt} className="flex items-center gap-2 text-sm">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(next) =>
+                                  setEditClientForm((p) => {
+                                    const s = new Set(p.clientBrief.targetAudienceList || []);
+                                    if (next === true) s.add(opt);
+                                    else s.delete(opt);
+                                    return { ...p, clientBrief: { ...p.clientBrief, targetAudienceList: Array.from(s) } };
+                                  })
+                                }
+                              />
+                              {opt}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="space-y-1.5 sm:col-span-2"><Label>Key products/services</Label><textarea className="min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2" value={toTextAreaValue(editClientForm.clientBrief.keyProductsServices)} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, keyProductsServices: e.target.value } }))} /></div>
+                    <div className="space-y-1.5 sm:col-span-2"><Label>Priority focus</Label><textarea className="min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2" value={toTextAreaValue(editClientForm.clientBrief.priorityFocus)} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, priorityFocus: e.target.value } }))} /></div>
+                    <div className="space-y-1.5 sm:col-span-2"><Label>Festivals to target</Label><textarea className="min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2" value={toTextAreaValue(editClientForm.clientBrief.festivalsToTarget)} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, festivalsToTarget: e.target.value } }))} /></div>
+                    <div className="space-y-1.5">
+                      <Label>Language</Label>
+                      <Select
+                        value={editClientForm.clientBrief.language || undefined}
+                        onValueChange={(v) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, language: v } }))}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Primary content language" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="english">English</SelectItem>
+                          <SelectItem value="hindi">Hindi</SelectItem>
+                          <SelectItem value="other">Other</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5"><Label>Language other</Label><Input value={editClientForm.clientBrief.languageOther} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, languageOther: e.target.value } }))} /></div>
+                    <div className="space-y-1.5 sm:col-span-2"><Label>Competitors</Label><textarea className="min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2" value={toTextAreaValue(editClientForm.clientBrief.competitors)} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, competitors: e.target.value } }))} /></div>
+                    <div className="space-y-1.5 sm:col-span-2"><Label>Accounts you like (reason)</Label><textarea className="min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2" value={toTextAreaValue(editClientForm.clientBrief.accountsYouLikeReason)} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, accountsYouLikeReason: e.target.value } }))} /></div>
+                    <div className="space-y-1.5">
+                      <Label>Main goal</Label>
+                      <Select
+                        value={editClientForm.clientBrief.mainGoal || undefined}
+                        onValueChange={(v) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, mainGoal: v } }))}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Choose one" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="awareness">Awareness</SelectItem>
+                          <SelectItem value="sales">Sales</SelectItem>
+                          <SelectItem value="social_growth">Social growth</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Age group</Label>
+                      <Select
+                        value={editClientForm.clientBrief.ageGroup || "__none__"}
+                        onValueChange={(v) =>
+                          setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, ageGroup: v === "__none__" ? "" : v } }))
+                        }
+                      >
+                        <SelectTrigger><SelectValue placeholder="Select age group (optional)" /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__">— None —</SelectItem>
+                          {AGE_GROUP_OPTIONS.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5 sm:col-span-2"><Label>Focus locations</Label><Input value={editClientForm.clientBrief.focusLocations} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, focusLocations: e.target.value } }))} /></div>
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label>Content preference</Label>
+                      <div className="flex flex-wrap gap-3">
+                        {Object.entries(CONTENT_PREF).map(([value, label]) => {
+                          const set = new Set(editClientForm.clientBrief.contentPreferenceList || []);
+                          const checked = set.has(value);
+                          return (
+                            <label key={value} className="flex items-center gap-2 text-sm">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(next) =>
+                                  setEditClientForm((p) => {
+                                    const s = new Set(p.clientBrief.contentPreferenceList || []);
+                                    if (next === true) s.add(value);
+                                    else s.delete(value);
+                                    return { ...p, clientBrief: { ...p.clientBrief, contentPreferenceList: Array.from(s) } };
+                                  })
+                                }
+                              />
+                              {label}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label>Preferred shoot days</Label>
+                      <div className="flex flex-wrap gap-3">
+                        {WEEKDAY_OPTIONS.map((day) => {
+                          const set = new Set(editClientForm.clientBrief.preferredShootDaysList || []);
+                          const checked = set.has(day);
+                          return (
+                            <label key={day} className="flex items-center gap-2 text-sm">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(next) =>
+                                  setEditClientForm((p) => {
+                                    const s = new Set(p.clientBrief.preferredShootDaysList || []);
+                                    if (next === true) s.add(day);
+                                    else s.delete(day);
+                                    return { ...p, clientBrief: { ...p.clientBrief, preferredShootDaysList: Array.from(s) } };
+                                  })
+                                }
+                              />
+                              {day}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="space-y-1.5"><Label>Best posting time</Label><Input value={editClientForm.clientBrief.bestPostingTime} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, bestPostingTime: e.target.value } }))} /></div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">Shoot availability</p>
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editClientForm.clientBrief.shootAvailability.storeOrOfficeForShoot} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, shootAvailability: { ...p.clientBrief.shootAvailability, storeOrOfficeForShoot: e.target.checked } } }))} />Store / office for shoot</label>
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editClientForm.clientBrief.shootAvailability.productsReadyForShoot} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, shootAvailability: { ...p.clientBrief.shootAvailability, productsReadyForShoot: e.target.checked } } }))} />Products ready for shoot</label>
+                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={editClientForm.clientBrief.shootAvailability.modelsAvailable} onChange={(e) => setEditClientForm((p) => ({ ...p, clientBrief: { ...p.clientBrief, shootAvailability: { ...p.clientBrief.shootAvailability, modelsAvailable: e.target.checked } } }))} />Models available</label>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button type="button" variant="outline" onClick={() => setEditClientOpen(false)} disabled={editClientSaving}>Cancel</Button>
+                    <Button type="button" onClick={submitEditClient} disabled={editClientSaving}>
+                      {editClientSaving ? "Saving…" : "Save changes"}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
             </DialogContent>
           </Dialog>
 
