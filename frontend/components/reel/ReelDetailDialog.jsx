@@ -420,46 +420,46 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                   <CollapsibleSection title="Client added details">
                     <div className="space-y-3 text-sm">
                       <div className="grid gap-2 sm:grid-cols-2">
-                        <p>
-                          <span className="text-muted-foreground">Client:</span>{" "}
-                          <span className="font-medium">{clientDetails.clientName || "-"}</span>
-                        </p>
-                        <p>
-                          <span className="text-muted-foreground">Brand:</span>{" "}
-                          <span className="font-medium">{clientDetails.brandName || "-"}</span>
-                        </p>
-                        <p>
-                          <span className="text-muted-foreground">Industry:</span>{" "}
-                          <span>{clientDetails.industry || "-"}</span>
-                        </p>
-                        <p>
-                          <span className="text-muted-foreground">Business type:</span>{" "}
-                          <span>{clientDetails.businessType || "-"}</span>
-                        </p>
-                        <p>
-                          <span className="text-muted-foreground">Contact:</span>{" "}
-                          <span>{clientDetails.contactNumber || "-"}</span>
-                        </p>
-                        <p>
-                          <span className="text-muted-foreground">Email:</span>{" "}
-                          <span>{clientDetails.email || "-"}</span>
-                        </p>
-                        <p>
-                          <span className="text-muted-foreground">Website:</span>{" "}
-                          <span>{clientDetails.website || "-"}</span>
-                        </p>
-                        <p>
-                          <span className="text-muted-foreground">Start:</span>{" "}
-                          <span>{safeYMD(clientDetails.startDate)}</span>
-                        </p>
-                        <p>
-                          <span className="text-muted-foreground">End:</span>{" "}
-                          <span>{safeYMD(clientDetails.endDate)}</span>
-                        </p>
-                        <p className="sm:col-span-2">
-                          <span className="text-muted-foreground">Client status:</span>{" "}
-                          <span>{clientDetails.status || "-"}</span>
-                        </p>
+                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="text-[11px] text-muted-foreground">Client</p>
+                          <p className="font-medium">{clientDetails.clientName || "-"}</p>
+                        </div>
+                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="text-[11px] text-muted-foreground">Brand</p>
+                          <p className="font-medium">{clientDetails.brandName || "-"}</p>
+                        </div>
+                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="text-[11px] text-muted-foreground">Industry</p>
+                          <p>{clientDetails.industry || "-"}</p>
+                        </div>
+                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="text-[11px] text-muted-foreground">Business type</p>
+                          <p>{clientDetails.businessType || "-"}</p>
+                        </div>
+                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="text-[11px] text-muted-foreground">Contact</p>
+                          <p>{clientDetails.contactNumber || "-"}</p>
+                        </div>
+                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="text-[11px] text-muted-foreground">Email</p>
+                          <p className="break-all">{clientDetails.email || "-"}</p>
+                        </div>
+                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="text-[11px] text-muted-foreground">Website</p>
+                          <p className="break-all">{clientDetails.website || "-"}</p>
+                        </div>
+                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="text-[11px] text-muted-foreground">Client status</p>
+                          <p>{clientDetails.status || "-"}</p>
+                        </div>
+                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="text-[11px] text-muted-foreground">Start date</p>
+                          <p>{safeYMD(clientDetails.startDate)}</p>
+                        </div>
+                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                          <p className="text-[11px] text-muted-foreground">End date</p>
+                          <p>{safeYMD(clientDetails.endDate)}</p>
+                        </div>
                       </div>
 
                       {clientDetails.socialCredentialsNotes ? (
@@ -476,9 +476,9 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                           <p className="text-xs font-medium text-muted-foreground">Social handles</p>
                           <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
                             {socialHandleSummary.map((x) => (
-                              <p key={x.label} className="text-xs">
+                              <div key={x.label} className="rounded-md border border-border/60 px-2 py-1 text-xs">
                                 <span className="text-muted-foreground">{x.label}:</span> {x.value}
-                              </p>
+                              </div>
                             ))}
                           </div>
                         </div>
@@ -489,9 +489,9 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                           <p className="text-xs font-medium text-muted-foreground">Client brief</p>
                           <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
                             {clientBriefSummary.map((x) => (
-                              <p key={x.label} className="text-xs">
+                              <div key={x.label} className="rounded-md border border-border/60 px-2 py-1 text-xs">
                                 <span className="text-muted-foreground">{x.label}:</span> {x.value}
-                              </p>
+                              </div>
                             ))}
                           </div>
                         </div>
@@ -501,9 +501,9 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                           <p className="text-xs font-medium text-muted-foreground">Shoot availability</p>
                           <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
                             {shootAvailabilitySummary.map((x) => (
-                              <p key={x.label} className="text-xs">
+                              <div key={x.label} className="rounded-md border border-border/60 px-2 py-1 text-xs">
                                 <span className="text-muted-foreground">{x.label}:</span> {x.value}
-                              </p>
+                              </div>
                             ))}
                           </div>
                         </div>

@@ -8,6 +8,7 @@ const managerLeaveController = require("../controllers/managerLeave.controller")
 const router = express.Router();
 
 router.get("/me", auth, asyncHandler(userController.getMe));
+router.patch("/me", auth, asyncHandler(userController.updateMe));
 router.get("/notifications", auth, asyncHandler(userController.getMyNotifications));
 router.patch(
   "/notifications/:notificationId/read",

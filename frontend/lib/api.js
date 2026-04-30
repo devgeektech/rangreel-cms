@@ -115,6 +115,11 @@ export const api = {
     }),
 
   getMe: () => requestJson("/user/me", { method: "GET" }),
+  updateMe: (body) =>
+    requestJson("/user/me", {
+      method: "PATCH",
+      body,
+    }),
   getMyNotifications: () => requestJson("/user/notifications", { method: "GET" }),
   markNotificationRead: (notificationId) =>
     requestJson(`/user/notifications/${encodeURIComponent(notificationId)}/read`, {

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, UserCircle2 } from "lucide-react";
 import Navbar from "./Navbar";
 import { api } from "@/lib/api";
 import { useAuthStore } from "@/lib/store";
@@ -29,11 +29,21 @@ export default function DashboardShell({ children, navItems = [], defaultCollaps
   const pathname = usePathname();
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
+  const setUser = useAuthStore((state) => state.setUser);
   const clearUser = useAuthStore((state) => state.clearUser);
   const [collapsed, setCollapsed] = useState(Boolean(defaultCollapsed));
   const socketRef = useRef(null);
 
-  const mobileItems = useMemo(() => navItems.slice(0, 5), [navItems]);
+  const resolvedNavItems = useMemo(() => {
+    const firstSeg = String(pathname || "").split("/").filter(Boolean)[0] || "";
+    const isDashboardRoleRoute = Boolean(firstSeg);
+    if (!isDashboardRoleRoute || firstSeg === "admin") return navItems;
+    const profileHref = `/${firstSeg}/profile`;
+    if (navItems.some((x) => String(x?.href || "") === profileHref)) return navItems;
+    return [...navItems, { href: profileHref, label: "Profile", icon: UserCircle2 }];
+  }, [navItems, pathname]);
+
+  const mobileItems = useMemo(() => resolvedNavItems.slice(0, 5), [resolvedNavItems]);
 
   const handleLogout = async () => {
     try {
@@ -45,6 +55,24 @@ export default function DashboardShell({ children, navItems = [], defaultCollaps
       router.push("/login");
     }
   };
+
+  useEffect(() => {
+    let mounted = true;
+    if (user?._id) return undefined;
+    (async () => {
+      try {
+        const me = await api.getMe();
+        if (!mounted) return;
+        const nextUser = me?.user || me?.data || null;
+        if (nextUser) setUser(nextUser);
+      } catch {
+        // Ignore here; route guards handle unauthenticated states.
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [user?._id, setUser]);
 
   useEffect(() => {
     let mounted = true;
@@ -130,7 +158,7 @@ export default function DashboardShell({ children, navItems = [], defaultCollaps
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto px-2 py-3">
-          {navItems.map((item) => {
+          {resolvedNavItems.map((item) => {
             const active = isItemActive(pathname, item.href);
             const Icon = item.icon;
             return (

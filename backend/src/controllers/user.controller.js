@@ -66,6 +66,27 @@ const getMe = async (req, res) => {
   }
 };
 
+const updateMe = async (req, res) => {
+  try {
+    const name = String(req.body?.name || "").trim();
+    if (!name) {
+      return failure(res, "Name is required", 400);
+    }
+    if (name.length < 2) {
+      return failure(res, "Name must be at least 2 characters", 400);
+    }
+    const user = await User.findById(req.user.id).populate("role");
+    if (!user || !user.isActive) {
+      return failure(res, "User not found", 404);
+    }
+    user.name = name;
+    await user.save();
+    return success(res, { user });
+  } catch (error) {
+    return failure(res, "Failed to update profile", 500);
+  }
+};
+
 const getMyTasks = async (req, res) => {
   try {
     const month = req.query.month;
@@ -583,6 +604,7 @@ const strategistDragTask = async (req, res) => {
 
 module.exports = {
   getMe,
+  updateMe,
   getMyTasks,
   updateMyTaskStatus,
   getTeamClient,
