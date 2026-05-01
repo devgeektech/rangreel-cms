@@ -145,12 +145,38 @@ export function applyCustomizationDrag(draft, contentId, stageName, newDateYmd, 
   const weekendEnabled = options?.weekendEnabled === true;
 
   if (isPost) {
+    // Move Post individually; keep every other stage unchanged.
+    // Guard: Post must remain strictly after all upstream stages.
+    const prevStageDate = idx > 0 ? String(nextStages[idx - 1]?.date || "").slice(0, 10) : "";
+    let normalizedNewDate = newDateYmd;
+    if (!weekendEnabled) normalizedNewDate = nextWeekdayYmd(normalizedNewDate);
+
+    let latestNonPost = "";
     for (let i = 0; i < nextStages.length; i++) {
-      const cur = String(nextStages[i]?.date || "").slice(0, 10);
-      let shifted = addDaysToYmd(cur, offsetDays);
-      if (!weekendEnabled) shifted = nextWeekdayYmd(shifted);
-      nextStages[i] = { ...nextStages[i], date: shifted };
+      if (i === idx) continue;
+      const d = String(nextStages[i]?.date || "").slice(0, 10);
+      if (!d) continue;
+      if (!latestNonPost || d > latestNonPost) latestNonPost = d;
     }
+
+    if (latestNonPost && compareYmd(normalizedNewDate, latestNonPost) <= 0) {
+      return {
+        draft,
+        blocked: true,
+        reason: "Post must be after approval/pipeline stages.",
+        code: "post_before_upstream",
+      };
+    }
+    if (prevStageDate && compareYmd(normalizedNewDate, prevStageDate) <= 0) {
+      return {
+        draft,
+        blocked: true,
+        reason: "Post must be after previous phase.",
+        code: "post_prev_overlap",
+      };
+    }
+
+    nextStages[idx] = { ...nextStages[idx], date: normalizedNewDate };
   } else {
     const prevStageDate = idx > 0 ? String(nextStages[idx - 1]?.date || "").slice(0, 10) : "";
     const nextStageDate =
