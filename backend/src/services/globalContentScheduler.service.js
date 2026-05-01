@@ -12,6 +12,14 @@ const DAILY_MIX_TARGET = {
 };
 const URGENT_REEL_RESERVE = 2;
 
+/** Aligns with clientScheduleMonths `resolveDistributionLeadDays` default. */
+const DEFAULT_DISTRIBUTION_LEAD_DAYS = 5;
+
+function resolveLeadDays(client) {
+  const v = Number(client?.rules?.distributionLeadDays);
+  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : DEFAULT_DISTRIBUTION_LEAD_DAYS;
+}
+
 function createUTCDate(date) {
   const d = date instanceof Date ? new Date(date) : new Date(date);
   if (Number.isNaN(d.getTime())) return null;
@@ -177,6 +185,230 @@ function buildPipeline(contentType, planType) {
       minGap,
     };
   });
+}
+
+function getWeeklyTargets(total, weeks = 4) {
+  const base = Math.floor(total / weeks);
+  let remainder = total % weeks;
+  const result = [];
+  for (let i = 0; i < weeks; i += 1) {
+    result.push(base + (remainder > 0 ? 1 : 0));
+    if (remainder > 0) remainder -= 1;
+  }
+  return result;
+}
+
+function getWeekDateRange(startDate, weekIndex) {
+  const start = createUTCDate(startDate);
+  if (!start) return { start: null, end: null };
+  start.setUTCDate(start.getUTCDate() + weekIndex * 7);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + (weekIndex === 3 ? 8 : 6));
+  return { start, end };
+}
+
+function enumerateDaysUTC(startDate, endDate, weekdaysOnly = true) {
+  const start = createUTCDate(startDate);
+  const end = createUTCDate(endDate);
+  if (!start || !end || start.getTime() > end.getTime()) return [];
+  const days = [];
+  for (let d = start; d && d.getTime() <= end.getTime(); d = addDaysUTC(d, 1)) {
+    const day = d.getUTCDay();
+    if (weekdaysOnly && (day === 0 || day === 6)) continue;
+    days.push(createUTCDate(d));
+  }
+  return days;
+}
+
+function pickLeastLoadedDay(days, dayLoad) {
+  const list = Array.isArray(days) ? days.filter(Boolean) : [];
+  if (!list.length) return null;
+  const mid = Math.floor(list.length / 2);
+  const ordered = [];
+  for (let i = 0; i < list.length; i += 1) {
+    if (mid - i >= 0) ordered.push(list[mid - i]);
+    if (mid + i < list.length && i !== 0) ordered.push(list[mid + i]);
+  }
+  let best = ordered[0];
+  let bestLoad = Number.POSITIVE_INFINITY;
+  for (const day of ordered) {
+    const key = ymdUTC(day);
+    const load = dayLoad.get(key) || 0;
+    if (load < bestLoad) {
+      best = day;
+      bestLoad = load;
+    }
+  }
+  return best;
+}
+
+function applyPostDateOnly(doc, nextPostDate) {
+  const d = createUTCDate(nextPostDate);
+  if (!d || !doc) return;
+  doc.clientPostingDate = d;
+  const stages = Array.isArray(doc.workflowStages) ? doc.workflowStages : [];
+  doc.workflowStages = stages.map((s) =>
+    String(s?.stageName || "") === "Post" ? { ...s, dueDate: d } : s
+  );
+}
+
+/** Latest explicit dueDate among non-Post stages (Approval, Edit, etc.). */
+function latestNonPostDueUtcFromDoc(doc) {
+  const stages = Array.isArray(doc?.workflowStages) ? doc.workflowStages : [];
+  let latest = null;
+  for (const s of stages) {
+    if (String(s?.stageName || "") === "Post") continue;
+    const d = createUTCDate(s?.dueDate);
+    if (!d) continue;
+    if (!latest || d.getTime() > latest.getTime()) latest = d;
+  }
+  return latest;
+}
+
+/** First calendar day allowed for Post: strictly after all upstream stages on the doc. */
+function minPostingDateAfterUpstream(doc) {
+  const latest = latestNonPostDueUtcFromDoc(doc);
+  return latest ? addDaysUTC(latest, 1) : null;
+}
+
+/**
+ * After rebalance moves Post only, ensure postingDate > latest upstream dueDate.
+ * Clamps to cycle end if min post would exceed the 30-day window.
+ */
+function enforcePostAfterUpstreamForCycleDocs(cycleDocs, nominalCycleStart) {
+  const anchor = createUTCDate(nominalCycleStart);
+  if (!anchor || !Array.isArray(cycleDocs)) return;
+  const maxDate = addDaysUTC(anchor, 29);
+  for (const doc of cycleDocs) {
+    const latestNonPost = latestNonPostDueUtcFromDoc(doc);
+    if (!latestNonPost) continue;
+    const minPost = addDaysUTC(latestNonPost, 1);
+    const post = createUTCDate(doc.clientPostingDate);
+    if (!post || post.getTime() <= latestNonPost.getTime()) {
+      const bumped = minPost.getTime() > maxDate.getTime() ? maxDate : minPost;
+      applyPostDateOnly(doc, bumped);
+    }
+  }
+}
+
+/**
+ * Group scheduled tasks by client + cycle, rebalance/enforce per group using that client's nominal cycle anchor.
+ * Returns one ContentItem-shaped doc per task in the same order as `tasks`.
+ */
+function rebalanceAndEnforcePreservingTaskOrder(tasks) {
+  if (!Array.isArray(tasks) || !tasks.length) return [];
+  const groups = new Map();
+  for (const t of tasks) {
+    const key = `${String(t.clientId ?? "null")}|${t.cycleIndex}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+  const docByTaskKey = new Map();
+  for (const group of groups.values()) {
+    const nominalStart =
+      createUTCDate(group[0]?.nominalCycleStart) || createUTCDate(group[0]?.stages[0]?.earliestStartDate);
+    const docs = group.map(toContentItemDoc);
+    if (nominalStart) {
+      rebalancePostOnlyForCycleDocs(docs, nominalStart);
+      enforcePostAfterUpstreamForCycleDocs(docs, nominalStart);
+    }
+    for (let i = 0; i < group.length; i += 1) {
+      const t = group[i];
+      const k = `${String(t.clientId ?? "null")}|${t.cycleIndex}|${String(t.title || "")}`;
+      docByTaskKey.set(k, docs[i]);
+    }
+  }
+  return tasks.map((t) => docByTaskKey.get(`${String(t.clientId ?? "null")}|${t.cycleIndex}|${String(t.title || "")}`));
+}
+
+function rebalancePostOnlyForCycleDocs(cycleDocs, cycleStart) {
+  const start = createUTCDate(cycleStart);
+  if (!start || !Array.isArray(cycleDocs) || !cycleDocs.length) return;
+  const maxDate = addDaysUTC(start, 29);
+  const allDays = enumerateDaysUTC(start, maxDate, true);
+  if (!allDays.length) return;
+
+  const grouped = { reel: [], post: [], carousel: [] };
+  for (const doc of cycleDocs) {
+    const t = String(doc?.type || "").toLowerCase();
+    if (grouped[t]) grouped[t].push(doc);
+  }
+
+  const dayLoad = new Map();
+  for (const type of ["reel", "post", "carousel"]) {
+    const list = grouped[type];
+    if (!list.length) continue;
+    list.sort((a, b) => String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true }));
+    const targets = getWeeklyTargets(list.length, 4);
+    let idx = 0;
+    const assignedByWeek = [0, 0, 0, 0];
+
+    const placeIntoWeek = (doc, weekIndex) => {
+      const floor = minPostingDateAfterUpstream(doc);
+      const { start: ws, end: we } = getWeekDateRange(start, weekIndex);
+      const weekDays = allDays.filter(
+        (d) =>
+          d.getTime() >= ws.getTime() &&
+          d.getTime() <= we.getTime() &&
+          (!floor || d.getTime() >= floor.getTime())
+      );
+      const eligibleAny = allDays.filter((d) => !floor || d.getTime() >= floor.getTime());
+      const picked =
+        pickLeastLoadedDay(weekDays, dayLoad) ||
+        pickLeastLoadedDay(eligibleAny, dayLoad) ||
+        maxDate;
+      applyPostDateOnly(doc, picked);
+      const key = ymdUTC(picked);
+      dayLoad.set(key, (dayLoad.get(key) || 0) + 1);
+      assignedByWeek[weekIndex] += 1;
+    };
+
+    for (let w = 0; w < 4; w += 1) {
+      for (let i = 0; i < (targets[w] || 0); i += 1) {
+        const doc = list[idx++];
+        if (!doc) break;
+        placeIntoWeek(doc, w);
+      }
+    }
+
+    // Overflow safety: keep filling least-loaded weekdays in-cycle.
+    while (idx < list.length) {
+      const doc = list[idx++];
+      const floor = minPostingDateAfterUpstream(doc);
+      const eligibleOverflow = allDays.filter((d) => !floor || d.getTime() >= floor.getTime());
+      const picked = pickLeastLoadedDay(eligibleOverflow, dayLoad) || maxDate;
+      applyPostDateOnly(doc, picked);
+      const key = ymdUTC(picked);
+      dayLoad.set(key, (dayLoad.get(key) || 0) + 1);
+    }
+
+    // Coverage guard: if type has at least 4 items, ensure no week is empty.
+    if (list.length >= 4) {
+      const donors = () =>
+        assignedByWeek
+          .map((count, weekIdx) => ({ count, weekIdx }))
+          .filter((x) => x.count > 1)
+          .sort((a, b) => b.count - a.count);
+
+      for (let w = 0; w < 4; w += 1) {
+        if (assignedByWeek[w] > 0) continue;
+        const donor = donors()[0];
+        if (!donor) break;
+        const candidate = list
+          .filter((doc) => {
+            const d = createUTCDate(doc.clientPostingDate);
+            if (!d) return false;
+            const { start: ws, end: we } = getWeekDateRange(start, donor.weekIdx);
+            return d.getTime() >= ws.getTime() && d.getTime() <= we.getTime();
+          })
+          .sort((a, b) => String(a?.title || "").localeCompare(String(b?.title || ""), undefined, { numeric: true }))[0];
+        if (!candidate) continue;
+        placeIntoWeek(candidate, w);
+        assignedByWeek[donor.weekIdx] -= 1;
+      }
+    }
+
+  }
 }
 
 function getTeamForType(team, type) {
@@ -598,7 +830,7 @@ async function generateGlobalCalendarForClients(clientIds = []) {
 
   const clients = await Client.find({ _id: { $in: ids } })
     .populate("package")
-    .select("startDate manager createdBy package team activeContentCounts isCustomCalendar weekendEnabled")
+    .select("startDate manager createdBy package team activeContentCounts isCustomCalendar weekendEnabled rules")
     .lean();
   if (!clients.length) return { insertedCount: 0, overloadCycles: [], clientEndDates: {} };
 
@@ -608,8 +840,12 @@ async function generateGlobalCalendarForClients(clientIds = []) {
     const counts = getActiveCounts(client);
     const cycles = buildCycles(client.startDate);
     const team = client.team || {};
+    const leadDays = resolveLeadDays(client);
     for (const cycle of cycles) {
       const bucket = blueprintByCycle.get(cycle.index);
+      const nominalCycleStart = createUTCDate(cycle.start);
+      const firstStageEarliest =
+        cycle.index === 1 ? addDaysUTC(nominalCycleStart, -leadDays) : nominalCycleStart;
       // Keep legacy urgency policy: only first 2 reels are urgent.
       const urgentCount = Math.min(2, counts.reels);
 
@@ -621,6 +857,7 @@ async function generateGlobalCalendarForClients(clientIds = []) {
           clientSortKey: String(client._id),
           cycleIndex: cycle.index,
           cycleEnd: createUTCDate(cycle.end),
+          nominalCycleStart,
           contentType: "reel",
           type: "reel",
           title: `Reel #${i}`,
@@ -632,7 +869,7 @@ async function generateGlobalCalendarForClients(clientIds = []) {
           stages: pipeline.map((p, idx) => ({
             ...p,
             assignedUser: getTeamForType(team, "reel")[p.role] || null,
-            earliestStartDate: idx === 0 ? createUTCDate(cycle.start) : null,
+            earliestStartDate: idx === 0 ? firstStageEarliest : null,
           })),
         });
       }
@@ -644,6 +881,7 @@ async function generateGlobalCalendarForClients(clientIds = []) {
           clientSortKey: String(client._id),
           cycleIndex: cycle.index,
           cycleEnd: createUTCDate(cycle.end),
+          nominalCycleStart,
           contentType: "static_post",
           type: "post",
           title: `Post #${i}`,
@@ -655,7 +893,7 @@ async function generateGlobalCalendarForClients(clientIds = []) {
           stages: pipeline.map((p, idx) => ({
             ...p,
             assignedUser: getTeamForType(team, "static_post")[p.role] || null,
-            earliestStartDate: idx === 0 ? createUTCDate(cycle.start) : null,
+            earliestStartDate: idx === 0 ? firstStageEarliest : null,
           })),
         });
       }
@@ -667,6 +905,7 @@ async function generateGlobalCalendarForClients(clientIds = []) {
           clientSortKey: String(client._id),
           cycleIndex: cycle.index,
           cycleEnd: createUTCDate(cycle.end),
+          nominalCycleStart,
           contentType: "carousel",
           type: "carousel",
           title: `Carousel #${i}`,
@@ -678,7 +917,7 @@ async function generateGlobalCalendarForClients(clientIds = []) {
           stages: pipeline.map((p, idx) => ({
             ...p,
             assignedUser: getTeamForType(team, "carousel")[p.role] || null,
-            earliestStartDate: idx === 0 ? createUTCDate(cycle.start) : null,
+            earliestStartDate: idx === 0 ? firstStageEarliest : null,
           })),
         });
       }
@@ -696,7 +935,7 @@ async function generateGlobalCalendarForClients(clientIds = []) {
     const cycleEnd = tasks.reduce((m, t) => (m && m.getTime() > t.cycleEnd.getTime() ? m : t.cycleEnd), null);
     const result = await scheduleCycleWithFallback(tasks, { index: cycleIndex, start: cycleStart, end: cycleEnd });
     if (result.overloadMode) overloadCycles.push(cycleIndex);
-    docs.push(...result.tasks.map(toContentItemDoc));
+    docs.push(...rebalanceAndEnforcePreservingTaskOrder(result.tasks));
   }
 
   if (docs.length) {
@@ -731,9 +970,13 @@ function buildClientBlueprintTasks(client) {
   const cycles = buildCycles(client.startDate);
   const team = client.team || {};
   const blueprintByCycle = new Map([[1, []], [2, []], [3, []]]);
+  const leadDays = resolveLeadDays(client);
 
   for (const cycle of cycles) {
     const bucket = blueprintByCycle.get(cycle.index);
+    const nominalCycleStart = createUTCDate(cycle.start);
+    const firstStageEarliest =
+      cycle.index === 1 ? addDaysUTC(nominalCycleStart, -leadDays) : nominalCycleStart;
     // Keep legacy urgency policy: only first 2 reels are urgent.
     const urgentCount = Math.min(2, counts.reels);
 
@@ -745,6 +988,7 @@ function buildClientBlueprintTasks(client) {
         clientSortKey: String(client._id || "preview-client"),
         cycleIndex: cycle.index,
         cycleEnd: createUTCDate(cycle.end),
+        nominalCycleStart,
         contentType: "reel",
         type: "reel",
         title: `Reel #${i}`,
@@ -756,7 +1000,7 @@ function buildClientBlueprintTasks(client) {
         stages: pipeline.map((p, idx) => ({
           ...p,
           assignedUser: getTeamForType(team, "reel")[p.role] || null,
-          earliestStartDate: idx === 0 ? createUTCDate(cycle.start) : null,
+          earliestStartDate: idx === 0 ? firstStageEarliest : null,
         })),
       });
     }
@@ -768,6 +1012,7 @@ function buildClientBlueprintTasks(client) {
         clientSortKey: String(client._id || "preview-client"),
         cycleIndex: cycle.index,
         cycleEnd: createUTCDate(cycle.end),
+        nominalCycleStart,
         contentType: "static_post",
         type: "post",
         title: `Post #${i}`,
@@ -779,7 +1024,7 @@ function buildClientBlueprintTasks(client) {
         stages: pipeline.map((p, idx) => ({
           ...p,
           assignedUser: getTeamForType(team, "static_post")[p.role] || null,
-          earliestStartDate: idx === 0 ? createUTCDate(cycle.start) : null,
+          earliestStartDate: idx === 0 ? firstStageEarliest : null,
         })),
       });
     }
@@ -791,6 +1036,7 @@ function buildClientBlueprintTasks(client) {
         clientSortKey: String(client._id || "preview-client"),
         cycleIndex: cycle.index,
         cycleEnd: createUTCDate(cycle.end),
+        nominalCycleStart,
         contentType: "carousel",
         type: "carousel",
         title: `Carousel #${i}`,
@@ -802,7 +1048,7 @@ function buildClientBlueprintTasks(client) {
         stages: pipeline.map((p, idx) => ({
           ...p,
           assignedUser: getTeamForType(team, "carousel")[p.role] || null,
-          earliestStartDate: idx === 0 ? createUTCDate(cycle.start) : null,
+          earliestStartDate: idx === 0 ? firstStageEarliest : null,
         })),
       });
     }
@@ -845,7 +1091,7 @@ async function generateGlobalCalendarDraft({
 
   const blueprintByCycle = buildClientBlueprintTasks(pseudoClient);
   const overloadCycles = [];
-  const allTasks = [];
+  const allCycleDocs = [];
   const cycleRanges = [];
   const schedule = {};
 
@@ -870,8 +1116,8 @@ async function generateGlobalCalendarDraft({
     const result = await scheduleCycleWithFallback(tasks, { index: cycleIndex, start: cycleStart, end: cycleEnd });
     if (result.overloadMode) overloadCycles.push(cycleIndex);
 
-    const cycleDocs = result.tasks.map(toContentItemDoc);
-    allTasks.push(...result.tasks);
+    const cycleDocs = rebalanceAndEnforcePreservingTaskOrder(result.tasks);
+    allCycleDocs.push(...cycleDocs);
     const maxPosting =
       cycleDocs.length > 0
         ? cycleDocs.reduce(
@@ -885,7 +1131,8 @@ async function generateGlobalCalendarDraft({
     schedule[`M${cycleIndex}`] = {
       monthIndex: cycleIndex - 1,
       start: createUTCDate(cycleStart),
-      end: createUTCDate(maxPosting || cycleEnd),
+      end: createUTCDate(cycleEnd),
+      actualPostingEnd: createUTCDate(maxPosting || cycleEnd),
       nominalEnd: createUTCDate(cycleEnd),
       overflowed: false,
       items: cycleDocs.map((row) => ({
@@ -907,14 +1154,14 @@ async function generateGlobalCalendarDraft({
     cycleRanges.push({
       monthIndex: cycleIndex - 1,
       start: createUTCDate(cycleStart),
-      end: createUTCDate(maxPosting || cycleEnd),
+      end: createUTCDate(cycleEnd),
+      actualPostingEnd: createUTCDate(maxPosting || cycleEnd),
       nominalEnd: createUTCDate(cycleEnd),
       overflowed: false,
     });
   }
 
-  const items = allTasks
-    .map(toContentItemDoc)
+  const items = allCycleDocs
     .sort((a, b) => createUTCDate(a.clientPostingDate).getTime() - createUTCDate(b.clientPostingDate).getTime())
     .map((row) => ({
       contentId: row.title,

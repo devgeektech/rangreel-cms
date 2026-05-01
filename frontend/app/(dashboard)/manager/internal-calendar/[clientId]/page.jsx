@@ -165,7 +165,13 @@ export default function ManagerInternalCalendarPage() {
                 name: s?.name || s?.stageName || "",
                 role: s?.role || "",
                 assignedUser: s?.assignedUser || null,
-                date: toYmdUtc(s?.date || s?.dueDate || row?.postingDate),
+                date: toYmdUtc(
+                  s?.date ||
+                    s?.dueDate ||
+                    (String(s?.name || s?.stageName || "").trim() === "Post"
+                      ? row?.postingDate
+                      : "")
+                ),
                 status: s?.status || "assigned",
               }))
             : [
