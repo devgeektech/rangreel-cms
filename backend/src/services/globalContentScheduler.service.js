@@ -408,6 +408,36 @@ function rebalancePostOnlyForCycleDocs(cycleDocs, cycleStart) {
       }
     }
 
+    // Sort Post dates per type so #1 <= #2 <= #3 by posting date.
+    // Uses only dates already chosen by placement above. Respects each item's
+    // upstream floor (Post > latest non-Post dueDate), so we never violate
+    // the Post-after-Approval invariant.
+    const picked = list
+      .map((doc) => createUTCDate(doc?.clientPostingDate))
+      .filter(Boolean)
+      .sort((a, b) => a.getTime() - b.getTime());
+
+    const pool = [...picked];
+    for (const doc of list) {
+      const floor = minPostingDateAfterUpstream(doc);
+      let chosenIdx = -1;
+      for (let i = 0; i < pool.length; i += 1) {
+        if (!floor || pool[i].getTime() >= floor.getTime()) {
+          chosenIdx = i;
+          break;
+        }
+      }
+      if (chosenIdx === -1) {
+        const orig = createUTCDate(doc.clientPostingDate);
+        if (orig) {
+          const pi = pool.findIndex((d) => d.getTime() === orig.getTime());
+          if (pi >= 0) pool.splice(pi, 1);
+        }
+        continue;
+      }
+      const [chosenDate] = pool.splice(chosenIdx, 1);
+      applyPostDateOnly(doc, chosenDate);
+    }
   }
 }
 
