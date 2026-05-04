@@ -28,6 +28,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ReelDetailDialog } from "@/components/reel/ReelDetailDialog";
+import {
+  buildSocialHandlesPayload,
+  coerceSocialHandlePair,
+  formatHandleUsername,
+  hasHandlePassword,
+  SOCIAL_HANDLE_FORM_ROWS,
+  SOCIAL_HANDLE_PASSWORD_PLACEHOLDER,
+  SOCIAL_HANDLE_USERNAME_PLACEHOLDERS,
+} from "@/lib/socialHandles";
 
 const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -205,17 +214,9 @@ function makeEditClientForm(client) {
     industry: client?.industry || "",
     businessType: client?.businessType || "",
     socialCredentialsNotes: client?.socialCredentialsNotes || "",
-    socialHandles: {
-      instagram: handles.instagram || "",
-      facebook: handles.facebook || "",
-      youtube: handles.youtube || "",
-      googleBusiness: handles.googleBusiness || "",
-      twitter: handles.twitter || "",
-      linkedin: handles.linkedin || "",
-      tiktok: handles.tiktok || "",
-      pinterest: handles.pinterest || "",
-      other: handles.other || "",
-    },
+    socialHandles: Object.fromEntries(
+      SOCIAL_HANDLE_FORM_ROWS.map(({ key }) => [key, coerceSocialHandlePair(handles[key])])
+    ),
     clientBrief: {
       usp: brief.usp || "",
       brandTone: brief.brandTone || "",
@@ -512,7 +513,7 @@ export default function ManagerClientDetailPage() {
         industry: clean(editClientForm.industry),
         businessType: clean(editClientForm.businessType),
         socialCredentialsNotes: clean(editClientForm.socialCredentialsNotes),
-        socialHandles: { ...editClientForm.socialHandles },
+        socialHandles: buildSocialHandlesPayload(editClientForm.socialHandles),
         clientBrief: {
           usp: clean(editClientForm.clientBrief.usp),
           brandTone: cleanEnum(editClientForm.clientBrief.brandTone, allowedBrandTone),
@@ -627,15 +628,42 @@ export default function ManagerClientDetailPage() {
                 <div>
                   <p className="text-xs font-medium text-muted-foreground">Social handles</p>
                   <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-2">
-                    <span>Instagram: {client.socialHandles?.instagram || "-"}</span>
-                    <span>Facebook: {client.socialHandles?.facebook || "-"}</span>
-                    <span>YouTube: {client.socialHandles?.youtube || "-"}</span>
-                    <span>Google Business: {client.socialHandles?.googleBusiness || "-"}</span>
-                    <span>X / Twitter: {client.socialHandles?.twitter || "-"}</span>
-                    <span>LinkedIn: {client.socialHandles?.linkedin || "-"}</span>
-                    <span>TikTok: {client.socialHandles?.tiktok || "-"}</span>
-                    <span>Pinterest: {client.socialHandles?.pinterest || "-"}</span>
-                    <span className="sm:col-span-2">Other: {client.socialHandles?.other || "-"}</span>
+                    <span>
+                      Instagram: {formatHandleUsername(client.socialHandles?.instagram)}
+                      {hasHandlePassword(client.socialHandles?.instagram) ? " · password on file" : ""}
+                    </span>
+                    <span>
+                      Facebook: {formatHandleUsername(client.socialHandles?.facebook)}
+                      {hasHandlePassword(client.socialHandles?.facebook) ? " · password on file" : ""}
+                    </span>
+                    <span>
+                      YouTube: {formatHandleUsername(client.socialHandles?.youtube)}
+                      {hasHandlePassword(client.socialHandles?.youtube) ? " · password on file" : ""}
+                    </span>
+                    <span>
+                      Google Business: {formatHandleUsername(client.socialHandles?.googleBusiness)}
+                      {hasHandlePassword(client.socialHandles?.googleBusiness) ? " · password on file" : ""}
+                    </span>
+                    <span>
+                      X / Twitter: {formatHandleUsername(client.socialHandles?.twitter)}
+                      {hasHandlePassword(client.socialHandles?.twitter) ? " · password on file" : ""}
+                    </span>
+                    <span>
+                      LinkedIn: {formatHandleUsername(client.socialHandles?.linkedin)}
+                      {hasHandlePassword(client.socialHandles?.linkedin) ? " · password on file" : ""}
+                    </span>
+                    <span>
+                      TikTok: {formatHandleUsername(client.socialHandles?.tiktok)}
+                      {hasHandlePassword(client.socialHandles?.tiktok) ? " · password on file" : ""}
+                    </span>
+                    <span>
+                      Pinterest: {formatHandleUsername(client.socialHandles?.pinterest)}
+                      {hasHandlePassword(client.socialHandles?.pinterest) ? " · password on file" : ""}
+                    </span>
+                    <span className="sm:col-span-2">
+                      Other: {formatHandleUsername(client.socialHandles?.other)}
+                      {hasHandlePassword(client.socialHandles?.other) ? " · password on file" : ""}
+                    </span>
                   </div>
                 </div>
 
@@ -1314,13 +1342,56 @@ export default function ManagerClientDetailPage() {
                     <textarea className="min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2" value={toTextAreaValue(editClientForm.socialCredentialsNotes)} onChange={(e) => setEditClientForm((p) => ({ ...p, socialCredentialsNotes: e.target.value }))} />
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {Object.entries(editClientForm.socialHandles).map(([k, v]) => (
-                      <div key={k} className="space-y-1.5">
-                        <Label>{k.replace(/([A-Z])/g, " $1").replace(/^./, (ch) => ch.toUpperCase())}</Label>
-                        <Input value={v} onChange={(e) => setEditClientForm((p) => ({ ...p, socialHandles: { ...p.socialHandles, [k]: e.target.value } }))} />
-                      </div>
-                    ))}
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {SOCIAL_HANDLE_FORM_ROWS.map(({ key, label }) => {
+                      const pair = editClientForm.socialHandles[key] || { username: "", password: "" };
+                      return (
+                        <div key={key} className="space-y-2 rounded-md border border-border/60 bg-muted/10 p-3">
+                          <p className="text-xs font-semibold text-foreground">{label}</p>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">Username or handle</Label>
+                            <Input
+                              value={pair.username}
+                              onChange={(e) =>
+                                setEditClientForm((p) => {
+                                  const cur = coerceSocialHandlePair(p.socialHandles[key]);
+                                  return {
+                                    ...p,
+                                    socialHandles: {
+                                      ...p.socialHandles,
+                                      [key]: { ...cur, username: e.target.value },
+                                    },
+                                  };
+                                })
+                              }
+                              autoComplete="off"
+                              placeholder={SOCIAL_HANDLE_USERNAME_PLACEHOLDERS[key] || ""}
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <Label className="text-xs">Password</Label>
+                            <Input
+                              type="password"
+                              value={pair.password}
+                              onChange={(e) =>
+                                setEditClientForm((p) => {
+                                  const cur = coerceSocialHandlePair(p.socialHandles[key]);
+                                  return {
+                                    ...p,
+                                    socialHandles: {
+                                      ...p.socialHandles,
+                                      [key]: { ...cur, password: e.target.value },
+                                    },
+                                  };
+                                })
+                              }
+                              autoComplete="new-password"
+                              placeholder={SOCIAL_HANDLE_PASSWORD_PLACEHOLDER}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
 
                   <div className="grid gap-3 sm:grid-cols-2">

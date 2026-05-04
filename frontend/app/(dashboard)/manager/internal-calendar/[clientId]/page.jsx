@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import EmptyState from "@/components/shared/EmptyState";
 import ContentCalendarDnd from "@/components/calendar/ContentCalendarDnd";
+import { contentTaskDisplayLabel } from "@/lib/contentDisplayLabel";
 
 const DEFAULT_ROLE_CAPACITY = 5;
 
@@ -489,7 +490,12 @@ export default function ManagerInternalCalendarPage() {
           {(draft?.items || []).map((item) => (
             <div key={String(item.contentId)} className="flex items-center justify-between rounded border p-2">
               <span className="font-medium capitalize">
-                {item.displayId || item.title || item.type}
+                {contentTaskDisplayLabel({
+                  strategistAlias: item.strategistAlias,
+                  displayId: item.displayId,
+                  title: item.title,
+                  fallbackLabel: String(item.type || "Item"),
+                })}
               </span>
               <span className="text-muted-foreground">{prettyDate(item.postingDate)}</span>
             </div>

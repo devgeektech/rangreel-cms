@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { contentTaskDisplayLabel } from "@/lib/contentDisplayLabel";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import { applyCustomizationDrag, applyManagerEditDrag } from "@/lib/calendarDraftUtils";
@@ -159,7 +160,12 @@ function buildStageEntries(draft, editableStages) {
     const ct = normalizeCalendarContentType(item.type);
     counters[ct] = (counters[ct] || 0) + 1;
     const numberedLabel = `${(CONTENT_TYPE_META[ct] || CONTENT_TYPE_META.static_post).label} ${counters[ct]}`;
-    const contentLabel = String(item.displayId || numberedLabel);
+    const contentLabel = contentTaskDisplayLabel({
+      strategistAlias: item.strategistAlias,
+      displayId: item.displayId,
+      title: item.title,
+      fallbackLabel: numberedLabel,
+    });
     for (const stage of item?.stages || []) {
       if (!stage?.date) continue;
       const ymd = String(stage.date).slice(0, 10);

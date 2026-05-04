@@ -213,6 +213,7 @@ const getSharedContentDetails = async (req, res) => {
       data: {
         _id: item._id,
         title: item.title,
+        strategistAlias: String(item.strategistAlias || "").trim(),
         displayId: resolveDisplayIdForRead(item),
         taskNumber: item.taskNumber || null,
         taskType: item.taskType || "",

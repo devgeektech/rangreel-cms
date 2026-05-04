@@ -5,12 +5,13 @@ const Client = require("../models/Client");
 const Package = require("../models/Package");
 const { uploadsRoot, BRIEF_UPLOAD_FIELDS } = require("../multer/clientBriefUpload");
 const { generateGlobalCalendarForClients } = require("../services/globalContentScheduler.service");
-const { persistCalendarDraft } = require("../services/calendarDraftPersistence.service");
+const { persistCalendarDraft } = require("../services/calendarDraftPersistence.service.workspace");
 const { notifyUsers } = require("../services/workflowNotification.service");
 const ContentItem = require("../models/ContentItem");
 const ClientScheduleDraft = require("../models/ClientScheduleDraft");
 const { createInitialScheduleForClient } = require("../services/clientScheduleMonths.service");
 const { calculatePackageLimits } = require("../utils/packageCapacity.util");
+const { normalizeSocialHandlesInput } = require("../utils/socialHandles.util");
 
 const normalizeMonthTarget = (targetMonth) => {
   if (!targetMonth) return null;
@@ -387,7 +388,7 @@ const createClient = async (req, res) => {
       website: website ?? "",
       industry,
       businessType,
-      socialHandles: socialHandles || {},
+      socialHandles: normalizeSocialHandlesInput(socialHandles || {}),
       socialCredentialsNotes: socialCredentialsNotes ?? "",
       clientBrief:
         clientBrief && typeof clientBrief === "object"
@@ -630,10 +631,16 @@ const updateClient = async (req, res) => {
     ];
 
     allowedFields.forEach((field) => {
+      if (field === "socialHandles") return;
       if (Object.prototype.hasOwnProperty.call(rest, field)) {
         client[field] = rest[field];
       }
     });
+
+    if (Object.prototype.hasOwnProperty.call(rest, "socialHandles")) {
+      client.socialHandles = normalizeSocialHandlesInput(rest.socialHandles);
+      client.markModified("socialHandles");
+    }
 
     if (rest.clientBrief && typeof rest.clientBrief === "object") {
       const cleaned = stripNonPatchableBriefKeys(rest.clientBrief);

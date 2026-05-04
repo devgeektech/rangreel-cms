@@ -6,6 +6,7 @@ import dayGridPlugin from "@fullcalendar/daygrid";
 import interactionPlugin from "@fullcalendar/interaction";
 import { CalendarDays } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { contentTaskDisplayLabel } from "@/lib/contentDisplayLabel";
 
 function toYmd(d) {
   if (!d) return null;
@@ -56,7 +57,12 @@ export function StrategistPlanCalendar({
           new Date(entry.stage.dueDate).getTime() < Date.now() - 86400000;
         return {
           id: String(entry.stage._id),
-          title: entry.displayId || entry.title || "Plan",
+          title: contentTaskDisplayLabel({
+            strategistAlias: entry.strategistAlias,
+            displayId: entry.displayId,
+            title: entry.title,
+            fallbackLabel: "Plan",
+          }),
           start: ymd,
           allDay: true,
           extendedProps: { entry, overdue, contentType: entry.contentType },

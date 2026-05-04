@@ -43,9 +43,31 @@ function getScheduledAnchorDate(item) {
   );
 }
 
-function buildDisplayIdString({ month, cleanBrand, taskType, taskNumber }) {
+/** Maps cycle index (1–3) to an id segment; empty string if out of range (legacy / omit segment). */
+function cycleLabelFromIndex(cycleIndex) {
+  const n = Number(cycleIndex);
+  if (n === 1) return "First";
+  if (n === 2) return "Second";
+  if (n === 3) return "Third";
+  return "";
+}
+
+/**
+ * @param {{ month: string, cleanBrand: string, taskType: string, taskNumber: number, cycleLabelText?: string }} args
+ * With cycleLabelText: May-nikebrand-First-Reel001. Without: May-nikebrand-Reel001 (legacy).
+ */
+function buildDisplayIdString({ month, cleanBrand, taskType, taskNumber, cycleLabelText = "" }) {
   const formattedNumber = String(Number(taskNumber) || 0).padStart(3, "0");
+  const label = String(cycleLabelText || "").trim();
+  if (label) {
+    return `${month}-${cleanBrand}-${label}-${taskType}${formattedNumber}`;
+  }
   return `${month}-${cleanBrand}-${taskType}${formattedNumber}`;
+}
+
+function shouldUseCycleSegment(cycleIndex) {
+  const n = Number(cycleIndex);
+  return Number.isFinite(n) && n >= 1 && n <= 3;
 }
 
 async function resolveBrandNameForClient(clientId) {
@@ -54,22 +76,34 @@ async function resolveBrandNameForClient(clientId) {
   return client?.brandName || client?.clientName || "";
 }
 
-async function getNextTaskNumber(clientId, taskType) {
+/**
+ * Next task number within { client, taskType, cycleIndex } (per-cycle).
+ * If cycleIndex is omitted or invalid, falls back to legacy global counter for that client+taskType.
+ */
+async function getNextTaskNumber(clientId, taskType, cycleIndex) {
   const ContentItem = require("../models/ContentItem");
-  const latest = await ContentItem.findOne({ client: clientId, taskType })
-    .select("taskNumber")
-    .sort({ taskNumber: -1 })
-    .lean();
+  const query = { client: clientId, taskType };
+  if (shouldUseCycleSegment(cycleIndex)) {
+    query.cycleIndex = Number(cycleIndex);
+  }
+  const latest = await ContentItem.findOne(query).select("taskNumber").sort({ taskNumber: -1 }).lean();
   const prev = Number(latest?.taskNumber) || 0;
   return prev + 1;
 }
 
 async function assignDisplayIdFields(item) {
   const taskType = getTaskTypeFromContentType(item?.contentType || item?.type);
-  const nextNumber = await getNextTaskNumber(item?.client, taskType);
+  const cycleIdx = item?.cycleIndex;
+  const useCycle = shouldUseCycleSegment(cycleIdx);
+  const nextNumber = await getNextTaskNumber(
+    item?.client,
+    taskType,
+    useCycle ? Number(cycleIdx) : undefined
+  );
   const brandName = await resolveBrandNameForClient(item?.client);
   const cleanBrand = cleanBrandName(brandName) || "Brand";
   const month = formatMonthAbbrUTC(getScheduledAnchorDate(item));
+  const cycleLabelText = useCycle ? cycleLabelFromIndex(cycleIdx) : "";
   return {
     taskType,
     taskNumber: nextNumber,
@@ -78,8 +112,17 @@ async function assignDisplayIdFields(item) {
       cleanBrand,
       taskType,
       taskNumber: nextNumber,
+      cycleLabelText,
     }),
   };
+}
+
+function sortRowsForStableNumbering(list) {
+  return [...list].sort((a, b) => {
+    const ta = String(a?.row?.title || "");
+    const tb = String(b?.row?.title || "");
+    return ta.localeCompare(tb, undefined, { numeric: true });
+  });
 }
 
 async function assignDisplayIdFieldsMany(docs) {
@@ -98,22 +141,33 @@ async function assignDisplayIdFieldsMany(docs) {
   const grouped = new Map();
   for (const row of rows) {
     const taskType = getTaskTypeFromContentType(row?.contentType || row?.type);
-    const key = `${String(row?.client || "")}::${taskType}`;
+    const cyc = row?.cycleIndex;
+    const cycleKey = shouldUseCycleSegment(cyc) ? String(Number(cyc)) : "legacy";
+    const key = `${String(row?.client || "")}::${taskType}::${cycleKey}`;
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push({ row, taskType });
   }
 
-  for (const [key, list] of grouped.entries()) {
-    const [clientId, taskType] = key.split("::");
-    const latest = await ContentItem.findOne({ client: clientId, taskType })
-      .select("taskNumber")
-      .sort({ taskNumber: -1 })
-      .lean();
+  for (const [key, listRaw] of grouped.entries()) {
+    const parts = key.split("::");
+    const clientId = parts[0];
+    const taskType = parts[1];
+    const cycleKey = parts[2];
+    const list = sortRowsForStableNumbering(listRaw);
+
+    const query = { client: clientId, taskType };
+    if (cycleKey !== "legacy") {
+      query.cycleIndex = Number(cycleKey);
+    }
+
+    const latest = await ContentItem.findOne(query).select("taskNumber").sort({ taskNumber: -1 }).lean();
     let seq = Number(latest?.taskNumber) || 0;
     const cleanBrand = brandByClient.get(clientId) || "Brand";
     for (const { row } of list) {
       seq += 1;
       const month = formatMonthAbbrUTC(getScheduledAnchorDate(row));
+      const useCycle = cycleKey !== "legacy";
+      const cycleLabelText = useCycle ? cycleLabelFromIndex(row?.cycleIndex) : "";
       row.taskType = taskType;
       row.taskNumber = seq;
       row.displayId = buildDisplayIdString({
@@ -121,7 +175,9 @@ async function assignDisplayIdFieldsMany(docs) {
         cleanBrand,
         taskType,
         taskNumber: seq,
+        cycleLabelText,
       });
+      row.title = `${taskType} #${seq}`;
     }
   }
 }
@@ -134,11 +190,15 @@ async function rebuildDisplayIdMonthOnly(doc) {
   const brandName = await resolveBrandNameForClient(doc?.client);
   const cleanBrand = cleanBrandName(brandName) || "Brand";
   const month = formatMonthAbbrUTC(getScheduledAnchorDate(doc));
+  const cycleLabelText = shouldUseCycleSegment(doc?.cycleIndex)
+    ? cycleLabelFromIndex(doc.cycleIndex)
+    : "";
   doc.displayId = buildDisplayIdString({
     month,
     cleanBrand,
     taskType,
     taskNumber,
+    cycleLabelText,
   });
 }
 
@@ -158,11 +218,15 @@ function resolveDisplayIdForRead(item) {
     item?.client?.brandName || item?.client?.clientName || item?.brandName || item?.clientBrandName || ""
   );
   const month = formatMonthAbbrUTC(getScheduledAnchorDate(item));
+  const cycleLabelText = shouldUseCycleSegment(item?.cycleIndex)
+    ? cycleLabelFromIndex(item.cycleIndex)
+    : "";
   return buildDisplayIdString({
     month,
     cleanBrand: cleanBrand || "Brand",
     taskType,
     taskNumber,
+    cycleLabelText,
   });
 }
 
@@ -172,6 +236,7 @@ module.exports = {
   formatMonthAbbrUTC,
   getPlanStageDueDate,
   getScheduledAnchorDate,
+  cycleLabelFromIndex,
   buildDisplayIdString,
   getNextTaskNumber,
   resolveBrandNameForClient,

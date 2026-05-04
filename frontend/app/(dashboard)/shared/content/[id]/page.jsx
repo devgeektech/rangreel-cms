@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
+import { contentTaskDisplayLabel } from "@/lib/contentDisplayLabel";
 import { useAuthStore } from "@/lib/store";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -192,7 +193,13 @@ export default function SharedContentPage({ params }) {
     <div className="p-6">
       <Card className="mx-auto w-full max-w-3xl">
         <CardHeader className="space-y-2">
-          <CardTitle className="text-xl">{data.displayId || data.title}</CardTitle>
+          <CardTitle className="text-xl">
+            {contentTaskDisplayLabel({
+              strategistAlias: data.strategistAlias,
+              displayId: data.displayId,
+              title: data.title,
+            })}
+          </CardTitle>
           <p className="text-xs text-muted-foreground">
             {data.displayId ? `Task ID: ${data.displayId}` : ""}
             {data.displayId && data.title ? " • " : ""}

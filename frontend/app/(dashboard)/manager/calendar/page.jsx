@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { contentTaskDisplayLabel } from "@/lib/contentDisplayLabel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -108,7 +109,11 @@ function contentTypeLabel(raw) {
 }
 
 function getTaskDisplayName(task) {
-  return String(task?.displayId || task?.title || "Task");
+  return contentTaskDisplayLabel({
+    strategistAlias: task?.strategistAlias,
+    displayId: task?.displayId,
+    title: task?.title,
+  });
 }
 
 function contentTypeChipClassName(raw) {

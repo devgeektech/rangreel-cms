@@ -431,6 +431,11 @@ export const api = {
 
   // Content detail (Prompt 25)
   getContent: (id) => requestJson(`/content/${encodeURIComponent(id)}`, { method: "GET" }),
+  patchContentStrategistAlias: (id, body) =>
+    requestJson(`/content/${encodeURIComponent(id)}/strategist-alias`, {
+      method: "PATCH",
+      body,
+    }),
   getSharedContent: (id) =>
     requestJson(`/content/share/${encodeURIComponent(id)}`, { method: "GET" }),
   moveContentStage: (itemId, stageId, body) =>

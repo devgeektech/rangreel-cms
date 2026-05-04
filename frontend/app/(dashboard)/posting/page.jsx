@@ -26,6 +26,7 @@ import {
 } from "@/lib/roleDashboardTasks";
 import { ReelDetailDialog } from "@/components/reel/ReelDetailDialog";
 import { cn } from "@/lib/utils";
+import { contentTaskDisplayLabel } from "@/lib/contentDisplayLabel";
 
 const navItems = [
   { href: "/posting", label: "Dashboard", icon: LayoutDashboard },
@@ -55,7 +56,11 @@ function contentTypeLabel(ct) {
 }
 
 function taskLabel(task) {
-  return String(task?.displayId || task?.title || "Task");
+  return contentTaskDisplayLabel({
+    strategistAlias: task?.strategistAlias,
+    displayId: task?.displayId,
+    title: task?.title,
+  });
 }
 
 export default function PostingDashboardPage() {
@@ -103,6 +108,7 @@ export default function PostingDashboardPage() {
           entries.push({
             itemId: t.contentItemId,
             title: t.title,
+            strategistAlias: t.strategistAlias || "",
             displayId: t.displayId || "",
             contentType: t.contentType,
             clientBrand: t.clientBrandName,
@@ -300,7 +306,8 @@ export default function PostingDashboardPage() {
               />
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                {visiblePostStages.map(({ itemId, title, displayId, clientBrand, contentType, stage }) => {
+                {visiblePostStages.map(
+                  ({ itemId, title, strategistAlias, displayId, clientBrand, contentType, stage }) => {
                   const stageId = stage._id;
                   const posted = isWorkflowStageCompleted(stage, "posting");
                   const status = String(stage.status || "").toLowerCase();
@@ -327,7 +334,7 @@ export default function PostingDashboardPage() {
                             posted && "line-through text-muted-foreground"
                           )}
                         >
-                          {taskLabel({ displayId, title })}
+                          {taskLabel({ strategistAlias, displayId, title })}
                         </h3>
                         <p className="line-clamp-1 text-xs text-muted-foreground sm:text-sm">
                           {clientBrand || "—"}

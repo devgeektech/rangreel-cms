@@ -117,7 +117,9 @@ const getMyTasks = async (req, res) => {
       },
     })
       .populate("client", "brandName clientName")
-      .select("title displayId taskType taskNumber contentType plan clientPostingDate overallStatus workflowStages client")
+      .select(
+        "title displayId strategistAlias taskType taskNumber contentType plan clientPostingDate overallStatus workflowStages client"
+      )
       .lean();
 
     const tasks = items
@@ -149,6 +151,7 @@ const getMyTasks = async (req, res) => {
       return {
         contentItemId: item._id,
         title: item.title,
+        strategistAlias: String(item.strategistAlias || "").trim(),
         displayId: resolveDisplayIdForRead(item),
         taskType: item.taskType || "",
         taskNumber: item.taskNumber || null,
@@ -413,7 +416,9 @@ const getTeamClient = async (req, res) => {
     }
 
     const items = await ContentItem.find({ client: id })
-      .select("title displayId taskType taskNumber type contentType clientPostingDate workflowStages")
+      .select(
+        "title displayId strategistAlias taskType taskNumber type contentType clientPostingDate workflowStages"
+      )
       .sort({ clientPostingDate: 1 })
       .lean();
 
@@ -422,6 +427,7 @@ const getTeamClient = async (req, res) => {
       contentItems: (items || []).map((item) => ({
         _id: item._id,
         title: item.title,
+        strategistAlias: String(item.strategistAlias || "").trim(),
         displayId: resolveDisplayIdForRead(item),
         taskType: item.taskType || "",
         taskNumber: item.taskNumber || null,

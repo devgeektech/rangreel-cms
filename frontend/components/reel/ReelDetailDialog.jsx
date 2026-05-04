@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { api, getBaseUrl } from "@/lib/api";
+import { contentTaskDisplayLabel } from "@/lib/contentDisplayLabel";
+import { coerceSocialHandlePair } from "@/lib/socialHandles";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 
 function CollapsibleSection({ title, defaultOpen = false, className, children, headerExtra }) {
@@ -138,6 +141,8 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
   const [mutating, setMutating] = useState(false);
+  const [aliasInput, setAliasInput] = useState("");
+  const [aliasSaving, setAliasSaving] = useState(false);
   const [editorVideoUrl, setEditorVideoUrl] = useState("");
   const [editorVideoFile, setEditorVideoFile] = useState(null);
   const [shootFootageLink, setShootFootageLink] = useState("");
@@ -184,6 +189,11 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
     setEditorVideoUrl(String(data?.videoUrl || ""));
     setEditorVideoFile(null);
   }, [open, data?.videoUrl]);
+
+  useEffect(() => {
+    if (!open || loading) return;
+    setAliasInput(String(data?.strategistAlias ?? ""));
+  }, [open, loading, contentId, data?.strategistAlias]);
 
   const stages = useMemo(() => {
     return Array.isArray(data?.stages) ? data.stages : [];
@@ -235,10 +245,15 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
   const socialHandleSummary = useMemo(() => {
     const handles = clientDetails?.socialHandles || {};
     return Object.entries(handles)
-      .map(([key, value]) => ({
-        label: key.replace(/([A-Z])/g, " $1").replace(/^./, (ch) => ch.toUpperCase()),
-        value: String(value || "").trim(),
-      }))
+      .map(([key, value]) => {
+        const pair = coerceSocialHandlePair(value);
+        const label = key.replace(/([A-Z])/g, " $1").replace(/^./, (ch) => ch.toUpperCase());
+        const u = pair.username.trim();
+        const hasPw = Boolean(pair.password.trim());
+        let text = u;
+        if (hasPw) text = u ? `${u} · password on file` : "Password on file";
+        return { label, value: text };
+      })
       .filter((x) => x.value);
   }, [clientDetails]);
   const briefFilesSummary = useMemo(() => {
@@ -301,12 +316,37 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
   }, [open, contentId]);
 
   const showPostingActions = String(viewerRole || "").toLowerCase() === "postingexecutive";
+  const showStrategistAliasEditor =
+    String(viewerRole || "")
+      .toLowerCase()
+      .replace(/[^a-z]/g, "") === "strategist";
   const postStage = useMemo(() => {
     return stages.find((s) => String(s?.stageName || "").toLowerCase() === "post") || null;
   }, [stages]);
   const designerSubmittedVideoUrl = String(
     designStage?.videoUrl || designStage?.designFileLink || data?.designFileLink || ""
   ).trim();
+
+  const handleSaveStrategistAlias = async () => {
+    const id = String(data?._id || contentId || "").trim();
+    if (!id) return;
+    setAliasSaving(true);
+    try {
+      const res = await api.patchContentStrategistAlias(id, {
+        strategistAlias: aliasInput.trim(),
+      });
+      const nextAlias = String(res?.data?.strategistAlias ?? aliasInput.trim());
+      setData((prev) => (prev ? { ...prev, strategistAlias: nextAlias } : prev));
+      setAliasInput(nextAlias);
+      toast.success("Display name saved");
+      onDidMutate?.();
+      broadcastTasksUpdated();
+    } catch (err) {
+      toast.error(err.message || "Failed to save display name");
+    } finally {
+      setAliasSaving(false);
+    }
+  };
 
   const handleCopyShareLink = async () => {
     const targetId = String(data?._id || contentId || "").trim();
@@ -363,7 +403,11 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
               <CardHeader className="pb-2">
                 <div className="flex items-center justify-between gap-2">
                   <CardTitle className="text-base">
-                    {data.displayId || data.title}
+                    {contentTaskDisplayLabel({
+                      strategistAlias: data.strategistAlias,
+                      displayId: data.displayId,
+                      title: data.title,
+                    })}
                   </CardTitle>
                   <Button type="button" variant="outline" size="sm" onClick={handleCopyShareLink}>
                     Copy Share Link
@@ -376,6 +420,39 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                   {data.displayId && data.title ? " • " : ""}
                   {data.title ? `Title: ${data.title}` : ""}
                 </p>
+                {showStrategistAliasEditor ? (
+                  <div className="space-y-2 rounded-md border border-border/70 bg-muted/15 p-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="rr-strategist-alias" className="text-xs">
+                        Display name (all roles & calendars)
+                      </Label>
+                      <p className="text-[11px] text-muted-foreground">
+                        Optional. When set, this name is shown instead of the task ID on dashboards and calendars.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <Input
+                        id="rr-strategist-alias"
+                        value={aliasInput}
+                        onChange={(e) => setAliasInput(e.target.value)}
+                        maxLength={200}
+                        placeholder="e.g. May product launch reel"
+                        className="sm:min-w-0 sm:flex-1"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={
+                          aliasSaving ||
+                          String(aliasInput).trim() === String(data?.strategistAlias ?? "").trim()
+                        }
+                        onClick={() => void handleSaveStrategistAlias()}
+                      >
+                        {aliasSaving ? "Saving…" : "Save"}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap items-center gap-2">
                   {String(data?.planType || "").toLowerCase() === "urgent" ? (
                     <Badge className="bg-red-600 text-white">Urgent Plan</Badge>

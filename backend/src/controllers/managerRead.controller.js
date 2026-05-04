@@ -310,7 +310,9 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
 
     const contentItems = allContentIds.length
       ? await ContentItem.find({ _id: { $in: allContentIds } })
-          .select("client contentType type planType plan title displayId taskType taskNumber clientPostingDate workflowStages.stageName workflowStages._id isCustomCalendar weekendEnabled")
+          .select(
+            "client contentType type planType plan title displayId strategistAlias taskType taskNumber clientPostingDate workflowStages.stageName workflowStages._id isCustomCalendar weekendEnabled"
+          )
           .lean()
       : [];
 
@@ -361,6 +363,7 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
             clientId: clientIdStr,
             clientName,
             title: meta.title || "",
+            strategistAlias: String(meta.strategistAlias || "").trim(),
             displayId: resolveDisplayIdForRead(meta),
             taskType: meta.taskType || "",
             taskNumber: meta.taskNumber || null,
@@ -426,6 +429,7 @@ const getManagerGlobalCalendarFinal = async (req, res) => {
           clientId: clientIdStr,
           clientName,
           title: it?.title || "",
+          strategistAlias: String(meta.strategistAlias || "").trim(),
           displayId: resolveDisplayIdForRead(meta),
           taskType: meta.taskType || "",
           taskNumber: meta.taskNumber || null,

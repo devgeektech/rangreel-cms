@@ -32,6 +32,7 @@ import {
   isWorkflowStageOverdue,
 } from "@/lib/roleDashboardTasks";
 import { cn } from "@/lib/utils";
+import { contentTaskDisplayLabel } from "@/lib/contentDisplayLabel";
 
 const navItems = [
   { href: "/strategist", label: "Dashboard", icon: LayoutDashboard },
@@ -63,7 +64,11 @@ function contentTypeLabel(ct) {
 }
 
 function taskLabel(task) {
-  return String(task?.displayId || task?.title || "Task");
+  return contentTaskDisplayLabel({
+    strategistAlias: task?.strategistAlias,
+    displayId: task?.displayId,
+    title: task?.title,
+  });
 }
 
 function emptyDraft() {
@@ -135,6 +140,7 @@ export default function StrategistDashboardPage() {
           entries.push({
             itemId: t.contentItemId,
             title: t.title,
+            strategistAlias: t.strategistAlias || "",
             displayId: t.displayId || "",
             contentType: t.contentType,
             plan: t.plan,
@@ -397,7 +403,17 @@ export default function StrategistDashboardPage() {
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                 {visiblePlanStages.map(
-                  ({ itemId, title, displayId, clientBrand, contentType, clientPostingDate, plan, stage }) => {
+                  ({
+                    itemId,
+                    title,
+                    strategistAlias,
+                    displayId,
+                    clientBrand,
+                    contentType,
+                    clientPostingDate,
+                    plan,
+                    stage,
+                  }) => {
                     const overdue = isWorkflowStageOverdue(stage, todayStartMs);
                     const status = String(stage.status || "").toLowerCase();
                     const completed = isWorkflowStageCompleted(stage, "default");
@@ -433,9 +449,17 @@ export default function StrategistDashboardPage() {
                                 "line-clamp-2 min-w-0 flex-1 text-sm font-semibold leading-snug sm:text-base",
                                 completed && "text-muted-foreground line-through"
                               )}
-                              title={taskLabel({ displayId: displayId || "", title })}
+                              title={taskLabel({
+                                strategistAlias,
+                                displayId: displayId || "",
+                                title,
+                              })}
                             >
-                              {taskLabel({ displayId: displayId || "", title })}
+                              {taskLabel({
+                                strategistAlias,
+                                displayId: displayId || "",
+                                title,
+                              })}
                             </h3>
                             <Badge variant="secondary" className="shrink-0 text-[10px] font-normal sm:text-xs">
                               {contentTypeLabel(contentType)}
@@ -579,6 +603,10 @@ export default function StrategistDashboardPage() {
           if (!v) setSelectedContentId(null);
         }}
         contentId={selectedContentId}
+        viewerRole="strategist"
+        onDidMutate={() => {
+          void reloadTasks();
+        }}
       />
     </DashboardShell>
   );

@@ -22,6 +22,7 @@ import {
   isWorkflowStageCompleted,
   isWorkflowStageOverdue,
 } from "@/lib/roleDashboardTasks";
+import { contentTaskDisplayLabel } from "@/lib/contentDisplayLabel";
 
 const navItems = [
   { href: "/videographer", label: "Dashboard", icon: LayoutDashboard },
@@ -51,7 +52,11 @@ function contentTypeLabel(ct) {
 }
 
 function taskLabel(task) {
-  return String(task?.displayId || task?.title || "Task");
+  return contentTaskDisplayLabel({
+    strategistAlias: task?.strategistAlias,
+    displayId: task?.displayId,
+    title: task?.title,
+  });
 }
 
 function isShootPendingStage(stage) {
@@ -97,6 +102,7 @@ export default function VideographerDashboardPage() {
           entries.push({
             itemId: t.contentItemId,
             title: t.title,
+            strategistAlias: t.strategistAlias || "",
             displayId: t.displayId || "",
             contentType: t.contentType,
             plan: t.plan,
@@ -254,7 +260,8 @@ export default function VideographerDashboardPage() {
                   </Button>
                 </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                {visibleShootStages.map(({ itemId, title, displayId, clientBrand, contentType, stage }) => {
+                {visibleShootStages.map(
+                  ({ itemId, title, strategistAlias, displayId, clientBrand, contentType, stage }) => {
                   const stageId = stage._id;
                   const status = String(stage.status || "").toLowerCase();
                   const overdue = isWorkflowStageOverdue(stage, todayStartMs);
@@ -270,7 +277,7 @@ export default function VideographerDashboardPage() {
                     >
                       <div className="min-w-0 flex-1">
                         <p className={`line-clamp-2 text-sm font-semibold leading-snug ${completed ? "line-through opacity-70" : ""}`}>
-                          {taskLabel({ displayId, title })}
+                          {taskLabel({ strategistAlias, displayId, title })}
                         </p>
                         <button
                           type="button"

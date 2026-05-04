@@ -157,6 +157,13 @@ const contentItemSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    /** Optional display name set by the client's strategist; shown in UI instead of displayId when set. */
+    strategistAlias: {
+      type: String,
+      trim: true,
+      default: "",
+      maxlength: 200,
+    },
   },
   {
     timestamps: true,
@@ -171,6 +178,7 @@ contentItemSchema.pre("save", async function contentItemDisplayIdPreSave() {
       this.taskNumber = nextFields.taskNumber;
       this.taskType = nextFields.taskType;
       this.displayId = nextFields.displayId;
+      this.title = `${nextFields.taskType} #${nextFields.taskNumber}`;
     } else if (!this.isNew && this.isModified("workflowStages")) {
       await refreshDisplayIdMonthIfNeeded(this);
     }

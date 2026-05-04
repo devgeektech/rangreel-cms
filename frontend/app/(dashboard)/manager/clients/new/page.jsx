@@ -37,6 +37,12 @@ import {
   postingInCustomRange,
   prettyDateUtc,
 } from "@/lib/customMonthRange";
+import {
+  buildSocialHandlesPayload,
+  SOCIAL_HANDLE_FORM_ROWS,
+  SOCIAL_HANDLE_PASSWORD_PLACEHOLDER,
+  SOCIAL_HANDLE_USERNAME_PLACEHOLDERS,
+} from "@/lib/socialHandles";
 
 const stepLabels = ["Basic info", "Package & schedule", "Team"];
 
@@ -76,17 +82,6 @@ const WEEKDAY_OPTIONS = [
   "Saturday",
   "Sunday",
 ];
-
-const SOCIAL_HANDLE_PLACEHOLDERS = {
-  "socialHandles.instagram": "@username or instagram.com/…",
-  "socialHandles.facebook": "Page name or facebook.com/…",
-  "socialHandles.youtube": "Channel name or youtube.com/…",
-  "socialHandles.googleBusiness": "Business name or Maps URL",
-  "socialHandles.twitter": "@handle or x.com/…",
-  "socialHandles.linkedin": "Company or profile URL",
-  "socialHandles.pinterest": "@username or pinterest.com/…",
-  "socialHandles.other": "Link or handle",
-};
 
 function buildHalfHourTimeOptions() {
   const out = [];
@@ -174,15 +169,21 @@ const clientBriefShape = z.object({
   bestPostingTime: bestPostingTimeShape.optional().default({ from: "", to: "" }),
 });
 
+const socialHandlePairShape = z.object({
+  username: optionalStr,
+  password: optionalStr,
+});
+
 const socialHandlesShape = z.object({
-  instagram: optionalStr,
-  facebook: optionalStr,
-  youtube: optionalStr,
-  googleBusiness: optionalStr,
-  twitter: optionalStr,
-  linkedin: optionalStr,
-  pinterest: optionalStr,
-  other: optionalStr,
+  instagram: socialHandlePairShape,
+  facebook: socialHandlePairShape,
+  youtube: socialHandlePairShape,
+  googleBusiness: socialHandlePairShape,
+  twitter: socialHandlePairShape,
+  linkedin: socialHandlePairShape,
+  pinterest: socialHandlePairShape,
+  tiktok: socialHandlePairShape,
+  other: socialHandlePairShape,
 });
 
 const optionalTeamStr = z.string().optional().default("");
@@ -436,14 +437,15 @@ const defaultValues = {
   email: "",
   website: "",
   socialHandles: {
-    instagram: "",
-    facebook: "",
-    youtube: "",
-    googleBusiness: "",
-    twitter: "",
-    linkedin: "",
-    pinterest: "",
-    other: "",
+    instagram: { username: "", password: "" },
+    facebook: { username: "", password: "" },
+    youtube: { username: "", password: "" },
+    googleBusiness: { username: "", password: "" },
+    twitter: { username: "", password: "" },
+    linkedin: { username: "", password: "" },
+    pinterest: { username: "", password: "" },
+    tiktok: { username: "", password: "" },
+    other: { username: "", password: "" },
   },
   socialCredentialsNotes: "",
   clientBrief: { ...defaultClientBrief },
@@ -1051,16 +1053,7 @@ export default function NewClientPage() {
         industry: values.industry || "",
         businessType: "",
         socialCredentialsNotes: (values.socialCredentialsNotes || "").trim(),
-        socialHandles: {
-          instagram: (values.socialHandles?.instagram || "").trim(),
-          facebook: (values.socialHandles?.facebook || "").trim(),
-          youtube: (values.socialHandles?.youtube || "").trim(),
-          googleBusiness: (values.socialHandles?.googleBusiness || "").trim(),
-          twitter: (values.socialHandles?.twitter || "").trim(),
-          linkedin: (values.socialHandles?.linkedin || "").trim(),
-          pinterest: (values.socialHandles?.pinterest || "").trim(),
-          other: (values.socialHandles?.other || "").trim(),
-        },
+        socialHandles: buildSocialHandlesPayload(values.socialHandles),
         clientBrief: {
           ...defaultClientBrief,
           ...brief,
@@ -1277,31 +1270,43 @@ export default function NewClientPage() {
                 </div>
 
                 <div className="md:col-span-2 border-t border-border pt-4">
-                  <p className="mb-2 text-xs font-medium text-muted-foreground">Social handles (optional rows)</p>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {[
-                      ["socialHandles.instagram", "Instagram"],
-                      ["socialHandles.facebook", "Facebook"],
-                      ["socialHandles.youtube", "YouTube"],
-                      ["socialHandles.googleBusiness", "Google Business"],
-                      ["socialHandles.twitter", "X / Twitter"],
-                      ["socialHandles.linkedin", "LinkedIn"],
-                      ["socialHandles.pinterest", "Pinterest"],
-                      ["socialHandles.other", "Other"],
-                    ].map(([name, label]) => (
-                      <Field key={name} label={label}>
-                        <Controller
-                          name={name}
-                          control={control}
-                          render={({ field }) => (
-                            <Input
-                              {...field}
-                              onChange={(e) => field.onChange(e.target.value)}
-                              placeholder={SOCIAL_HANDLE_PLACEHOLDERS[name] || ""}
-                            />
-                          )}
-                        />
-                      </Field>
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">
+                    Social handles (optional — username or handle and password per platform)
+                  </p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {SOCIAL_HANDLE_FORM_ROWS.map(({ key, label }) => (
+                      <div key={key} className="space-y-2 rounded-md border border-border/60 bg-muted/10 p-3">
+                        <p className="text-xs font-semibold text-foreground">{label}</p>
+                        <Field label="Username or handle" error={errors.socialHandles?.[key]?.username?.message}>
+                          <Controller
+                            name={`socialHandles.${key}.username`}
+                            control={control}
+                            render={({ field }) => (
+                              <Input
+                                {...field}
+                                onChange={(e) => field.onChange(e.target.value)}
+                                autoComplete="off"
+                                placeholder={SOCIAL_HANDLE_USERNAME_PLACEHOLDERS[key] || ""}
+                              />
+                            )}
+                          />
+                        </Field>
+                        <Field label="Password" error={errors.socialHandles?.[key]?.password?.message}>
+                          <Controller
+                            name={`socialHandles.${key}.password`}
+                            control={control}
+                            render={({ field }) => (
+                              <Input
+                                {...field}
+                                type="password"
+                                onChange={(e) => field.onChange(e.target.value)}
+                                autoComplete="new-password"
+                                placeholder={SOCIAL_HANDLE_PASSWORD_PLACEHOLDER}
+                              />
+                            )}
+                          />
+                        </Field>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -1763,14 +1768,6 @@ export default function NewClientPage() {
                   />
                 </Field>
                 <p className="text-xs text-muted-foreground">Pick the contract or campaign start — scheduling begins from the next working day.</p>
-                <label className="inline-flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={weekendEnabled}
-                    onChange={(e) => setWeekendEnabled(e.target.checked)}
-                  />
-                  Allow Weekend Scheduling
-                </label>
               </CardContent>
             </Card>
 

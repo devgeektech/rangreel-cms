@@ -96,16 +96,10 @@ const clientSchema = new mongoose.Schema(
     },
     /** Free-text dump for “all social credentials” plus structured handles below. */
     socialCredentialsNotes: { type: String, default: "", trim: true },
+    /** Per-platform { username, password }; legacy string values normalized on write. */
     socialHandles: {
-      instagram: { type: String, default: "" },
-      facebook: { type: String, default: "" },
-      youtube: { type: String, default: "" },
-      googleBusiness: { type: String, default: "" },
-      twitter: { type: String, default: "" },
-      linkedin: { type: String, default: "" },
-      tiktok: { type: String, default: "" },
-      pinterest: { type: String, default: "" },
-      other: { type: String, default: "" },
+      type: mongoose.Schema.Types.Mixed,
+      default: () => ({}),
     },
     clientBrief: {
       type: clientBriefSchema,

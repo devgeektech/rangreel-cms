@@ -31,6 +31,7 @@ import {
   isWorkflowStageOverdue,
 } from "@/lib/roleDashboardTasks";
 import { cn } from "@/lib/utils";
+import { contentTaskDisplayLabel } from "@/lib/contentDisplayLabel";
 
 const navItems = [
   { href: "/designer", label: "Dashboard", icon: LayoutDashboard },
@@ -60,7 +61,11 @@ function contentTypeLabel(ct) {
 }
 
 function taskLabel(task) {
-  return String(task?.displayId || task?.title || "Task");
+  return contentTaskDisplayLabel({
+    strategistAlias: task?.strategistAlias,
+    displayId: task?.displayId,
+    title: task?.title,
+  });
 }
 
 export default function DesignerDashboardPage() {
@@ -102,6 +107,7 @@ export default function DesignerDashboardPage() {
           entries.push({
             itemId: t.contentItemId,
             title: t.title,
+            strategistAlias: t.strategistAlias || "",
             displayId: t.displayId || "",
             contentType: t.contentType,
             plan: t.plan,
@@ -331,7 +337,17 @@ export default function DesignerDashboardPage() {
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                 {visibleDesignStages.map(
-                  ({ itemId, title, displayId, clientBrand, contentType, clientPostingDate, plan, stage }) => {
+                  ({
+                    itemId,
+                    title,
+                    strategistAlias,
+                    displayId,
+                    clientBrand,
+                    contentType,
+                    clientPostingDate,
+                    plan,
+                    stage,
+                  }) => {
                   const stageId = stage._id;
                   const status = String(stage.status || "").toLowerCase();
                   const overdue = isWorkflowStageOverdue(stage, todayStartMs);
@@ -369,9 +385,9 @@ export default function DesignerDashboardPage() {
                               "line-clamp-2 min-w-0 flex-1 text-sm font-semibold leading-snug sm:text-base",
                               completed && "text-muted-foreground line-through"
                             )}
-                            title={taskLabel({ displayId, title })}
+                            title={taskLabel({ strategistAlias, displayId, title })}
                           >
-                            {taskLabel({ displayId, title })}
+                            {taskLabel({ strategistAlias, displayId, title })}
                           </h3>
                           <Badge variant="secondary" className="shrink-0 text-[10px] font-normal sm:text-xs">
                             {contentTypeLabel(contentType)}

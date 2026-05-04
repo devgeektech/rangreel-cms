@@ -14,6 +14,11 @@ router.get(
 );
 
 // Prompt 25: unified reel detail read API (includes strategist plan fields).
+router.patch(
+  "/:id/strategist-alias",
+  auth,
+  asyncHandler(contentReadController.patchStrategistAlias)
+);
 router.get("/:id", auth, asyncHandler(contentReadController.getContentById));
 router.patch(
   "/:itemId/stage/:stageId/move",
