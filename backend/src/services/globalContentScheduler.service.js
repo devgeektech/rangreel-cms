@@ -13,7 +13,7 @@ const DAILY_MIX_TARGET = {
 const URGENT_REEL_RESERVE = 2;
 
 /** Aligns with clientScheduleMonths `resolveDistributionLeadDays` default. */
-const DEFAULT_DISTRIBUTION_LEAD_DAYS = 5;
+const DEFAULT_DISTRIBUTION_LEAD_DAYS = 0;
 
 function resolveLeadDays(client) {
   const v = Number(client?.rules?.distributionLeadDays);

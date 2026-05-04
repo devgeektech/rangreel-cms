@@ -207,6 +207,10 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
   const planConcept = data?.concept ?? "";
   const planCaption = data?.captionDirection ?? "";
   const contentType = data?.contentType || data?.type || "";
+  const viewerRoleNorm = useMemo(
+    () => String(viewerRole || "").toLowerCase().replace(/[^a-z]/g, ""),
+    [viewerRole]
+  );
   const clientDetails = data?.client || null;
   const clientBriefSummary = useMemo(() => {
     const brief = clientDetails?.clientBrief || {};
@@ -242,20 +246,6 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
       .filter((x) => x.value);
     return entries;
   }, [clientDetails]);
-  const socialHandleSummary = useMemo(() => {
-    const handles = clientDetails?.socialHandles || {};
-    return Object.entries(handles)
-      .map(([key, value]) => {
-        const pair = coerceSocialHandlePair(value);
-        const label = key.replace(/([A-Z])/g, " $1").replace(/^./, (ch) => ch.toUpperCase());
-        const u = pair.username.trim();
-        const hasPw = Boolean(pair.password.trim());
-        let text = u;
-        if (hasPw) text = u ? `${u} · password on file` : "Password on file";
-        return { label, value: text };
-      })
-      .filter((x) => x.value);
-  }, [clientDetails]);
   const briefFilesSummary = useMemo(() => {
     const brief = clientDetails?.clientBrief || {};
     const groups = [
@@ -266,11 +256,114 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
     ];
     return groups
       .map((g) => ({
+        key: g.key,
         label: g.label,
         files: Array.isArray(brief?.[g.key]) ? brief[g.key] : [],
       }))
       .filter((g) => g.files.length > 0);
   }, [clientDetails]);
+
+  /** Preferred shoot + best posting only (videographer on reel tasks). */
+  const videographerReelBriefRows = useMemo(() => {
+    const brief = clientDetails?.clientBrief || {};
+    return [
+      ["Preferred shoot days/timing", readClientBriefValue(brief.preferredShootDaysTiming)],
+      ["Best posting time", readClientBriefValue(brief.bestPostingTime)],
+    ]
+      .map(([label, value]) => ({ label, value: String(value || "").trim() }))
+      .filter((x) => x.value);
+  }, [clientDetails]);
+
+  const viewerProfile = useMemo(() => {
+    const r = viewerRoleNorm;
+    if (r === "manager") return { preset: "full", showAgreement: true };
+    if (r === "admin") return { preset: "full", showAgreement: true };
+    if (r === "strategist") return { preset: "full", showAgreement: false };
+    if (r === "videographer") return { preset: "videographer" };
+    if (r === "graphicdesigner") return { preset: "filesOnly" };
+    if (r === "editor") return { preset: "filesOnly" };
+    if (r === "postingexecutive") return { preset: "hidden" };
+    return { preset: "hidden" };
+  }, [viewerRoleNorm]);
+
+  const clientDetailsLayout = useMemo(() => {
+    switch (viewerProfile.preset) {
+      case "full":
+        return {
+          showSection: true,
+          showIdentityGrid: true,
+          showSocial: true,
+          showFullClientBrief: true,
+          showShootAvailability: true,
+          showVideographerReelBriefRows: false,
+        };
+      case "videographer":
+        return {
+          showSection: true,
+          showIdentityGrid: false,
+          showSocial: false,
+          showFullClientBrief: false,
+          showShootAvailability: false,
+          showVideographerReelBriefRows: true,
+        };
+      case "filesOnly":
+        return {
+          showSection: true,
+          showIdentityGrid: false,
+          showSocial: false,
+          showFullClientBrief: false,
+          showShootAvailability: false,
+          showVideographerReelBriefRows: false,
+        };
+      default:
+        return {
+          showSection: false,
+          showIdentityGrid: false,
+          showSocial: false,
+          showFullClientBrief: false,
+          showShootAvailability: false,
+          showVideographerReelBriefRows: false,
+        };
+    }
+  }, [viewerProfile.preset]);
+
+  const briefFilesForViewer = useMemo(() => {
+    const allowAgreement = viewerProfile.showAgreement === true;
+    switch (viewerProfile.preset) {
+      case "full":
+        return briefFilesSummary.filter((g) => allowAgreement || g.key !== "agreementFiles");
+      case "filesOnly":
+        return briefFilesSummary.filter(
+          (g) => g.key === "brandKitFiles" || g.key === "otherBriefFiles"
+        );
+      case "videographer":
+        return briefFilesSummary.filter((g) => g.key === "brandKitFiles");
+      default:
+        return [];
+    }
+  }, [briefFilesSummary, viewerProfile]);
+
+  const socialHandleSummaryForViewer = useMemo(() => {
+    const handles = clientDetails?.socialHandles || {};
+    const revealPassword = viewerRoleNorm === "strategist";
+    return Object.entries(handles)
+      .map(([key, value]) => {
+        const pair = coerceSocialHandlePair(value);
+        const label = key.replace(/([A-Z])/g, " $1").replace(/^./, (ch) => ch.toUpperCase());
+        const u = pair.username.trim();
+        const pw = pair.password.trim();
+        let text = u;
+        if (pw) {
+          if (revealPassword) text = u ? `${u} · password: ${pw}` : `password: ${pw}`;
+          else text = u ? `${u} · password on file` : "Password on file";
+        }
+        return { label, value: text };
+      })
+      .filter((x) => x.value);
+  }, [clientDetails, viewerRoleNorm]);
+
+  /** Show accordion whenever client payload exists and role allows this section (avoid hiding when sub-blocks are empty). */
+  const showClientDetailsAccordion = Boolean(clientDetails) && clientDetailsLayout.showSection;
 
   const planStage = useMemo(() => {
     return stages.find((s) => String(s?.stageName || "").toLowerCase() === "plan") || null;
@@ -377,7 +470,7 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden p-0">
+      <DialogContent className="flex max-h-[90vh] w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] flex-col overflow-hidden p-0 sm:max-w-[calc(100vw-2rem)]">
         <DialogHeader className="shrink-0 px-6 pt-6">
           <DialogTitle>{contentDetailTitle(contentType)}</DialogTitle>
         </DialogHeader>
@@ -493,53 +586,55 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                   )}
                 </CollapsibleSection>
 
-                {clientDetails ? (
+                {showClientDetailsAccordion ? (
                   <CollapsibleSection title="Client added details">
                     <div className="space-y-3 text-sm">
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                          <p className="text-[11px] text-muted-foreground">Client</p>
-                          <p className="font-medium">{clientDetails.clientName || "-"}</p>
+                      {clientDetailsLayout.showIdentityGrid ? (
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">Client</p>
+                            <p className="font-medium">{clientDetails.clientName || "-"}</p>
+                          </div>
+                          <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">Brand</p>
+                            <p className="font-medium">{clientDetails.brandName || "-"}</p>
+                          </div>
+                          <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">Industry</p>
+                            <p>{clientDetails.industry || "-"}</p>
+                          </div>
+                          <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">Business type</p>
+                            <p>{clientDetails.businessType || "-"}</p>
+                          </div>
+                          <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">Contact</p>
+                            <p>{clientDetails.contactNumber || "-"}</p>
+                          </div>
+                          <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">Email</p>
+                            <p className="break-all">{clientDetails.email || "-"}</p>
+                          </div>
+                          <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">Website</p>
+                            <p className="break-all">{clientDetails.website || "-"}</p>
+                          </div>
+                          <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">Client status</p>
+                            <p>{clientDetails.status || "-"}</p>
+                          </div>
+                          <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">Start date</p>
+                            <p>{safeYMD(clientDetails.startDate)}</p>
+                          </div>
+                          <div className="rounded-md border border-border/70 bg-muted/20 p-2">
+                            <p className="text-[11px] text-muted-foreground">End date</p>
+                            <p>{safeYMD(clientDetails.endDate)}</p>
+                          </div>
                         </div>
-                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                          <p className="text-[11px] text-muted-foreground">Brand</p>
-                          <p className="font-medium">{clientDetails.brandName || "-"}</p>
-                        </div>
-                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                          <p className="text-[11px] text-muted-foreground">Industry</p>
-                          <p>{clientDetails.industry || "-"}</p>
-                        </div>
-                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                          <p className="text-[11px] text-muted-foreground">Business type</p>
-                          <p>{clientDetails.businessType || "-"}</p>
-                        </div>
-                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                          <p className="text-[11px] text-muted-foreground">Contact</p>
-                          <p>{clientDetails.contactNumber || "-"}</p>
-                        </div>
-                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                          <p className="text-[11px] text-muted-foreground">Email</p>
-                          <p className="break-all">{clientDetails.email || "-"}</p>
-                        </div>
-                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                          <p className="text-[11px] text-muted-foreground">Website</p>
-                          <p className="break-all">{clientDetails.website || "-"}</p>
-                        </div>
-                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                          <p className="text-[11px] text-muted-foreground">Client status</p>
-                          <p>{clientDetails.status || "-"}</p>
-                        </div>
-                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                          <p className="text-[11px] text-muted-foreground">Start date</p>
-                          <p>{safeYMD(clientDetails.startDate)}</p>
-                        </div>
-                        <div className="rounded-md border border-border/70 bg-muted/20 p-2">
-                          <p className="text-[11px] text-muted-foreground">End date</p>
-                          <p>{safeYMD(clientDetails.endDate)}</p>
-                        </div>
-                      </div>
+                      ) : null}
 
-                      {clientDetails.socialCredentialsNotes ? (
+                      {clientDetailsLayout.showSocial && clientDetails.socialCredentialsNotes ? (
                         <div>
                           <p className="text-xs font-medium text-muted-foreground">Social credentials notes</p>
                           <p className="mt-1 rounded-md border border-border bg-muted/20 p-2 text-xs">
@@ -548,11 +643,11 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                         </div>
                       ) : null}
 
-                      {socialHandleSummary.length ? (
+                      {clientDetailsLayout.showSocial && socialHandleSummaryForViewer.length ? (
                         <div>
                           <p className="text-xs font-medium text-muted-foreground">Social handles</p>
                           <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
-                            {socialHandleSummary.map((x) => (
+                            {socialHandleSummaryForViewer.map((x) => (
                               <div key={x.label} className="rounded-md border border-border/60 px-2 py-1 text-xs">
                                 <span className="text-muted-foreground">{x.label}:</span> {x.value}
                               </div>
@@ -561,7 +656,20 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                         </div>
                       ) : null}
 
-                      {clientBriefSummary.length ? (
+                      {clientDetailsLayout.showVideographerReelBriefRows && videographerReelBriefRows.length ? (
+                        <div>
+                          <p className="text-xs font-medium text-muted-foreground">Client brief</p>
+                          <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
+                            {videographerReelBriefRows.map((x) => (
+                              <div key={x.label} className="rounded-md border border-border/60 px-2 py-1 text-xs">
+                                <span className="text-muted-foreground">{x.label}:</span> {x.value}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {clientDetailsLayout.showFullClientBrief && clientBriefSummary.length ? (
                         <div>
                           <p className="text-xs font-medium text-muted-foreground">Client brief</p>
                           <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
@@ -573,7 +681,7 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                           </div>
                         </div>
                       ) : null}
-                      {shootAvailabilitySummary.length ? (
+                      {clientDetailsLayout.showShootAvailability && shootAvailabilitySummary.length ? (
                         <div>
                           <p className="text-xs font-medium text-muted-foreground">Shoot availability</p>
                           <div className="mt-1 grid gap-1.5 sm:grid-cols-2">
@@ -585,16 +693,16 @@ export function ReelDetailDialog({ open, onOpenChange, contentId, viewerRole, on
                           </div>
                         </div>
                       ) : null}
-                      {briefFilesSummary.length ? (
+                      {briefFilesForViewer.length ? (
                         <div>
                           <p className="text-xs font-medium text-muted-foreground">Onboarding files</p>
                           <div className="mt-1 space-y-2">
-                            {briefFilesSummary.map((group) => (
-                              <div key={group.label}>
+                            {briefFilesForViewer.map((group) => (
+                              <div key={group.key}>
                                 <p className="text-[11px] font-medium text-muted-foreground">{group.label}</p>
                                 <ul className="mt-1 list-disc pl-5 text-xs">
                                   {group.files.map((f, idx) => (
-                                    <li key={`${group.label}-${f?._id || idx}`}>
+                                    <li key={`${group.key}-${f?._id || idx}`}>
                                       {String(f?.originalName || f?.storedName || "File")}
                                     </li>
                                   ))}

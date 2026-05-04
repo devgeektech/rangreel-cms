@@ -12,7 +12,7 @@ const PIPELINE_BEFORE_POST_BY_TYPE = {
 };
 
 /** Calendar days before each contract-cycle start where scheduling/grid begins (equal spread window). */
-const SCHEDULE_DISTRIBUTION_LEAD_DAYS = 5;
+const SCHEDULE_DISTRIBUTION_LEAD_DAYS = 0;
 
 function resolveDistributionLeadDays(client, options = {}) {
   const fromOpts = Number(options?.distributionLeadDays);
