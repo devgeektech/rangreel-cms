@@ -262,7 +262,7 @@ export default function StrategistDashboardPage() {
   return (
     <DashboardShell navItems={navItems}>
       <section className="space-y-6">
-        <Card className="border-[#0EA5E9]/30 bg-gradient-to-r from-[#0EA5E9]/15 to-transparent">
+        <Card className="border-border bg-muted/40">
           <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-2xl font-semibold">Strategist Dashboard</h2>
@@ -270,7 +270,7 @@ export default function StrategistDashboardPage() {
                 Plan, submit, and keep content aligned — calendar shows reels, posts, and carousels; full task list below.
               </p>
             </div>
-            <Sparkles className="h-10 w-10 shrink-0 text-[#0EA5E9]" />
+            <Sparkles className="h-10 w-10 shrink-0 text-muted-foreground" />
           </CardContent>
         </Card>
 

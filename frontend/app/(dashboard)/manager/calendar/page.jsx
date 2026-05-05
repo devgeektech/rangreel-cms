@@ -1357,7 +1357,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                     setDraggingTaskId("");
                                     setHoveredDropCell("");
                                   }}
-                                  className={`border pr-2 py-1.5 text-xs leading-snug shadow-sm ${
+                                  className={`border px-2 py-1.5 text-xs leading-snug shadow-sm ${
                                     hasConflict
                                       ? "border-red-600/80 bg-red-500/10 text-red-700 dark:text-red-200"
                                       : taskLoadClass
@@ -1371,7 +1371,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                       : isStrategist
                                         ? "disabled-task pointer-events-none opacity-40 grayscale-[80%] cursor-not-allowed"
                                         : "cursor-pointer"
-                                  } ${showDragHandle ? "pl-6" : "pl-2"} select-none`}
+                                  } select-none`}
                                   style={
                                     !hasConflict && !urgent && !taskLoadClass ? normalStyle : undefined
                                   }
@@ -1405,7 +1405,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                   ) : null}
                                   {isStart ? (
                                     <>
-                                      <p className="truncate font-semibold inline-flex items-center gap-1">
+                                      <p className={`truncate font-semibold inline-flex items-center gap-1 ${showDragHandle ? "pl-5" : ""}`}>
                                         {task.clientName}
                                         {taskIsOverloaded ? (
                                           <AlertTriangle className="h-3 w-3 shrink-0 text-red-600" />

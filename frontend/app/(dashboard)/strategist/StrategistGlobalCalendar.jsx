@@ -1202,7 +1202,7 @@ export default function StrategistGlobalCalendar() {
                                     setDraggingTaskId("");
                                     setHoveredDropCell("");
                                   }}
-                                  className={`border pr-2 py-1.5 text-xs leading-snug shadow-sm ${
+                                  className={`border px-2 py-1.5 text-xs leading-snug shadow-sm ${
                                     hasConflict
                                       ? "border-red-600/80 bg-red-500/10 text-red-700 dark:text-red-200"
                                       : taskLoadClass
@@ -1210,9 +1210,7 @@ export default function StrategistGlobalCalendar() {
                                       : "text-foreground dark:text-slate-100"
                                   } ${isStart ? "rounded-l" : "rounded-l-none"} ${isEnd ? "rounded-r" : "rounded-r-none"} ${
                                     onLeave || isHoliday ? "cursor-not-allowed opacity-80" : ""
-                                  } ${dragBusy ? "opacity-70" : ""} relative cursor-pointer ${
-                                    showDragHandle ? "pl-6" : "pl-2"
-                                  } select-none`}
+                                  } ${dragBusy ? "opacity-70" : ""} relative cursor-pointer select-none`}
                                   style={
                                     !hasConflict && !urgent && !taskLoadClass ? normalStyle : undefined
                                   }
@@ -1244,7 +1242,7 @@ export default function StrategistGlobalCalendar() {
                                   ) : null}
                                   {isStart ? (
                                     <>
-                                      <p className="truncate font-semibold inline-flex items-center gap-1">
+                                      <p className={`truncate font-semibold inline-flex items-center gap-1 ${showDragHandle ? "pl-5" : ""}`}>
                                         {task.clientName}
                                         {taskIsOverloaded ? (
                                           <AlertTriangle className="h-3 w-3 shrink-0 text-red-600" />
