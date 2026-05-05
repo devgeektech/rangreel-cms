@@ -141,12 +141,19 @@ export default function DashboardShell({ children, navItems = [], defaultCollaps
       >
         <div className="flex h-16 items-center justify-between border-b border-white/10 px-3">
           <div className="flex min-w-0 items-center gap-2">
-            <AppLogo
+            {/* <AppLogo
               width={collapsed ? 44 : 150}
               height={collapsed ? 44 : 38}
               className={collapsed ? "h-11 w-11" : "h-10 w-auto"}
+            /> */}
+            <img
+              src="/assets/images/white_logo.png"
+              alt="Rangreel logo"
+              width="150"
+              height="38"
+              className=""
             />
-          </div>
+            </div>
           <button
             type="button"
             onClick={() => setCollapsed((prev) => !prev)}

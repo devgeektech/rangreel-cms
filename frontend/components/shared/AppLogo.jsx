@@ -8,7 +8,7 @@ export default function AppLogo({
   if (variant === "white") {
     return (
       <img
-        src="/assets/images/rang_reel_white_logo.svg"
+        src="/assets/images/white_logo.png"
         alt={alt}
         width={width}
         height={height}
@@ -20,7 +20,7 @@ export default function AppLogo({
   if (variant === "black") {
     return (
       <img
-        src="/assets/images/rang_reel_black_logo.svg"
+        src="/assets/images/black_logo.png"
         alt={alt}
         width={width}
         height={height}
@@ -32,14 +32,14 @@ export default function AppLogo({
   return (
     <>
       <img
-        src="/assets/images/rang_reel_black_logo.svg"
+        src="/assets/images/black_logo.png"
         alt={alt}
         width={width}
         height={height}
         className={`dark:hidden ${className}`.trim()}
       />
       <img
-        src="/assets/images/rang_reel_white_logo.svg"
+        src="/assets/images/white_logo.png"
         alt={alt}
         width={width}
         height={height}

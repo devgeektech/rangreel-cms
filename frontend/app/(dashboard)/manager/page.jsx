@@ -327,7 +327,6 @@ export default function ManagerDashboardPage() {
                                 <p className="truncate text-xs text-muted-foreground">{stage.clientBrand}</p>
                               </div>
                               <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant="outline">Approval</Badge>
                                 {stage.stageId ? (
                                   <>
                                     <Button

@@ -35,6 +35,29 @@ const getApi = () => {
   throw new Error("Unsupported Brevo SDK version: email API client not found");
 };
 
+function normalizeEmailRecipients(to) {
+  if (!to) return [];
+  if (Array.isArray(to)) {
+    const seen = new Set();
+    const out = [];
+    for (const entry of to) {
+      const emailRaw =
+        typeof entry === "string" ? String(entry).trim() : String(entry?.email || "").trim();
+      const email = emailRaw.toLowerCase();
+      if (!email || seen.has(email)) continue;
+      seen.add(email);
+      const name =
+        typeof entry === "string" ? undefined : entry?.name ? String(entry.name).trim() : undefined;
+      out.push({ email: emailRaw, name: name || undefined });
+    }
+    return out;
+  }
+  const emailRaw = typeof to === "string" ? String(to).trim() : String(to?.email || "").trim();
+  if (!emailRaw) return [];
+  const name = typeof to === "string" ? undefined : to?.name ? String(to.name).trim() : undefined;
+  return [{ email: emailRaw, name: name || undefined }];
+}
+
 const sendEmail = async ({ to, subject, html }) => {
   if (!to || !subject || !html) return { skipped: true };
   if (!isEmailEnabled()) {
@@ -46,10 +69,9 @@ const sendEmail = async ({ to, subject, html }) => {
     return { skipped: true };
   }
 
-  const toEmail = typeof to === "string" ? to : to?.email;
-  const toName = typeof to === "string" ? undefined : to?.name;
-  if (!toEmail) {
-    console.info(`[email] skipped: missing recipient email subject="${subject || ""}"`);
+  const toList = normalizeEmailRecipients(to);
+  if (!toList.length) {
+    console.info(`[email] skipped: missing recipient email(s) subject="${subject || ""}"`);
     return { skipped: true };
   }
 
@@ -61,25 +83,20 @@ const sendEmail = async ({ to, subject, html }) => {
       email: senderEmail,
       name: senderName,
     },
-    to: [{ email: toEmail, name: toName }],
+    to: toList.map((r) => ({ email: r.email, ...(r.name ? { name: r.name } : {}) })),
     subject,
     htmlContent: html,
   };
 
   try {
-    console.log(
-      `[email] sending via Brevo API to=${toEmail} subject="${subject}" sender=${senderEmail}`
-    );
+    const toLog = toList.map((r) => r.email).join(",");
+    console.log(`[email] sending via Brevo API to=[${toLog}] subject="${subject}" sender=${senderEmail}`);
     const result = await api.sendTransacEmail(payload);
-    console.info(
-      `[email] sent via Brevo API to=${toEmail} subject="${subject}"`
-    );
+    console.info(`[email] sent via Brevo API to=[${toLog}] subject="${subject}"`);
     return result;
   } catch (err) {
-    console.warn(
-      `[email] failed via Brevo API to=${toEmail} subject="${subject}":`,
-      err?.message || err
-    );
+    const toLog = toList.map((r) => r.email).join(",");
+    console.warn(`[email] failed via Brevo API to=[${toLog}] subject="${subject}":`, err?.message || err);
     throw err;
   }
 };
