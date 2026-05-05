@@ -43,7 +43,7 @@ export default function Navbar({ user, onLogout }) {
     "border-primary/30 bg-primary/10 text-primary";
 
   return (
-    <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur">
+    <header className="sticky top-0 z-30 border-b border-border bg-card/95 shadow-sm backdrop-blur-md dark:bg-background/85 dark:shadow-none">
       <div className="flex h-16 items-center justify-between px-4 md:px-6">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">

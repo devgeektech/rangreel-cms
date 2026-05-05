@@ -1110,7 +1110,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
               className="grid min-w-[2200px]"
               style={{ gridTemplateColumns: `280px repeat(${calendarDays.length}, minmax(120px, 1fr))` }}
             >
-              <div className="sticky left-0 z-20 border-b border-r border-border bg-muted/50 px-3 py-2 text-xs font-semibold">
+              <div className="sticky left-0 top-0 z-[60] border-b border-r border-border bg-muted/50 px-3 py-2 text-xs font-semibold">
                 Role / User
               </div>
               {calendarDays.map((d) => (
@@ -1121,11 +1121,11 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                 <div
                   key={d.ymd}
                   data-gc-col-day="true"
-                  className={`border-b border-r border-border px-2 py-2 text-center text-xs font-semibold ${
+                  className={`sticky top-0 z-[50] border-b border-r border-border px-2 py-2 text-center text-xs font-semibold ${
                     isHoliday
                       ? "bg-gray-300/40 dark:bg-gray-700/40"
                       : isPastDay
-                        ? "bg-slate-300/35 dark:bg-slate-700/35"
+                        ? "bg-slate-400/55 dark:bg-slate-700/50"
                         : "bg-muted/30"
                   }`}
                   title={isHoliday ? `${holidayByDay.get(d.ymd)} (Holiday)` : ""}
@@ -1141,7 +1141,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
 
               {groupedRows.map((group) => (
                 <div key={group.role} className="contents">
-                  <div className="sticky left-0 z-10 border-b border-r border-border bg-muted/40 px-3 py-2 text-xs font-semibold">
+                  <div className="sticky left-0 z-[40] border-b border-r border-border bg-muted/40 px-3 py-2 text-xs font-semibold">
                     {roleLabel[group.role] || group.role}
                   </div>
                   {calendarDays.map((day) => (
@@ -1150,7 +1150,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
 
                   {group.rows.map((row) => (
                     <div key={`${group.role}-${row.userId}`} className="contents">
-                      <div className="sticky left-0 z-10 border-b border-r border-border bg-card px-3 py-3 text-sm font-medium">
+                      <div className="sticky left-0 z-[40] border-b border-r border-border bg-card px-3 py-3 text-sm font-medium">
                         {row.name}
                       </div>
                       {calendarDays.map((day) => {
@@ -1201,7 +1201,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                               isHoliday
                                 ? "bg-gray-300/40 dark:bg-gray-700/40"
                                 : isPastDay
-                                  ? "bg-slate-300/35 dark:bg-slate-700/35"
+                                  ? "bg-slate-400/55 dark:bg-slate-700/50"
                                 : onLeave
                                   ? "bg-red-500/15"
                                   : ""
@@ -1319,6 +1319,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                 backgroundColor: clientColor.bg,
                                 borderColor: clientColor.border,
                               };
+                              const showDragHandle = task?.isCustomCalendar !== false && !dragBusy;
 
                               return (
                                 <div
@@ -1356,7 +1357,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                     setDraggingTaskId("");
                                     setHoveredDropCell("");
                                   }}
-                                  className={`border px-2 py-1.5 text-xs leading-snug shadow-sm ${
+                                  className={`border pr-2 py-1.5 text-xs leading-snug shadow-sm ${
                                     hasConflict
                                       ? "border-red-600/80 bg-red-500/10 text-red-700 dark:text-red-200"
                                       : taskLoadClass
@@ -1370,7 +1371,7 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                       : isStrategist
                                         ? "disabled-task pointer-events-none opacity-40 grayscale-[80%] cursor-not-allowed"
                                         : "cursor-pointer"
-                                  } select-none`}
+                                  } ${showDragHandle ? "pl-6" : "pl-2"} select-none`}
                                   style={
                                     !hasConflict && !urgent && !taskLoadClass ? normalStyle : undefined
                                   }
@@ -1394,9 +1395,9 @@ export function GlobalCalendarPage({ actor = "manager" }) {
                                       : `${task.clientName} • ${ctLabel} • ${getTaskDisplayName(task)} • ${task.stageName}`
                                   }
                                 >
-                                  {task?.isCustomCalendar !== false && !dragBusy ? (
+                                  {showDragHandle ? (
                                     <span
-                                      className="pointer-events-none absolute left-1 top-1 z-10 inline-flex h-4 w-4 items-center justify-center rounded border border-border/60 bg-background/80 text-muted-foreground"
+                                      className="pointer-events-none absolute left-1 top-1 z-[1] inline-flex h-4 w-4 items-center justify-center rounded border border-border/60 bg-background/80 text-muted-foreground"
                                       title="Drag this card"
                                     >
                                       <GripVertical className="h-3 w-3" />

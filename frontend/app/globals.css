@@ -17,7 +17,8 @@
   }
   /* Rangreel tokens + shadcn-compatible variables (light / dark via .dark class) */
   :root {
-    --background: #fafafa;
+    /* Gray canvas so white headers/cards read clearly (dark theme unchanged). */
+    --background: #e4e7ee;
     --foreground: #111827;
     --primary: #6c3ebf;
     --primary-foreground: #fafafa;

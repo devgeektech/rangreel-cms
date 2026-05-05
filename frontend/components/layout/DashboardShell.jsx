@@ -135,7 +135,7 @@ export default function DashboardShell({ children, navItems = [], defaultCollaps
   return (
     <div className="min-h-screen bg-background text-foreground">
       <aside
-        className={`fixed inset-y-0 left-0 z-40 hidden border-r border-white/10 bg-sidebar text-sidebar-foreground md:flex md:flex-col ${
+        className={`fixed inset-y-0 left-0 z-50 hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[6px_0_28px_-12px_rgba(15,23,42,0.28)] md:flex md:flex-col dark:border-white/10 dark:shadow-none ${
           collapsed ? "w-20" : "w-[240px]"
         } transition-all duration-200`}
       >
@@ -190,12 +190,12 @@ export default function DashboardShell({ children, navItems = [], defaultCollaps
       </aside>
 
       <div
-        className={`transition-all duration-200 ${
+        className={`relative z-0 min-w-0 transition-all duration-200 ${
           collapsed ? "md:ml-20" : "md:ml-[240px]"
         } pb-16 md:pb-0`}
       >
         <Navbar user={user} onLogout={handleLogout} />
-        <main className="p-4 md:p-6">{children}</main>
+        <main className="min-w-0 p-4 md:p-6">{children}</main>
       </div>
 
       <div className="fixed left-3 top-3 z-30 md:hidden">

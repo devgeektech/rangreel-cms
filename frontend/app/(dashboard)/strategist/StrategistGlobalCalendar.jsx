@@ -967,13 +967,13 @@ export default function StrategistGlobalCalendar() {
               className="grid min-w-[2200px]"
               style={{ gridTemplateColumns: `232px repeat(${calendarDays.length}, minmax(120px, 1fr))` }}
             >
-              <div className="sticky left-0 z-20 border-b border-r border-border bg-muted/50 px-2 py-2 text-xs font-semibold">
+              <div className="sticky left-0 top-0 z-[60] border-b border-r border-border bg-muted/50 px-2 py-2 text-xs font-semibold">
                 Role / User
               </div>
               {calendarDays.map((d) => (
                 <div
                   key={d.ymd}
-                  className={`border-b border-r border-border px-2 py-2 text-center text-xs font-semibold ${
+                  className={`sticky top-0 z-[50] border-b border-r border-border px-2 py-2 text-center text-xs font-semibold ${
                     holidayByDay.has(d.ymd) ? "bg-gray-300/40 dark:bg-gray-700/40" : "bg-muted/30"
                   }`}
                   title={holidayByDay.has(d.ymd) ? `${holidayByDay.get(d.ymd)} (Holiday)` : ""}
@@ -988,7 +988,7 @@ export default function StrategistGlobalCalendar() {
               {groupedRows.map((group) => (
                 <div key={group.role} className="contents">
                   <div
-                    className="sticky left-0 z-10 border-b border-r border-border bg-muted/40 px-2 py-1.5 text-xs font-semibold"
+                    className="sticky left-0 z-[40] border-b border-r border-border bg-muted/40 px-2 py-1.5 text-xs font-semibold"
                     title={`${roleLabel[group.role] || group.role} • ${group.rows.length} users • ${group.rows.reduce(
                       (sum, r) => sum + Array.from(r.byDay.values()).reduce((s, list) => s + list.length, 0),
                       0
@@ -1003,7 +1003,7 @@ export default function StrategistGlobalCalendar() {
                   {group.rows.map((row) => (
                     <div key={`${group.role}-${row.userId}`} className="contents">
                       <div
-                        className="sticky left-0 z-10 border-b border-r border-border bg-card px-2 py-2 text-sm font-medium"
+                        className="sticky left-0 z-[40] border-b border-r border-border bg-card px-2 py-2 text-sm font-medium"
                         title={`${row.name} • ${roleLabel[group.role] || group.role} • ${Array.from(
                           row.byDay.values()
                         ).reduce((sum, list) => sum + list.length, 0)} assignments across ${
@@ -1169,6 +1169,7 @@ export default function StrategistGlobalCalendar() {
                                 backgroundColor: clientColor.bg,
                                 borderColor: clientColor.border,
                               };
+                              const showDragHandle = task?.isCustomCalendar !== false && !dragBusy;
 
                               return (
                                 <div
@@ -1201,7 +1202,7 @@ export default function StrategistGlobalCalendar() {
                                     setDraggingTaskId("");
                                     setHoveredDropCell("");
                                   }}
-                                  className={`border px-2 py-1.5 text-xs leading-snug shadow-sm ${
+                                  className={`border pr-2 py-1.5 text-xs leading-snug shadow-sm ${
                                     hasConflict
                                       ? "border-red-600/80 bg-red-500/10 text-red-700 dark:text-red-200"
                                       : taskLoadClass
@@ -1209,7 +1210,9 @@ export default function StrategistGlobalCalendar() {
                                       : "text-foreground dark:text-slate-100"
                                   } ${isStart ? "rounded-l" : "rounded-l-none"} ${isEnd ? "rounded-r" : "rounded-r-none"} ${
                                     onLeave || isHoliday ? "cursor-not-allowed opacity-80" : ""
-                                  } ${dragBusy ? "opacity-70" : ""} relative cursor-pointer select-none`}
+                                  } ${dragBusy ? "opacity-70" : ""} relative cursor-pointer ${
+                                    showDragHandle ? "pl-6" : "pl-2"
+                                  } select-none`}
                                   style={
                                     !hasConflict && !urgent && !taskLoadClass ? normalStyle : undefined
                                   }
@@ -1231,9 +1234,9 @@ export default function StrategistGlobalCalendar() {
                                       : `${task.clientName} • ${ctLabel} • ${getTaskDisplayName(task)} • ${task.stageName}`
                                   }
                                 >
-                                  {task?.isCustomCalendar !== false && !dragBusy ? (
+                                  {showDragHandle ? (
                                     <span
-                                      className="pointer-events-none absolute left-1 top-1 z-10 inline-flex h-4 w-4 items-center justify-center rounded border border-border/60 bg-background/80 text-muted-foreground"
+                                      className="pointer-events-none absolute left-1 top-1 z-[1] inline-flex h-4 w-4 items-center justify-center rounded border border-border/60 bg-background/80 text-muted-foreground"
                                       title="Drag this card"
                                     >
                                       <GripVertical className="h-3 w-3" />
